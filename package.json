@@ -6,7 +6,11 @@
   "scripts": {
     "verify": "node verify.js",
     "genrefs": "node tools/gen-refs.js",
+    "eval-ocr": "node tools/eval-ocr.js",
     "serve": "npx http-server -p 8080 -c-1 ."
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "tesseract.js": "^7.0.0"
+  }
 }

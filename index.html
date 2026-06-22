@@ -23,6 +23,8 @@
   styled in styles.css.
 -->
 <link rel="stylesheet" href="styles.css">
+<!-- Tesseract.js (client-side OCR engine for the Advisor). Loaded from CDN, deferred. -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
 </head><body>
 <div class="wrap">
   <div class="appbar">
@@ -56,9 +58,12 @@ function selectTab(name){
 }
 </script>
 
-<!-- Model core first, then nested MC, then the tab modules. -->
+<!-- Model core first, then nested MC, then OCR engines, then the tab modules. -->
 <script src="model/astrogem.js"></script>
 <script src="model/nested.js"></script>
+<script src="ocr/engine.js"></script>
+<script src="ocr/tesseract-engine.js"></script>
+<script src="ocr/workersai-engine.js"></script>
 <script src="pipeline.js"></script>
 <script src="advisor.js"></script>
 </body></html>

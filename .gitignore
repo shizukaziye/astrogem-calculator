@@ -2,3 +2,6 @@ node_modules/
 .DS_Store
 *.log
 .claude/
+
+# Tesseract.js auto-downloads its language data when the Node eval harness runs.
+*.traineddata

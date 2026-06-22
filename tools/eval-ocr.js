@@ -1,0 +1,315 @@
+#!/usr/bin/env node
+/**
+ * tools/eval-ocr.js — A/B accuracy harness for the screenshot-reading engines.
+ *
+ * Given pairs of files in samples/:
+ *     samples/<name>.png   (a real Lost Ark Processing screenshot)
+ *     samples/<name>.json  (the hand-checked ground truth, see samples/README.md)
+ * it scores each engine's per-field accuracy and prints a per-engine table.
+ *
+ * HONEST STATUS: we have NO real screenshots yet. With an empty samples/ this
+ * prints the expected file format + instructions and exits 0 — the real A/B only
+ * happens once you drop screenshots + ground-truth JSON into samples/.
+ *
+ * Engines scored:
+ *   - tesseract : runs Tesseract.js on the FULL image in Node, then feeds the OCR
+ *                 text through the SAME parser functions the browser engine uses
+ *                 (ocr/tesseract-engine.js exports parseConfig/parseCuttingState/
+ *                 parseOutcomes) + constraintSnap. NOTE: the browser engine also
+ *                 does regional <canvas> cropping which Node can't do, so Node
+ *                 scores are a conservative lower bound on the in-browser engine.
+ *   - workersai : only if a deployed Worker URL is given via --worker-url=<url> or
+ *                 the WORKER_URL env var (it can't run without a deploy). Skipped
+ *                 otherwise.
+ *
+ * Usage:
+ *   node tools/eval-ocr.js
+ *   node tools/eval-ocr.js --engines=tesseract
+ *   node tools/eval-ocr.js --worker-url=https://astrogem-vision.<sub>.workers.dev
+ *   WORKER_URL=... node tools/eval-ocr.js --engines=workersai
+ */
+"use strict";
+
+var fs = require("fs");
+var path = require("path");
+
+var ROOT = path.resolve(__dirname, "..");
+var SAMPLES_DIR = path.join(ROOT, "samples");
+
+var engineApi = require(path.join(ROOT, "ocr", "engine.js"));
+var tesseractMod = require(path.join(ROOT, "ocr", "tesseract-engine.js"));
+
+// ---- args ----
+function parseArgs(argv) {
+  var out = { engines: null, workerUrl: process.env.WORKER_URL || null };
+  argv.forEach(function (a) {
+    var m;
+    if ((m = a.match(/^--engines=(.+)$/))) out.engines = m[1].split(",").map(function (s) { return s.trim(); });
+    else if ((m = a.match(/^--worker-url=(.+)$/))) out.workerUrl = m[1];
+  });
+  return out;
+}
+var ARGS = parseArgs(process.argv.slice(2));
+
+// ---- sample discovery ----
+function findSamples() {
+  if (!fs.existsSync(SAMPLES_DIR)) return [];
+  var files = fs.readdirSync(SAMPLES_DIR);
+  var imgs = files.filter(function (f) { return /\.(png|jpg|jpeg|webp)$/i.test(f); });
+  var pairs = [];
+  imgs.forEach(function (img) {
+    var base = img.replace(/\.(png|jpg|jpeg|webp)$/i, "");
+    var jsonName = base + ".json";
+    if (files.indexOf(jsonName) !== -1) {
+      pairs.push({ name: base, image: path.join(SAMPLES_DIR, img), truth: path.join(SAMPLES_DIR, jsonName) });
+    } else {
+      pairs.push({ name: base, image: path.join(SAMPLES_DIR, img), truth: null });
+    }
+  });
+  return pairs;
+}
+
+// ---- scoring ----
+// Compare a parsed (constraint-snapped) result against ground truth, field by field.
+// Ground truth and parsed both have { config, state, outcomes }. We snap the ground
+// truth too so we compare like-for-like legal states.
+function scoreOne(parsed, truthRaw) {
+  var truth = engineApi.constraintSnap(truthRaw);
+  var fields = [];
+  function cmp(label, a, b) { fields.push({ label: label, ok: String(a) === String(b), got: a, want: b }); }
+
+  var pc = parsed.config, tc = truth.config;
+  cmp("baseCost", pc.baseCost, tc.baseCost);
+  cmp("gemType", pc.gemType, tc.gemType);
+  cmp("willpowerLevel", pc.willpowerLevel, tc.willpowerLevel);
+  cmp("orderLevel", pc.orderLevel, tc.orderLevel);
+  cmp("effect1", pc.effect1, tc.effect1);
+  cmp("effect1Level", pc.effect1Level, tc.effect1Level);
+  cmp("effect2", pc.effect2, tc.effect2);
+  cmp("effect2Level", pc.effect2Level, tc.effect2Level);
+
+  var ps = parsed.state, ts = truth.state;
+  cmp("currentTurn", ps.currentTurn, ts.currentTurn);
+  cmp("maxTurns", ps.maxTurns, ts.maxTurns);
+  cmp("rerollsRemaining", ps.rerollsRemaining, ts.rerollsRemaining);
+  cmp("processCostMultiplier", ps.processCostMultiplier, ts.processCostMultiplier);
+
+  // outcomes: compare as an unordered multiset by a canonical key (the 4 lines can
+  // come back in any order). Score = fraction of truth outcomes matched.
+  function outKey(o) {
+    if (!o) return "none";
+    if (o.type === "raise_effect" || o.type === "lower_effect") return o.type + ":" + o.target + ":" + o.amount;
+    if (o.type === "change_side_option") return "change:" + o.target;
+    if (o.type === "change_gold_cost") return "cost:" + (o.change > 0 ? "+" : "-");
+    if (o.type === "reroll_increase") return "reroll:" + o.change;
+    return "do_nothing";
+  }
+  var gotKeys = (parsed.outcomes || []).map(outKey);
+  var wantKeys = (truth.outcomes || []).map(outKey);
+  var pool = gotKeys.slice();
+  var matched = 0;
+  wantKeys.forEach(function (k) {
+    var i = pool.indexOf(k);
+    if (i !== -1) { matched++; pool.splice(i, 1); }
+  });
+  var outcomeScore = wantKeys.length ? matched / wantKeys.length : 1;
+  fields.push({ label: "outcomes(" + matched + "/" + wantKeys.length + ")", ok: matched === wantKeys.length, score: outcomeScore });
+
+  var scalarFields = fields.filter(function (f) { return f.score == null; });
+  var correct = scalarFields.filter(function (f) { return f.ok; }).length;
+  return {
+    fields: fields,
+    scalarCorrect: correct,
+    scalarTotal: scalarFields.length,
+    outcomeScore: outcomeScore
+  };
+}
+
+// ---- engines ----
+// Node-side Tesseract: full-frame OCR -> same parsers -> constraintSnap.
+function makeNodeTesseractParser() {
+  var Tesseract;
+  try { Tesseract = require("tesseract.js"); }
+  catch (e) { return null; }
+  var workerP = null;
+  function getWorker() {
+    if (!workerP) {
+      workerP = Tesseract.createWorker("eng", 1, { logger: function () {} }).then(function (w) {
+        return w.setParameters({ tessedit_pageseg_mode: "6" }).catch(function () {}).then(function () { return w; });
+      });
+    }
+    return workerP;
+  }
+  return {
+    name: "tesseract",
+    label: "Tesseract.js (Node, full-frame)",
+    async parse(imagePath) {
+      var worker = await getWorker();
+      var res = await worker.recognize(imagePath);
+      var text = String((res && res.data && res.data.text) || "");
+      var cfg = tesseractMod.parseConfig(text);
+      var cut = tesseractMod.parseCuttingState(text);
+      var outcomes = tesseractMod.parseOutcomes(text, {
+        baseCost: cfg.baseCost || 10, gemType: cfg.gemType, effect1: cfg.effect1, effect2: cfg.effect2
+      });
+      var raw = {
+        config: cfg,
+        state: {
+          currentTurn: null, maxTurns: cut.maxTurns, turnsRemaining: cut.turnsRemaining,
+          rerollsRemaining: cut.rerollsRemaining, processCost: cut.processCost,
+          processCostMultiplier: cut.processCostMultiplier, totalGoldSpent: 0, rosterBound: false
+        },
+        rarity: cfg.rarity, outcomes: outcomes
+      };
+      return engineApi.constraintSnap(raw);
+    },
+    async dispose() { if (workerP) { var w = await workerP; try { await w.terminate(); } catch (e) {} } }
+  };
+}
+
+function makeWorkersAiParser(workerUrl) {
+  if (!workerUrl) return null;
+  if (typeof fetch === "undefined") return null; // Node < 18
+  return {
+    name: "workersai",
+    label: "Workers AI (" + workerUrl + ")",
+    async parse(imagePath) {
+      var buf = fs.readFileSync(imagePath);
+      var ext = path.extname(imagePath).slice(1).toLowerCase();
+      var type = ext === "jpg" ? "image/jpeg" : "image/" + ext;
+      var resp = await fetch(workerUrl, { method: "POST", headers: { "Content-Type": type }, body: buf });
+      var data = await resp.json();
+      if (data && data.error && !data.config) throw new Error(data.error);
+      return engineApi.constraintSnap({
+        config: data.config || {}, state: data.state || {}, outcomes: data.outcomes || [], rarity: data.rarity
+      });
+    },
+    async dispose() {}
+  };
+}
+
+// ---- output helpers ----
+function pct(n) { return (n * 100).toFixed(1) + "%"; }
+function pad(s, n) { s = String(s); return s.length >= n ? s : s + " ".repeat(n - s.length); }
+
+function printFormatHelp() {
+  console.log("");
+  console.log("No scored samples found in samples/.");
+  console.log("");
+  console.log("To run the real A/B, drop matching pairs into samples/:");
+  console.log("    samples/<name>.png      <- a Lost Ark 'Processing' screenshot");
+  console.log("    samples/<name>.json     <- hand-checked ground truth");
+  console.log("");
+  console.log("Ground-truth JSON shape (see samples/README.md for the full spec):");
+  console.log(JSON.stringify({
+    config: {
+      baseCost: 10, gemType: "order", willpowerLevel: 3, orderLevel: 4,
+      effect1: "Boss Damage", effect1Level: 2, effect2: "Additional Damage", effect2Level: 1
+    },
+    state: {
+      currentTurn: 4, maxTurns: 9, rerollsRemaining: 2,
+      processCost: 900, processCostMultiplier: 0, totalGoldSpent: 2700, rosterBound: false
+    },
+    outcomes: [
+      { type: "raise_effect", target: "willpower", amount: 1 },
+      { type: "raise_effect", target: "effect1", amount: 2 },
+      { type: "change_side_option", target: "effect2" },
+      { type: "change_gold_cost", change: -100 }
+    ]
+  }, null, 2));
+  console.log("");
+  console.log("Then re-run:  node tools/eval-ocr.js");
+  console.log("(Workers AI is only scored with --worker-url=<deployed url> or WORKER_URL=...)");
+  console.log("");
+}
+
+// ---- main ----
+async function main() {
+  console.log("=== OCR engine A/B harness ===");
+  var samples = findSamples();
+  var scored = samples.filter(function (s) { return s.truth; });
+  var unmatched = samples.filter(function (s) { return !s.truth; });
+
+  if (unmatched.length) {
+    console.log("Note: " + unmatched.length + " image(s) without a matching .json (skipped): " +
+      unmatched.map(function (s) { return path.basename(s.image); }).join(", "));
+  }
+
+  if (scored.length === 0) {
+    printFormatHelp();
+    process.exit(0);
+    return;
+  }
+
+  // which engines?
+  var want = ARGS.engines || ["tesseract", "workersai"];
+  var engines = [];
+  if (want.indexOf("tesseract") !== -1) {
+    var t = makeNodeTesseractParser();
+    if (t) engines.push(t);
+    else console.log("Skipping tesseract: tesseract.js not installed (npm i -D tesseract.js).");
+  }
+  if (want.indexOf("workersai") !== -1) {
+    var wk = makeWorkersAiParser(ARGS.workerUrl);
+    if (wk) engines.push(wk);
+    else console.log("Skipping workersai: no --worker-url / WORKER_URL (engine needs a deployed Worker).");
+  }
+  if (engines.length === 0) {
+    console.log("No runnable engines selected. Nothing to do.");
+    process.exit(0);
+    return;
+  }
+
+  console.log("Scoring " + scored.length + " sample(s) across: " + engines.map(function (e) { return e.name; }).join(", "));
+  console.log("");
+
+  for (var ei = 0; ei < engines.length; ei++) {
+    var eng = engines[ei];
+    console.log("--- " + eng.label + " ---");
+    var totScalarCorrect = 0, totScalar = 0, totOutcome = 0, n = 0;
+    var fieldAgg = {}; // label -> {ok,total}
+    for (var si = 0; si < scored.length; si++) {
+      var s = scored[si];
+      var truthRaw;
+      try { truthRaw = JSON.parse(fs.readFileSync(s.truth, "utf8")); }
+      catch (e) { console.log("  " + pad(s.name, 18) + " BAD ground-truth JSON: " + e.message); continue; }
+      var parsed;
+      try { parsed = await eng.parse(s.image); }
+      catch (e) { console.log("  " + pad(s.name, 18) + " engine error: " + e.message); continue; }
+      var sc = scoreOne(parsed, truthRaw);
+      n++;
+      totScalarCorrect += sc.scalarCorrect; totScalar += sc.scalarTotal; totOutcome += sc.outcomeScore;
+      sc.fields.forEach(function (f) {
+        if (f.score != null) return;
+        fieldAgg[f.label] = fieldAgg[f.label] || { ok: 0, total: 0 };
+        fieldAgg[f.label].total++;
+        if (f.ok) fieldAgg[f.label].ok++;
+      });
+      var wrong = sc.fields.filter(function (f) { return f.score == null && !f.ok; })
+        .map(function (f) { return f.label + "(" + f.got + "≠" + f.want + ")"; });
+      console.log("  " + pad(s.name, 18) +
+        " fields " + sc.scalarCorrect + "/" + sc.scalarTotal +
+        "  outcomes " + pct(sc.outcomeScore) +
+        (wrong.length ? "   miss: " + wrong.join(", ") : ""));
+    }
+    if (n > 0) {
+      console.log("  " + pad("TOTAL", 18) +
+        " fields " + pct(totScalar ? totScalarCorrect / totScalar : 0) +
+        "  outcomes " + pct(totOutcome / n) + "  (" + n + " samples)");
+      // per-field accuracy
+      var labels = Object.keys(fieldAgg);
+      var line = labels.map(function (l) { return l + " " + pct(fieldAgg[l].ok / fieldAgg[l].total); }).join("  ·  ");
+      console.log("  per-field: " + line);
+    }
+    if (typeof eng.dispose === "function") await eng.dispose();
+    console.log("");
+  }
+
+  console.log("Done. (Tesseract Node scores are a lower bound; the browser engine adds regional cropping.)");
+  process.exit(0);
+}
+
+main().catch(function (e) {
+  console.error("eval-ocr fatal:", e);
+  process.exit(1);
+});

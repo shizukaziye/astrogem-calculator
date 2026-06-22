@@ -1,0 +1,29 @@
+# wrangler.toml — Cloudflare Worker for the Advisor's "Workers AI" screenshot engine.
+#
+# Reads a Lost Ark Processing screenshot with a Workers AI vision model and returns
+# { config, state, outcomes }. No secrets, no external APIs — only the AI binding.
+#
+# Deploy:   cd worker && wrangler deploy
+# Local:    wrangler dev --remote      # Workers AI ONLY works with --remote
+#
+# After deploy, copy the printed https URL into ocr/workersai-engine.js (WORKER_URL).
+
+name = "astrogem-vision"
+main = "astrogem-vision.js"
+compatibility_date = "2026-06-01"
+
+# Workers AI binding — exposes env.AI.run(...). This is the only binding required;
+# Workers AI always runs remotely and needs no id/secret.
+[ai]
+binding = "AI"
+
+# Observability (logs) — handy while validating OCR quality. Optional.
+[observability]
+enabled = true
+
+# --- Optional: lock CORS + model via vars instead of editing the source ---
+# The Worker currently hardcodes ALLOW_ORIGIN = "*" (see TODO in astrogem-vision.js).
+# To restrict to your Pages origin without code changes you could read an env var;
+# left commented to keep the default zero-config.
+# [vars]
+# ALLOW_ORIGIN = "https://astrogem-calculator.pages.dev"
