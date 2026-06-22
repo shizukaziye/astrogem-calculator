@@ -1,0 +1,7 @@
+{
+  "_comment": "Placeholder dataset for the Pipeline tab. A later UI agent will define the real schema (scenario grids, baselines, gold-per-damage tiers, rarities). pipeline.js will fetch this file.",
+  "baselines": [6, 8, 10, 12],
+  "goldPerDamage": [500000, 1500000, 2500000, 5000000],
+  "baseCosts": [8, 9, 10],
+  "rarities": ["uncommon", "rare", "epic"]
+}

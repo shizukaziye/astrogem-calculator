@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astrogem Calculator</title>
+<!--
+  App shell for the Lost Ark astrogem-cutting tool.
+
+  Two tabs: "Pipeline" (#tab-pipeline) and "Advisor" (#tab-advisor). The tab bar
+  toggles the .active class on the panes. The model core is loaded first so the
+  tab scripts can call its globals (window.score, window.tierExpectedValue,
+  window.evaluateActions, ...).
+
+  Load order matters:
+    1. model/astrogem.js  -> attaches deterministic core to window
+    2. model/nested.js    -> attaches evaluateActions etc. (needs astrogem.js)
+    3. pipeline.js        -> renders #tab-pipeline (STUB for now)
+    4. advisor.js         -> renders #tab-advisor (STUB for now)
+
+  Styling lives in styles.css (shared dark theme + tab styling). The two UI
+  agents will flesh out pipeline.js / advisor.js using the sticky-input,
+  toggle-button, results-table, and methodology-<details> conventions already
+  styled in styles.css.
+-->
+<link rel="stylesheet" href="styles.css">
+</head><body>
+<div class="wrap">
+  <div class="appbar">
+    <div>
+      <h1>Astrogem Calculator</h1>
+      <div class="tag">Lost Ark astrogem cutting — expected value, fusion fodder, and per-turn advice.</div>
+    </div>
+  </div>
+
+  <!-- Tab bar -->
+  <div class="tabbar" id="tabbar">
+    <button class="tab active" data-tab="pipeline" onclick="selectTab('pipeline')">Pipeline</button>
+    <button class="tab" data-tab="advisor" onclick="selectTab('advisor')">Advisor</button>
+  </div>
+
+  <!-- Tab panes -->
+  <section id="tab-pipeline" class="tabpane active"></section>
+  <section id="tab-advisor" class="tabpane"></section>
+</div>
+
+<!-- Tab switching: toggle .active on the matching button + pane. -->
+<script>
+"use strict";
+function selectTab(name){
+  var tabs = document.querySelectorAll('.tab');
+  for (var i=0;i<tabs.length;i++){ tabs[i].classList.toggle('active', tabs[i].dataset.tab===name); }
+  var panes = document.querySelectorAll('.tabpane');
+  for (var j=0;j<panes.length;j++){
+    panes[j].classList.toggle('active', panes[j].id === ('tab-'+name));
+  }
+}
+</script>
+
+<!-- Model core first, then nested MC, then the tab modules. -->
+<script src="model/astrogem.js"></script>
+<script src="model/nested.js"></script>
+<script src="pipeline.js"></script>
+<script src="advisor.js"></script>
+</body></html>

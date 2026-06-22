@@ -1,0 +1,12 @@
+{
+  "name": "astrogem-calculator",
+  "version": "0.1.0",
+  "description": "Lost Ark astrogem-cutting calculator: a dependency-free verified model core (JS + Python mirror) with an app shell for a Pipeline (batch EV) and Advisor (live per-turn) UI.",
+  "private": true,
+  "scripts": {
+    "verify": "node verify.js",
+    "genrefs": "node tools/gen-refs.js",
+    "serve": "npx http-server -p 8080 -c-1 ."
+  },
+  "license": "MIT"
+}
