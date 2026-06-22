@@ -5,6 +5,8 @@
   "private": true,
   "scripts": {
     "verify": "node verify.js",
+    "verify-dp": "node tools/verify-dp.js",
+    "verify-dp-selfcheck": "node tools/verify-dp.js --selfcheck",
     "genrefs": "node tools/gen-refs.js",
     "eval-ocr": "node tools/eval-ocr.js",
     "serve": "npx http-server -p 8080 -c-1 ."

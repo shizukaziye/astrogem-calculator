@@ -180,15 +180,15 @@
 // ---- methodology ----
 '<details class="method">' +
 '  <summary>How the advice is computed</summary>' +
-'  <p>Each option is scored by <b>nested Monte&nbsp;Carlo</b>: from the current state the model plays out many random continuations to the end of the cut, choosing reroll-vs-process inside each rollout by comparing their expected values. The number reported per option is <b>net expected gold</b> = expected gem value &minus; expected processing/reroll cost spent from here on.</p>' +
+'  <p>Each option is scored by an <b>exact decision model</b> (a Bellman dynamic program): the model computes, in closed form, the <i>optimal</i> expected outcome of every line of play to the end of the cut &mdash; assuming you keep playing optimally afterward. The number reported per option is <b>net expected gold</b> = expected final gem value &minus; the processing/reroll gold you&rsquo;d still spend from here on. (If the exact model can&rsquo;t run, the tool falls back to a Monte-Carlo estimate.)</p>' +
 '  <ul>' +
-'    <li><b>Process</b> applies one of the 4 on-screen outcomes (25% each, drawn from the outcomes you confirmed), then continues.</li>' +
-'    <li><b>Reroll</b> redraws the 4 outcomes; the <i>last</i> reroll costs 3,800g, earlier ones are free.</li>' +
+'    <li><b>Process</b> applies one of the 4 on-screen outcomes (25% each, from the outcomes you confirmed), then plays on optimally. Its value uses the <i>actual</i> 4 outcomes &mdash; no guessing.</li>' +
+'    <li><b>Reroll</b> redraws the 4 outcomes; the <i>last</i> reroll costs 3,800g, earlier ones are free. Its value is the optimal continuation after a fresh draw.</li>' +
 '    <li><b>Complete</b> stops now and keeps the current gem (Turn&nbsp;1 = dismantle, value 0). With "Consider Complete? = No" it is shown but never chosen.</li>' +
-'    <li><b>P(above baseline)</b> is the share of rollouts whose final gem score clears your sellable baseline. A below-baseline gem is valued as fusion fodder, not zero.</li>' +
-'    <li>Depth (quick/standard/deep) trades accuracy for speed by changing the outer and inner sample counts.</li>' +
+'    <li><b>P(above baseline)</b> is the probability the final gem clears your sellable baseline if you follow the optimal policy from here. A below-baseline gem is valued as fusion fodder, not zero.</li>' +
+'    <li>The exact model is deterministic, so Depth (quick/standard/deep) only affects the Monte-Carlo fallback.</li>' +
 '  </ul>' +
-'  <p class="note">A gem\'s score IS its % damage (each line D = 100&middot;ln(multiplier), additive; a perfect gem &asymp; 1.3&ndash;1.4%). Gold = (score &minus; baseline) &times; your "gold per 1% dmg"; baseline is the % damage of your weakest equipped gem. The screenshot reader is best-effort &mdash; always eyeball the prefilled fields, especially the 4 outcomes, before trusting the numbers.</p>' +
+'  <p class="note">A gem\'s score IS its % damage (each line D = 100&middot;ln(multiplier), additive; a perfect gem &asymp; 1.3&ndash;1.4%). Gold = (score &minus; baseline) &times; your "gold per 1% dmg"; baseline is the % damage of your weakest equipped gem. The 4-outcome draw inside the model is treated as 4 independent draws (a tiny approximation, cross-checked against Monte-Carlo to within ~2%). The screenshot reader is best-effort &mdash; always eyeball the prefilled fields, especially the 4 outcomes, before trusting the numbers.</p>' +
 '</details>';
   }
 
@@ -463,8 +463,10 @@
 
   // ---------------- run advice ----------------
   function runAdvice() {
-    if (typeof window.evaluateActions !== "function") {
-      setStatus("Model not loaded (window.evaluateActions missing).", "err");
+    var hasDP = typeof window.evaluateActionsDP === "function";
+    var hasMC = typeof window.evaluateActions === "function";
+    if (!hasDP && !hasMC) {
+      setStatus("Model not loaded (neither evaluateActionsDP nor evaluateActions present).", "err");
       return;
     }
     var state = readStateFromForm();
@@ -478,26 +480,42 @@
     var preset = SPEED_PRESETS[$("av-speed").value] || SPEED_PRESETS.standard;
     var includeSim2 = $("av-sim2").value === "yes";
 
-    // nested.js reads inner-run count from global.NESTED_INNER_RUNS in Node; in the
-    // browser it uses its default. Expose it so depth has an effect either way.
+    // nested.js (the MC fallback) reads inner-run count from global.NESTED_INNER_RUNS;
+    // expose it so depth still has an effect if we fall back.
     try { window.NESTED_INNER_RUNS = preset.inner; } catch (e) {}
 
     var bar = $("av-bar"), barI = $("av-bar-i");
     bar.style.display = "block"; barI.style.width = "0%";
     $("av-go").disabled = true;
-    setStatus("Simulating " + preset.numRuns.toLocaleString() + " runs (" + preset.label + ")…", "working");
+    setStatus(hasDP ? "Solving the exact decision model…" : ("Simulating " + preset.numRuns.toLocaleString() + " runs (" + preset.label + ")…"), "working");
 
     function onProgress(done, total) {
       var pct = total ? Math.round((done / total) * 100) : 0;
       barI.style.width = pct + "%";
     }
 
-    // Defer so the UI can paint the "working" state before the (synchronous) MC runs.
+    // Defer so the UI can paint the "working" state before the (synchronous) solve.
     setTimeout(function () {
+      var engineUsed = null;
       try {
-        var result = window.evaluateActions(state, baseline, gpd, preset.numRuns, onProgress, { includeSim2: includeSim2 });
+        var result;
+        if (hasDP) {
+          try {
+            result = window.evaluateActionsDP(state, baseline, gpd, preset.numRuns, onProgress, { includeSim2: includeSim2 });
+            engineUsed = "dp";
+          } catch (dpErr) {
+            console.error("DP failed, falling back to Monte Carlo:", dpErr);
+            if (!hasMC) throw dpErr;
+            setStatus("Exact model errored; falling back to Monte Carlo…", "working");
+            result = window.evaluateActions(state, baseline, gpd, preset.numRuns, onProgress, { includeSim2: includeSim2 });
+            engineUsed = "mc";
+          }
+        } else {
+          result = window.evaluateActions(state, baseline, gpd, preset.numRuns, onProgress, { includeSim2: includeSim2 });
+          engineUsed = "mc";
+        }
         barI.style.width = "100%";
-        renderResult(result, state, preset, includeSim2);
+        renderResult(result, state, preset, includeSim2, engineUsed);
         setStatus("Done.", "");
       } catch (err) {
         console.error(err);
@@ -517,13 +535,38 @@
     return sign + n.toLocaleString() + "g";
   }
 
-  function renderResult(result, state, preset, includeSim2) {
+  function renderResult(result, state, preset, includeSim2, engineUsed) {
     var best = result.allActions[0];
     var byName = {};
     result.allActions.forEach(function (a) { byName[a.name] = a; });
 
     $("av-best-line").innerHTML = "Best: <b>" + best.name + "</b> &nbsp;·&nbsp; " +
       "net " + fmtGold(best.value) + " EV";
+
+    // Heuristic one-liner (a plain-English SUMMARY of this query's DP numbers, NOT
+    // the decision source — the recommendation above is the exact DP's). It states
+    // the margin by which the best action beats the runner-up.
+    (function () {
+      var ranked = result.allActions.filter(function (a) { return isFinite(a.value); });
+      var line = "";
+      if (ranked.length >= 2) {
+        var margin = ranked[0].value - ranked[1].value;
+        line = "Rule of thumb: " + ranked[0].name + " beats " + ranked[1].name +
+          " by " + fmtGold(margin).replace(/^[+]/, "") + " EV here — " +
+          (best.name === "Reroll"
+            ? "reroll while a fresh board is worth more than processing this one."
+            : best.name === "Process"
+              ? "keep processing while the board's expected gain outweighs the per-turn gold cost."
+              : "stop — neither processing nor rerolling pays for itself from here.");
+      }
+      var note = $("av-best-line");
+      var existing = document.getElementById("av-heur");
+      if (existing) existing.remove();
+      if (line) {
+        var h = el("div", { id: "av-heur", class: "note", style: "margin-top:4px;font-style:italic" }, line);
+        note.parentNode.insertBefore(h, note.nextSibling);
+      }
+    })();
 
     var cards = $("av-cards");
     cards.innerHTML = "";
@@ -554,8 +597,11 @@
     });
 
     var curVal = isFinite(result.currentValue) ? Math.round(result.currentValue).toLocaleString() + "g" : "—";
+    var engineNote = engineUsed === "mc"
+      ? (preset.numRuns.toLocaleString() + " outer × " + preset.inner + " inner Monte-Carlo runs")
+      : "Exact decision model (Bellman DP)";
     $("av-result-note").textContent =
-      preset.numRuns.toLocaleString() + " outer × " + preset.inner + " inner runs · current gem value ≈ " + curVal +
+      engineNote + " · current gem value ≈ " + curVal +
       (includeSim2 ? "" : " · Complete shown but not ranked");
     $("av-result").style.display = "block";
   }

@@ -14,8 +14,11 @@
   Load order matters:
     1. model/astrogem.js  -> attaches deterministic core to window
     2. model/nested.js    -> attaches evaluateActions etc. (needs astrogem.js)
-    3. pipeline.js        -> renders #tab-pipeline (STUB for now)
-    4. advisor.js         -> renders #tab-advisor (STUB for now)
+    3. model/dp.js        -> attaches the exact Bellman DP (evaluateActionsDP,
+                             topLevelAdvice; needs astrogem.js + nested.js). The
+                             advisor uses this by default and falls back to the MC.
+    4. pipeline.js        -> renders #tab-pipeline (STUB for now)
+    5. advisor.js         -> renders #tab-advisor (STUB for now)
 
   Styling lives in styles.css (shared dark theme + tab styling). The two UI
   agents will flesh out pipeline.js / advisor.js using the sticky-input,
@@ -61,6 +64,7 @@ function selectTab(name){
 <!-- Model core first, then nested MC, then OCR engines, then the tab modules. -->
 <script src="model/astrogem.js"></script>
 <script src="model/nested.js"></script>
+<script src="model/dp.js"></script>
 <script src="ocr/engine.js"></script>
 <script src="ocr/tesseract-engine.js"></script>
 <script src="ocr/workersai-engine.js"></script>
