@@ -236,12 +236,12 @@
     return (Math.exp(score(config) / 100) - 1) * 100;
   }
 
-  // -------------------- 0-100 grade (min-max over all gems) --------------------
-  // 0 = the worst possible gem (incl. the willpower-cost penalty, ~ no damage),
+  // -------------------- 0-100 grade --------------------
   // 100 = the best possible gem (perfect 10-cost: Boss5 + AddDmg5, order5, wp5).
-  // Min-max normalization → invariant to a constant scoring offset (so the
-  // willpower/order pivot choice, 4 vs 4.25, does not change the grade). Bounds
-  // are enumerated once over every (cost, effect-pair, levels) gem and cached.
+  // 0 = a neutral / throwaway gem: no damage effects, willpower & order at the
+  // 4.25 baseline. Anchoring the floor at this neutral (rather than the absolute
+  // worst gem) spreads real gems across the whole 0-100 instead of bunching them
+  // into ~50-100. gradeBounds() supplies the max (enumerated once + cached).
   var _gradeBounds = null;
   function gradeBounds() {
     if (_gradeBounds) return _gradeBounds;
@@ -264,10 +264,13 @@
     return _gradeBounds;
   }
 
+  // Score of the neutral floor: no damage effects, willpower & order at 4.25.
+  function gradeFloor() { return willpowerScore(4.25) + orderScore(4.25); }
+
   // 0-100 grade for a gem (rounded to 1 decimal).
   function grade(config) {
-    var bnds = gradeBounds();
-    var g = 100 * (score(config) - bnds.min) / (bnds.max - bnds.min);
+    var lo = gradeFloor(), hi = gradeBounds().max;
+    var g = 100 * (score(config) - lo) / (hi - lo);
     return Math.round(Math.max(0, Math.min(100, g)) * 10) / 10;
   }
 

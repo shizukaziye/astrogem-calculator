@@ -166,9 +166,10 @@ def damage_percent(config):
     return (math.exp(score(config) / 100.0) - 1) * 100
 
 
-# -------------------- 0-100 grade (min-max over all gems) --------------------
-# 0 = worst possible gem, 100 = best (perfect 10-cost). Min-max normalization,
-# so it is invariant to a constant scoring offset (willpower/order pivot choice).
+# -------------------- 0-100 grade --------------------
+# 100 = best possible gem (perfect 10-cost). 0 = a neutral/throwaway gem (no
+# damage effects, willpower & order at the 4.25 baseline) -> spreads real gems
+# across the whole 0-100 instead of bunching them into ~50-100.
 _GRADE_BOUNDS = None
 
 
@@ -198,9 +199,14 @@ def grade_bounds():
     return _GRADE_BOUNDS
 
 
+def grade_floor():
+    return willpower_score(4.25) + order_score(4.25)
+
+
 def grade(config):
-    b = grade_bounds()
-    g = 100 * (score(config) - b["min"]) / (b["max"] - b["min"])
+    lo = grade_floor()
+    hi = grade_bounds()["max"]
+    g = 100 * (score(config) - lo) / (hi - lo)
     return round(max(0.0, min(100.0, g)) * 10) / 10
 
 
