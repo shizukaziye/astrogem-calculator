@@ -204,8 +204,8 @@ def grade(config):
     return round(max(0.0, min(100.0, g)) * 10) / 10
 
 
-# old 15/10/5 thresholds map to grade 80/72/62; +/ /- thirds within each band.
-RANK_CUTS = [("S", 80), ("A", 72), ("B", 62), ("C", 52), ("D", 40), ("F", 0)]
+# user-set rank cutoffs on the 0-100 grade; +/ /- thirds within each band.
+RANK_CUTS = [("S", 85), ("A", 75), ("B", 65), ("C", 50), ("D", 25), ("F", 0)]
 
 
 def gem_rank(config):

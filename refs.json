@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-06-22T23:06:38.585Z",
+    "generated": "2026-06-22T23:09:26.957Z",
     "note": "Captured references for the deterministic core. Regenerate with `node tools/gen-refs.js`. Scoring is REAL % damage (D = 100*ln(multiplier)); supersedes the abstract-weight model and the removed SCORE_PER_PERCENT_DAMAGE=30.96.",
     "SCORING": {
       "willpowerPerLevel": 0.0781186855277456,
@@ -54,7 +54,7 @@
       "score": 1.339421,
       "damagePercent": 1.348432,
       "grade": 94.4,
-      "rank": "S+",
+      "rank": "S",
       "breakdown": {
         "willpowerCost": 3,
         "willpowerScore": 0.078119,
@@ -126,7 +126,7 @@
       "score": 0.56137,
       "damagePercent": 0.562948,
       "grade": 47.6,
-      "rank": "D",
+      "rank": "D+",
       "breakdown": {
         "willpowerCost": 5,
         "willpowerScore": -0.078119,
@@ -150,7 +150,7 @@
       "score": 0.483806,
       "damagePercent": 0.484979,
       "grade": 43,
-      "rank": "D-",
+      "rank": "D+",
       "breakdown": {
         "willpowerCost": 5,
         "willpowerScore": -0.078119,
@@ -222,7 +222,7 @@
       "score": -0.088574,
       "damagePercent": -0.088534,
       "grade": 8.5,
-      "rank": "F-",
+      "rank": "F",
       "breakdown": {
         "willpowerCost": 9,
         "willpowerScore": -0.390593,

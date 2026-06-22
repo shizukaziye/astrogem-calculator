@@ -269,10 +269,9 @@
     return Math.round(Math.max(0, Math.min(100, g)) * 10) / 10;
   }
 
-  // Letter rank on the 0-100 grade. Cutoffs match the user's old-scoring
-  // thresholds: old 15/10/5 ≈ grade 80/72/62 (top ~1.4% / 6% / 17% of all gems).
-  // Each band is split into +/ /- thirds for finer granularity.
-  var RANK_CUTS = [["S", 80], ["A", 72], ["B", 62], ["C", 52], ["D", 40], ["F", 0]];
+  // Letter rank on the 0-100 grade (user-set cutoffs). Each band is split into
+  // +/ /- thirds for finer granularity.
+  var RANK_CUTS = [["S", 85], ["A", 75], ["B", 65], ["C", 50], ["D", 25], ["F", 0]];
   function gemRank(config) {
     var g = grade(config), i, lo, hi, t;
     for (i = 0; i < RANK_CUTS.length; i++) {
