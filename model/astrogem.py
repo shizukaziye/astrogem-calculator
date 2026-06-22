@@ -166,10 +166,9 @@ def damage_percent(config):
     return (math.exp(score(config) / 100.0) - 1) * 100
 
 
-# -------------------- 0-100 grade --------------------
-# 100 = best possible gem (perfect 10-cost). 0 = a neutral/throwaway gem (no
-# damage effects, willpower & order at the 4.25 baseline) -> spreads real gems
-# across the whole 0-100 instead of bunching them into ~50-100.
+# -------------------- 0-100 grade + letter rank --------------------
+# grade: 0 = worst possible gem (incl. willpower penalty), 100 = best (perfect
+# 10-cost). Min-max over every gem (enumerated once + cached).
 _GRADE_BOUNDS = None
 
 
@@ -199,15 +198,24 @@ def grade_bounds():
     return _GRADE_BOUNDS
 
 
-def grade_floor():
-    return willpower_score(4.25) + order_score(4.25)
-
-
 def grade(config):
-    lo = grade_floor()
-    hi = grade_bounds()["max"]
-    g = 100 * (score(config) - lo) / (hi - lo)
+    b = grade_bounds()
+    g = 100 * (score(config) - b["min"]) / (b["max"] - b["min"])
     return round(max(0.0, min(100.0, g)) * 10) / 10
+
+
+# old 15/10/5 thresholds map to grade 80/72/62; +/ /- thirds within each band.
+RANK_CUTS = [("S", 80), ("A", 72), ("B", 62), ("C", 52), ("D", 40), ("F", 0)]
+
+
+def gem_rank(config):
+    g = grade(config)
+    for i, (letter, lo) in enumerate(RANK_CUTS):
+        if g >= lo:
+            hi = 100 if i == 0 else RANK_CUTS[i - 1][1]
+            t = (g - lo) / (hi - lo) if hi > lo else 0
+            return letter + ("+" if t >= 2 / 3 else ("-" if t < 1 / 3 else ""))
+    return "F-"
 
 
 def score_breakdown(config):

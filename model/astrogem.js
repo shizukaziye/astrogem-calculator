@@ -236,12 +236,10 @@
     return (Math.exp(score(config) / 100) - 1) * 100;
   }
 
-  // -------------------- 0-100 grade --------------------
-  // 100 = the best possible gem (perfect 10-cost: Boss5 + AddDmg5, order5, wp5).
-  // 0 = a neutral / throwaway gem: no damage effects, willpower & order at the
-  // 4.25 baseline. Anchoring the floor at this neutral (rather than the absolute
-  // worst gem) spreads real gems across the whole 0-100 instead of bunching them
-  // into ~50-100. gradeBounds() supplies the max (enumerated once + cached).
+  // -------------------- 0-100 grade + letter rank --------------------
+  // grade: 0 = the worst possible gem (incl. the willpower penalty), 100 = the
+  // best (perfect 10-cost: Boss5 + AddDmg5, order5, wp5). Min-max over every gem,
+  // enumerated once + cached. (Distribution is well spread: median gem ~43.)
   var _gradeBounds = null;
   function gradeBounds() {
     if (_gradeBounds) return _gradeBounds;
@@ -264,14 +262,28 @@
     return _gradeBounds;
   }
 
-  // Score of the neutral floor: no damage effects, willpower & order at 4.25.
-  function gradeFloor() { return willpowerScore(4.25) + orderScore(4.25); }
-
   // 0-100 grade for a gem (rounded to 1 decimal).
   function grade(config) {
-    var lo = gradeFloor(), hi = gradeBounds().max;
-    var g = 100 * (score(config) - lo) / (hi - lo);
+    var b = gradeBounds();
+    var g = 100 * (score(config) - b.min) / (b.max - b.min);
     return Math.round(Math.max(0, Math.min(100, g)) * 10) / 10;
+  }
+
+  // Letter rank on the 0-100 grade. Cutoffs match the user's old-scoring
+  // thresholds: old 15/10/5 ≈ grade 80/72/62 (top ~1.4% / 6% / 17% of all gems).
+  // Each band is split into +/ /- thirds for finer granularity.
+  var RANK_CUTS = [["S", 80], ["A", 72], ["B", 62], ["C", 52], ["D", 40], ["F", 0]];
+  function gemRank(config) {
+    var g = grade(config), i, lo, hi, t;
+    for (i = 0; i < RANK_CUTS.length; i++) {
+      lo = RANK_CUTS[i][1];
+      if (g >= lo) {
+        hi = (i === 0) ? 100 : RANK_CUTS[i - 1][1];
+        t = hi > lo ? (g - lo) / (hi - lo) : 0;
+        return RANK_CUTS[i][0] + (t >= 2 / 3 ? "+" : (t < 1 / 3 ? "-" : ""));
+      }
+    }
+    return "F-";
   }
 
   function scoreBreakdown(config) {
@@ -645,6 +657,8 @@
     damagePercent: damagePercent,
     grade: grade,
     gradeBounds: gradeBounds,
+    gemRank: gemRank,
+    RANK_CUTS: RANK_CUTS,
     scoreBreakdown: scoreBreakdown,
     availableEffects: availableEffects,
     validateConfig: validateConfig,

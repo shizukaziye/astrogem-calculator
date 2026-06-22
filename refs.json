@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-06-22T22:53:09.416Z",
+    "generated": "2026-06-22T23:06:38.585Z",
     "note": "Captured references for the deterministic core. Regenerate with `node tools/gen-refs.js`. Scoring is REAL % damage (D = 100*ln(multiplier)); supersedes the abstract-weight model and the removed SCORE_PER_PERCENT_DAMAGE=30.96.",
     "SCORING": {
       "willpowerPerLevel": 0.0781186855277456,
@@ -53,7 +53,8 @@
       },
       "score": 1.339421,
       "damagePercent": 1.348432,
-      "grade": 88,
+      "grade": 94.4,
+      "rank": "S+",
       "breakdown": {
         "willpowerCost": 3,
         "willpowerScore": 0.078119,
@@ -76,7 +77,8 @@
       },
       "score": 1.373651,
       "damagePercent": 1.383129,
-      "grade": 92.4,
+      "grade": 96.5,
+      "rank": "S+",
       "breakdown": {
         "willpowerCost": 4,
         "willpowerScore": 0,
@@ -100,6 +102,7 @@
       "score": 1.43198,
       "damagePercent": 1.442282,
       "grade": 100,
+      "rank": "S+",
       "breakdown": {
         "willpowerCost": 5,
         "willpowerScore": -0.078119,
@@ -122,7 +125,8 @@
       },
       "score": 0.56137,
       "damagePercent": 0.562948,
-      "grade": 0,
+      "grade": 47.6,
+      "rank": "D",
       "breakdown": {
         "willpowerCost": 5,
         "willpowerScore": -0.078119,
@@ -145,7 +149,8 @@
       },
       "score": 0.483806,
       "damagePercent": 0.484979,
-      "grade": 0,
+      "grade": 43,
+      "rank": "D-",
       "breakdown": {
         "willpowerCost": 5,
         "willpowerScore": -0.078119,
@@ -168,7 +173,8 @@
       },
       "score": -0.152603,
       "damagePercent": -0.152486,
-      "grade": 0,
+      "grade": 4.7,
+      "rank": "F-",
       "breakdown": {
         "willpowerCost": 8,
         "willpowerScore": -0.312475,
@@ -191,7 +197,8 @@
       },
       "score": 0.017904,
       "damagePercent": 0.017906,
-      "grade": 0,
+      "grade": 15,
+      "rank": "F",
       "breakdown": {
         "willpowerCost": 7,
         "willpowerScore": -0.234356,
@@ -214,7 +221,8 @@
       },
       "score": -0.088574,
       "damagePercent": -0.088534,
-      "grade": 0,
+      "grade": 8.5,
+      "rank": "F-",
       "breakdown": {
         "willpowerCost": 9,
         "willpowerScore": -0.390593,
@@ -237,7 +245,8 @@
       },
       "score": 0.737137,
       "damagePercent": 0.73986,
-      "grade": 10,
+      "grade": 58.2,
+      "rank": "C",
       "breakdown": {
         "willpowerCost": 4,
         "willpowerScore": 0,

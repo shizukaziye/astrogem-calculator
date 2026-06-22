@@ -42,6 +42,7 @@ var scoreCases = [];
       score: round6(A.score(c)),
       damagePercent: round6(A.damagePercent(c)),
       grade: round6(A.grade(c)),
+      rank: A.gemRank(c),
       breakdown: {
         willpowerCost: bd.willpowerCost,
         willpowerScore: round6(bd.willpowerScore),

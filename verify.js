@@ -38,6 +38,7 @@ refs.score.forEach(function (cse, i) {
   check("score[" + i + "].score", r6(A.score(c)), cse.score);
   if (cse.damagePercent != null) check("score[" + i + "].damagePercent", r6(A.damagePercent(c)), cse.damagePercent);
   if (cse.grade != null) check("score[" + i + "].grade", r6(A.grade(c)), cse.grade);
+  if (cse.rank != null) check("score[" + i + "].rank", A.gemRank(c), cse.rank, true);
   var bd = A.scoreBreakdown(c);
   check("score[" + i + "].wpCost", bd.willpowerCost, cse.breakdown.willpowerCost, true);
   check("score[" + i + "].wpScore", r6(bd.willpowerScore), cse.breakdown.willpowerScore);
