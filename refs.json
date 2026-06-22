@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-06-22T19:45:22.489Z",
+    "generated": "2026-06-22T22:34:49.678Z",
     "note": "Captured references for the deterministic core. Regenerate with `node tools/gen-refs.js`. Scoring is REAL % damage (D = 100*ln(multiplier)); supersedes the abstract-weight model and the removed SCORE_PER_PERCENT_DAMAGE=30.96.",
     "SCORING": {
       "willpowerPerLevel": 0.0781186855277456,
@@ -53,6 +53,7 @@
       },
       "score": 1.339421,
       "damagePercent": 1.348432,
+      "grade": 94.4,
       "breakdown": {
         "willpowerCost": 3,
         "willpowerScore": 0.078119,
@@ -75,6 +76,7 @@
       },
       "score": 1.373651,
       "damagePercent": 1.383129,
+      "grade": 96.5,
       "breakdown": {
         "willpowerCost": 4,
         "willpowerScore": 0,
@@ -97,6 +99,7 @@
       },
       "score": 1.43198,
       "damagePercent": 1.442282,
+      "grade": 100,
       "breakdown": {
         "willpowerCost": 5,
         "willpowerScore": -0.078119,
@@ -119,6 +122,7 @@
       },
       "score": 0.56137,
       "damagePercent": 0.562948,
+      "grade": 47.6,
       "breakdown": {
         "willpowerCost": 5,
         "willpowerScore": -0.078119,
@@ -141,6 +145,7 @@
       },
       "score": 0.483806,
       "damagePercent": 0.484979,
+      "grade": 43,
       "breakdown": {
         "willpowerCost": 5,
         "willpowerScore": -0.078119,
@@ -163,6 +168,7 @@
       },
       "score": -0.152603,
       "damagePercent": -0.152486,
+      "grade": 4.7,
       "breakdown": {
         "willpowerCost": 8,
         "willpowerScore": -0.312475,
@@ -185,6 +191,7 @@
       },
       "score": 0.017904,
       "damagePercent": 0.017906,
+      "grade": 15,
       "breakdown": {
         "willpowerCost": 7,
         "willpowerScore": -0.234356,
@@ -207,6 +214,7 @@
       },
       "score": -0.088574,
       "damagePercent": -0.088534,
+      "grade": 8.5,
       "breakdown": {
         "willpowerCost": 9,
         "willpowerScore": -0.390593,
@@ -229,6 +237,7 @@
       },
       "score": 0.737137,
       "damagePercent": 0.73986,
+      "grade": 58.2,
       "breakdown": {
         "willpowerCost": 4,
         "willpowerScore": 0,

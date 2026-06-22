@@ -236,6 +236,41 @@
     return (Math.exp(score(config) / 100) - 1) * 100;
   }
 
+  // -------------------- 0-100 grade (min-max over all gems) --------------------
+  // 0 = the worst possible gem (incl. the willpower-cost penalty, ~ no damage),
+  // 100 = the best possible gem (perfect 10-cost: Boss5 + AddDmg5, order5, wp5).
+  // Min-max normalization → invariant to a constant scoring offset (so the
+  // willpower/order pivot choice, 4 vs 4.25, does not change the grade). Bounds
+  // are enumerated once over every (cost, effect-pair, levels) gem and cached.
+  var _gradeBounds = null;
+  function gradeBounds() {
+    if (_gradeBounds) return _gradeBounds;
+    var min = Infinity, max = -Infinity, costs = [8, 9, 10];
+    for (var ci = 0; ci < costs.length; ci++) {
+      var cost = costs[ci], pool = EFFECT_POOLS[cost];
+      for (var i = 0; i < pool.length; i++)
+        for (var j = i + 1; j < pool.length; j++)
+          for (var wp = 1; wp <= 5; wp++)
+            for (var o = 1; o <= 5; o++)
+              for (var a = 1; a <= 5; a++)
+                for (var b = 1; b <= 5; b++) {
+                  var s = score({ baseCost: cost, willpowerLevel: wp, orderLevel: o,
+                    effect1: pool[i], effect1Level: a, effect2: pool[j], effect2Level: b });
+                  if (s < min) min = s;
+                  if (s > max) max = s;
+                }
+    }
+    _gradeBounds = { min: min, max: max };
+    return _gradeBounds;
+  }
+
+  // 0-100 grade for a gem (rounded to 1 decimal).
+  function grade(config) {
+    var bnds = gradeBounds();
+    var g = 100 * (score(config) - bnds.min) / (bnds.max - bnds.min);
+    return Math.round(Math.max(0, Math.min(100, g)) * 10) / 10;
+  }
+
   function scoreBreakdown(config) {
     var wpc = willpowerCost(config.baseCost, config.willpowerLevel);
     var wpS = willpowerScore(wpc);
@@ -605,6 +640,8 @@
     orderScore: orderScore,
     score: score,
     damagePercent: damagePercent,
+    grade: grade,
+    gradeBounds: gradeBounds,
     scoreBreakdown: scoreBreakdown,
     availableEffects: availableEffects,
     validateConfig: validateConfig,

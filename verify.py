@@ -63,6 +63,8 @@ for i, cse in enumerate(refs["score"]):
     check("score[%d].score" % i, r6(A.score(c)), cse["score"])
     if cse.get("damagePercent") is not None:
         check("score[%d].damagePercent" % i, r6(A.damage_percent(c)), cse["damagePercent"])
+    if cse.get("grade") is not None:
+        check("score[%d].grade" % i, r6(A.grade(c)), cse["grade"])
     bd = A.score_breakdown(c)
     check("score[%d].wpCost" % i, bd["willpowerCost"], cse["breakdown"]["willpowerCost"], exact=True)
     check("score[%d].wpScore" % i, r6(bd["willpowerScore"]), cse["breakdown"]["willpowerScore"])

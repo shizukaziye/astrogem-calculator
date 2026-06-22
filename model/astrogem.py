@@ -166,6 +166,44 @@ def damage_percent(config):
     return (math.exp(score(config) / 100.0) - 1) * 100
 
 
+# -------------------- 0-100 grade (min-max over all gems) --------------------
+# 0 = worst possible gem, 100 = best (perfect 10-cost). Min-max normalization,
+# so it is invariant to a constant scoring offset (willpower/order pivot choice).
+_GRADE_BOUNDS = None
+
+
+def grade_bounds():
+    global _GRADE_BOUNDS
+    if _GRADE_BOUNDS is not None:
+        return _GRADE_BOUNDS
+    lo, hi = float("inf"), float("-inf")
+    for cost in (8, 9, 10):
+        pool = EFFECT_POOLS[cost]
+        for i in range(len(pool)):
+            for j in range(i + 1, len(pool)):
+                for wp in range(1, 6):
+                    for o in range(1, 6):
+                        for a in range(1, 6):
+                            for b in range(1, 6):
+                                s = score({
+                                    "baseCost": cost, "willpowerLevel": wp, "orderLevel": o,
+                                    "effect1": pool[i], "effect1Level": a,
+                                    "effect2": pool[j], "effect2Level": b,
+                                })
+                                if s < lo:
+                                    lo = s
+                                if s > hi:
+                                    hi = s
+    _GRADE_BOUNDS = {"min": lo, "max": hi}
+    return _GRADE_BOUNDS
+
+
+def grade(config):
+    b = grade_bounds()
+    g = 100 * (score(config) - b["min"]) / (b["max"] - b["min"])
+    return round(max(0.0, min(100.0, g)) * 10) / 10
+
+
 def score_breakdown(config):
     wpc = willpower_cost(config["baseCost"], config["willpowerLevel"])
     wp_s = willpower_score(wpc)

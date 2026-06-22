@@ -540,8 +540,10 @@
     var byName = {};
     result.allActions.forEach(function (a) { byName[a.name] = a; });
 
-    $("av-best-line").innerHTML = "Best: <b>" + best.name + "</b> &nbsp;·&nbsp; " +
-      "net " + fmtGold(best.value) + " EV";
+    var gemGrade = (typeof window.grade === "function") ? window.grade(state.config) : null;
+    $("av-best-line").innerHTML = "Best: <b>" + best.name + "</b> &nbsp;·&nbsp; "
+      + "net " + fmtGold(best.value) + " EV"
+      + (gemGrade != null ? ' &nbsp;·&nbsp; current gem grade <b>' + gemGrade + '</b>/100' : "");
 
     // Heuristic one-liner (a plain-English SUMMARY of this query's DP numbers, NOT
     // the decision source — the recommendation above is the exact DP's). It states

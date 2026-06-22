@@ -41,6 +41,7 @@ var scoreCases = [];
       config: c,
       score: round6(A.score(c)),
       damagePercent: round6(A.damagePercent(c)),
+      grade: round6(A.grade(c)),
       breakdown: {
         willpowerCost: bd.willpowerCost,
         willpowerScore: round6(bd.willpowerScore),
