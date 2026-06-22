@@ -269,11 +269,18 @@
     return Math.round(Math.max(0, Math.min(100, g)) * 10) / 10;
   }
 
-  // Letter rank on the 0-100 grade (user-set cutoffs). Each band is split into
-  // +/ /- thirds for finer granularity.
+  // Inverse of grade(): the score (≈ % damage) at a given 0-100 grade. Used to turn
+  // a grade-based baseline into the %-damage threshold the value/verdict logic uses.
+  function gradeToScore(g) {
+    var b = gradeBounds();
+    return b.min + (Math.max(0, Math.min(100, g)) / 100) * (b.max - b.min);
+  }
+
+  // Letter rank from a 0-100 grade (user-set cutoffs). Each band split into +/ /-
+  // thirds for finer granularity.
   var RANK_CUTS = [["S", 85], ["A", 75], ["B", 65], ["C", 50], ["D", 25], ["F", 0]];
-  function gemRank(config) {
-    var g = grade(config), i, lo, hi, t;
+  function rankFromGrade(g) {
+    var i, lo, hi, t;
     for (i = 0; i < RANK_CUTS.length; i++) {
       lo = RANK_CUTS[i][1];
       if (g >= lo) {
@@ -284,6 +291,7 @@
     }
     return "F-";
   }
+  function gemRank(config) { return rankFromGrade(grade(config)); }
 
   function scoreBreakdown(config) {
     var wpc = willpowerCost(config.baseCost, config.willpowerLevel);
@@ -656,7 +664,9 @@
     damagePercent: damagePercent,
     grade: grade,
     gradeBounds: gradeBounds,
+    gradeToScore: gradeToScore,
     gemRank: gemRank,
+    rankFromGrade: rankFromGrade,
     RANK_CUTS: RANK_CUTS,
     scoreBreakdown: scoreBreakdown,
     availableEffects: availableEffects,

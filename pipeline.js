@@ -46,6 +46,12 @@
   var TIER_LABEL = { legendary: "Leg", relic: "Relic", ancient: "Anc" };
   var BAKED_BASELINES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5];
 
+  // Baseline is now expressed as a 0-100 gem-quality GRADE. Each grade maps to a
+  // %-damage threshold via window.gradeToScore(grade) — grades 50-85 land at
+  // %-damage 0.60-1.18, inside the baked range, so the existing bilinear
+  // interpolation over the baked (gpd, baseline) grid stays valid.
+  var GRADE_ROWS = [50, 60, 65, 70, 75, 80, 85];
+
   // Verdict gold-EV bands (from the deployed page).
   var V = { green: 18000, yellowHi: 10000, yellowMid: 5000, yellowLo: 1000 };
   var SLOTS = 24;
@@ -53,7 +59,7 @@
   var DATA = null;          // baked data/pipeline.json (lazy-fetched)
   var MODE = "baked";       // 'baked' | 'live'
   var ROSTER = "nrb";       // 'nrb' | 'rb'
-  var LIVE = { gpd: 1500000, baseline: 1.0 };
+  var LIVE = { gpd: 1500000, grade: 65 };
 
   // ---------------------------------------------------------------------------
   // formatting
@@ -186,14 +192,32 @@
   // per-baseline Pipeline lane). Sum Direct/Fuse/Gold across rarities, derive Total
   // and Weeks from the sums so the identities stay exact. Box EV / Avg Score are
   // cell-level (not per-rarity) — taken from the uncommon lane (all rarities share them).
-  function aggThru(bl, gpd, cost) {
-    var d = 0, f = 0, gold = 0, boxEV = null, avg = null;
-    for (var ri = 0; ri < RARITIES.length; ri++) {
-      var t = DATA.thru[thruKey(RARITIES[ri], cost, bl, gpd)];
-      if (!t) continue;
-      d += t.directPerWk || 0; f += t.fusePerWk || 0; gold += t.goldPerWk || 0;
-      if (boxEV == null) { boxEV = t.boxEV; avg = t.avgScore; }
+  // Single-lane Pipeline aggregate, INTERPOLATED over the baked (gpd, bl)
+  // grid via bilerp — so it works at the off-grid %-damage baselines a GRADE maps
+  // to (raw cells only hit exact baked baselines). Sum the three rarity
+  // lanes' Direct/Fuse/Gold, derive Total + Weeks from the sums (identities stay
+  // exact); Box EV / Avg Score are cell-level (taken from the cost-`cost` lane).
+  function aggThruInterp(blPct, gpd, cost) {
+    function sumLane(field) {
+      return bilerp(function (g, b) {
+        var s = 0, any = false;
+        for (var ri = 0; ri < RARITIES.length; ri++) {
+          var t = DATA.thru[thruKey(RARITIES[ri], cost, b, g)];
+          if (!t) continue;
+          any = true; s += t[field] || 0;
+        }
+        return any ? s : null;
+      }, gpd, blPct);
     }
+    function cellField(field) {
+      return bilerp(function (g, b) {
+        var t = DATA.thru[thruKey(RARITIES[0], cost, b, g)];
+        return t ? t[field] : null;
+      }, gpd, blPct);
+    }
+    var d = sumLane("directPerWk") || 0;
+    var f = sumLane("fusePerWk") || 0;
+    var gold = sumLane("goldPerWk") || 0;
     var tot = d + f;
     return {
       directPerWk: Math.round(d * 100) / 100,
@@ -201,7 +225,7 @@
       totalPerWk: Math.round(tot * 100) / 100,
       weeks: tot > 0 ? Math.round((SLOTS / tot) * 10) / 10 : null,
       goldPerWk: Math.round(gold),
-      boxEV: boxEV, avgScore: avg
+      boxEV: cellField("boxEV"), avgScore: cellField("avgScore")
     };
   }
 
@@ -209,13 +233,10 @@
   // BAKED table for one gpd tier (roster = 'nrb' | 'rb')
   // ---------------------------------------------------------------------------
   function bakedTable(gpd, roster) {
-    var baked = (DATA.meta && DATA.meta.bakedBaselines) || BAKED_BASELINES;
-    var win = (DATA.meta.baselineWindow && DATA.meta.baselineWindow[gpd]) || [baked[0], baked[baked.length - 1]];
-    var rowBL = baked.filter(function (b) { return b >= win[0] - 1e-9 && b <= win[1] + 1e-9; });
     var isNrb = roster === "nrb";
 
     var head = '<table class="pipe-table"><thead>'
-      + '<tr><th rowspan="2">BL</th>'
+      + '<tr><th rowspan="2">Grade</th>'
       + '<th colspan="3" class="sep">Uncommon</th>'
       + '<th colspan="3" class="sep">Rare</th>'
       + '<th colspan="3" class="sep">Epic</th>'
@@ -231,14 +252,17 @@
       + '</tr></thead><tbody>';
 
     var body = "";
-    for (var bi = 0; bi < rowBL.length; bi++) {
-      var bl = rowBL[bi];
-      var row = '<tr><td class="pipe blcell"><b>' + bl + '</b></td>';
+    for (var bi = 0; bi < GRADE_ROWS.length; bi++) {
+      var grade = GRADE_ROWS[bi];
+      var blPct = window.gradeToScore(grade);   // grade -> %-damage threshold
+      var rank = window.rankFromGrade(grade);
+      var row = '<tr><td class="pipe blcell"><b>' + grade + '</b> <span class="dim">(' + rank + ')</span></td>';
       for (var ri = 0; ri < RARITIES.length; ri++) {
         for (var ci = 0; ci < COSTS.length; ci++) {
           (function (rarity, cost, sep) {
-            var f3 = fuse3Proxy(cost, bl, gpd);
-            row += gemCell(function (b) { return bakedBucket(rarity, cost, b, bl, gpd, roster); }, f3, roster, sep);
+            var f3 = fuse3Proxy(cost, blPct, gpd);
+            // Interpolated path (liveBucket) — GRADE rows land at off-grid baselines.
+            row += gemCell(function (b) { return liveBucket(rarity, cost, b, blPct, gpd, roster); }, f3, roster, sep);
           })(RARITIES[ri], COSTS[ci], ci === 0);
         }
       }
@@ -247,8 +271,9 @@
         // whole weekly production. We reconstruct it by AGGREGATING the three rarity
         // lanes (you cut uncommons in bulk + some rare/epic): sum Direct/Fuse/Gold,
         // derive Total + Weeks from the summed values (identities stay exact). Box EV
-        // and Avg Score are cell-level (not per-rarity); use the c9 lane.
-        var agg = aggThru(bl, gpd, 9);
+        // and Avg Score are cell-level (not per-rarity); use the c9 lane. Interpolated
+        // so it works at the off-grid baseline this GRADE maps to.
+        var agg = aggThruInterp(blPct, gpd, 9);
         var boxTxt = (DATA.meta.boxSchedule || []).map(function (s) { return s.count + "x" + s.rarity.slice(0, 3); }).join("<br>");
         row += '<td class="pipe sep boxcell">' + (boxTxt || "—") + '</td>'
           + '<td class="pipe num">' + fmtGoldFull(agg.boxEV) + '</td>'
@@ -291,7 +316,7 @@
   // Relic / Anc) per rarity/cost, averaged over the four buckets weighted by the
   // fresh-drop bucket mix. Baked: read p_fodder_*; Live: interpolate.
   // ---------------------------------------------------------------------------
-  function fodderSection(gpd, bl, getBucket) {
+  function fodderSection(gpd, blPct, grade, getBucket) {
     var mix = (DATA && DATA.meta.freshBucketMix) || { "2_damage": 0.17, optimal_damage: 0.33, suboptimal_damage: 0.33, no_damage: 0.17 };
     var rows = "";
     for (var ri = 0; ri < RARITIES.length; ri++) {
@@ -321,8 +346,8 @@
       + '<p class="note">A below-baseline cut is <b>fodder</b>: classified by tier (level-sum), 3 fuse into 1. '
       + 'This is the secondary axis — the cut decision above is per bucket. Columns: P(cut clears baseline), '
       + 'P(becomes fodder), and the fodder tier split (sums to P(fodder)). Averaged over the fresh-drop bucket mix '
-      + 'at ' + fmtGold(gpd) + '/1% dmg, baseline ' + bl + '%.</p>'
-      + fodderValueTable(gpd, bl)
+      + 'at ' + fmtGold(gpd) + '/1% dmg, baseline grade ' + grade + ' (' + window.rankFromGrade(grade) + ').</p>'
+      + fodderValueTable(gpd, blPct)
       + '<table class="pipe-table"><thead><tr><th>Rarity</th><th>Cost</th>'
       + '<th class="sep">P(above)</th><th>P(fodder)</th>'
       + '<th class="sep">Leg</th><th>Relic</th><th>Anc</th></tr></thead><tbody>'
@@ -347,8 +372,10 @@
     for (var j = 0; j < FIXED_GPD.length; j++) {
       out += '<h2>' + fmtGold(FIXED_GPD[j]) + ' gold / 1% damage — RB</h2>' + bakedTable(FIXED_GPD[j], "rb");
     }
-    // Fodder section uses a representative tier (1.5M, baseline 1.0) of the baked grid.
-    out += fodderSection(1500000, 1.0, function (rarity, cost, b) { return bakedBucket(rarity, cost, b, 1.0, 1500000, "nrb"); });
+    // Fodder section uses a representative tier (1.5M, baseline grade 65) of the baked
+    // grid. Grade 65 -> off-grid %-damage, so read the buckets via the interpolated path.
+    var fodGrade = 65, fodBl = window.gradeToScore(fodGrade);
+    out += fodderSection(1500000, fodBl, fodGrade, function (rarity, cost, b) { return liveBucket(rarity, cost, b, fodBl, 1500000, "nrb"); });
     return out;
   }
 
@@ -356,27 +383,29 @@
   // LIVE view — interpolate the baked DP grid for any gpd/baseline.
   // ---------------------------------------------------------------------------
   function liveResults() {
-    var gpd = LIVE.gpd, bl = LIVE.baseline, roster = ROSTER;
+    var gpd = LIVE.gpd, grade = LIVE.grade, roster = ROSTER;
+    var blPct = window.gradeToScore(grade);     // grade -> %-damage threshold
+    var rank = window.rankFromGrade(grade);
     if (!DATA) {
       return '<div class="placeholder"><b>Live mode needs the baked grid.</b>'
         + '<div class="note">data/pipeline.json is still loading (live mode interpolates it).</div></div>';
     }
 
     var head = '<table class="pipe-table"><thead>'
-      + '<tr><th rowspan="2"></th>'
+      + '<tr><th rowspan="2">Grade</th>'
       + '<th colspan="3" class="sep">Uncommon</th>'
       + '<th colspan="3" class="sep">Rare</th>'
       + '<th colspan="3" class="sep">Epic</th></tr><tr>'
       + '<th class="sep">c8</th><th>c9</th><th>c10</th>'
       + '<th class="sep">c8</th><th>c9</th><th>c10</th>'
       + '<th class="sep">c8</th><th>c9</th><th>c10</th></tr></thead><tbody>';
-    // Single "row" whose cells stack the four buckets (like one BL row of the baked table).
-    var row = '<tr><td class="pipe blcell"><b>' + bl + '%</b></td>';
+    // Single "row" whose cells stack the four buckets (like one grade row of the baked table).
+    var row = '<tr><td class="pipe blcell"><b>' + grade + '</b> <span class="dim">(' + rank + ')</span></td>';
     for (var ri = 0; ri < RARITIES.length; ri++) {
       for (var ci = 0; ci < COSTS.length; ci++) {
         (function (rarity, cost, sep) {
-          var f3 = fuse3Proxy(cost, bl, gpd);
-          row += gemCell(function (b) { return liveBucket(rarity, cost, b, bl, gpd, roster); }, f3, roster, sep);
+          var f3 = fuse3Proxy(cost, blPct, gpd);
+          row += gemCell(function (b) { return liveBucket(rarity, cost, b, blPct, gpd, roster); }, f3, roster, sep);
         })(RARITIES[ri], COSTS[ci], ci === 0);
       }
     }
@@ -392,12 +421,12 @@
         + '<th class="num">Gold/wk</th><th class="num">Avg Score</th></tr></thead><tbody>';
       for (var rj = 0; rj < RARITIES.length; rj++) {
         var rar = RARITIES[rj];
-        var d = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.directPerWk : null; }, gpd, bl);
-        var f = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.fusePerWk : null; }, gpd, bl);
+        var d = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.directPerWk : null; }, gpd, blPct);
+        var f = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.fusePerWk : null; }, gpd, blPct);
         var tot = (d || 0) + (f || 0);
         var wk = tot > 0 ? SLOTS / tot : null;
-        var gold = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.goldPerWk : null; }, gpd, bl);
-        var avg = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.avgScore : null; }, gpd, bl);
+        var gold = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.goldPerWk : null; }, gpd, blPct);
+        var avg = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.avgScore : null; }, gpd, blPct);
         thruTbl += '<tr><td><b>' + RARITY_LABEL[rar] + '</b></td>'
           + '<td class="sep num">' + fmtNum(d) + '</td><td class="num">' + fmtNum(f) + '</td>'
           + '<td class="num"><b>' + fmtNum(tot) + '</b></td>'
@@ -410,10 +439,10 @@
 
     // Fodder section (interpolated).
     var fod = roster === "nrb"
-      ? fodderSection(gpd, bl, function (rarity, cost, b) { return liveBucket(rarity, cost, b, bl, gpd, "nrb"); })
+      ? fodderSection(gpd, blPct, grade, function (rarity, cost, b) { return liveBucket(rarity, cost, b, blPct, gpd, "nrb"); })
       : "";
 
-    return '<h2>Per-bucket cut value — ' + fmtGold(gpd) + ' gold / 1% damage, baseline ' + bl + '% dmg'
+    return '<h2>Per-bucket cut value — ' + fmtGold(gpd) + ' gold / 1% damage, baseline grade ' + grade + ' (' + rank + ')'
       + ' (' + (roster === "nrb" ? "Non-Roster Bound" : "Roster Bound") + ')</h2>'
       + '<p class="note">Interpolated from the baked DP grid (the exact DP is ~3s/cell — too slow to recompute live). '
       + 'Each cell stacks the four buckets; the number is the cut value of a fresh gem of that archetype. '
@@ -431,7 +460,8 @@
       + '<p class="note">Each cost cell stacks the four effect-pair buckets: '
       + '<b>2D</b> (both damage) · <b>Op</b> (best single damage) · <b>Sub</b> (worse single damage) · <b>No</b> (no damage). '
       + 'Per row: <b>cut value</b> (the DP value of cutting a fresh gem of that archetype) and <b>% above baseline</b>. '
-      + 'A gem must beat the baseline (a %-damage threshold) to be an upgrade. Values rise with rarity (more turns/rerolls).</p>'
+      + 'A gem must beat the baseline <b>grade</b> (0–100; your weakest equipped gem\'s grade) to be an upgrade — the grade is '
+      + 'converted to its %-damage threshold internally. Values rise with rarity (more turns/rerolls).</p>'
       + '<div class="lg-h">Verdict colors</div>'
       + '<p><span class="sw v-green"></span> <b>Green</b> (≥ ' + fmtGold(V.green) + ') — worth resetting if below baseline (↻)<br>'
       + '<span class="sw v-y1"></span><span class="sw v-y2"></span><span class="sw v-y3"></span> <b>Yellow–dim</b> (&gt; 0) — cut, don\'t reset<br>'
@@ -461,8 +491,9 @@
       + 'random 4-draw inside (model/dp.js). It is deterministic (no Monte Carlo). Values increase with rarity because '
       + 'epic gets 9 turns / 3 rerolls vs uncommon\'s 5 / 1.</p>'
       + '<p><b>Scoring is real % damage.</b> Each line scores D = 100·ln(multiplier) (additive in log space, ≈ % damage); '
-      + 'a perfect gem ≈ 1.3–1.4%. Baseline is the % damage of your weakest equipped gem; gold value = '
-      + 'max(0,(score−baseline)) × goldPerDamage (gold per 1% damage).</p>'
+      + 'a perfect gem ≈ 1.3–1.4%. Baseline is entered as a 0–100 <b>grade</b> (your weakest equipped gem\'s grade), '
+      + 'converted to its %-damage threshold via gradeToScore(); gold value = '
+      + 'max(0,(score−threshold)) × goldPerDamage (gold per 1% damage).</p>'
       + '<p><b>Tier is the fusion fodder, not the cut axis.</b> A below-baseline cut becomes fodder, classified by '
       + 'level-sum tier (legendary 4–15, relic 16–18, ancient 19–20) and fused 3→1. The bake records the per-bucket '
       + 'fodder tier split (p_fodder_leg/relic/anc, summing to 1−P(above)) by walking the SAME optimal policy the value '
@@ -495,8 +526,10 @@
       + '<div class="ig" id="pl-live-fields" style="' + (MODE === "live" ? "" : "display:none") + '">'
       + '<div class="fld"><label>Gold per 1% damage</label>'
       + '<input id="pl-gpd" type="number" min="100000" step="50000" value="' + LIVE.gpd + '"></div>'
-      + '<div class="fld"><label>Baseline (weakest equipped % dmg)</label>'
-      + '<input id="pl-bl" type="number" min="0" max="3" step="0.05" value="' + LIVE.baseline + '"></div>'
+      + '<div class="fld"><label>Baseline grade <span class="dim">(0–100; weakest equipped gem)</span></label>'
+      + '<div style="display:flex;align-items:center;gap:8px">'
+      + '<input id="pl-grade" type="number" min="0" max="100" step="1" value="' + LIVE.grade + '" oninput="window.__plGradeRank()" style="flex:1">'
+      + '<span id="pl-grade-rank" class="grade-rank">' + window.rankFromGrade(LIVE.grade) + '</span></div></div>'
       + '<div class="fld" style="align-self:end"><button class="primary" onclick="window.__plRecalc()">Recalculate</button></div>'
       + '</div>'
       + '<p class="note" id="pl-mode-note">' + modeNote() + '</p>'
@@ -504,8 +537,8 @@
   }
   function modeNote() {
     return MODE === "baked"
-      ? "Baked view: the fixed gold tiers (500k · 1M · 1.5M · 2.5M · 3.5M · 5M), NRB then RB, straight from data/pipeline.json (exact DP)."
-      : "Live view: per-bucket cut values interpolated from the baked DP grid for any gold/baseline (the exact DP is too slow to recompute live).";
+      ? "Baked view: the fixed gold tiers (500k · 1M · 1.5M · 2.5M · 3.5M · 5M), NRB then RB, one row per baseline GRADE (50–85), read off the baked DP grid (interpolated to each grade's %-damage threshold)."
+      : "Live view: per-bucket cut values interpolated from the baked DP grid for any gold + baseline grade (the exact DP is too slow to recompute live).";
   }
 
   // ---------------------------------------------------------------------------
@@ -552,6 +585,7 @@
       + '#tab-pipeline .sw.v-green{background:#1f6b3e}#tab-pipeline .sw.v-y1{background:#3a5a2a}#tab-pipeline .sw.v-y2{background:#4a5520}#tab-pipeline .sw.v-y3{background:#5a4a1e}#tab-pipeline .sw.v-red{background:#4a1c1c}#tab-pipeline .sw.v-purple{background:#3a2a66}'
       + '#tab-pipeline .legendary{color:#f0c674}#tab-pipeline .relic{color:#c79bff}#tab-pipeline .ancient{color:#ff9d6e}'
       + '#tab-pipeline .dim{color:var(--dim);font-weight:400;font-size:10.5px}'
+      + '#tab-pipeline .grade-rank{display:inline-block;min-width:34px;text-align:center;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}'
       + '#tab-pipeline .tablewrap{overflow-x:auto;max-width:100%}'
       + '</style>';
   }
@@ -616,10 +650,18 @@
   };
   window.__plRecalc = function () {
     var g = parseFloat(document.getElementById("pl-gpd").value);
-    var b = parseFloat(document.getElementById("pl-bl").value);
+    var gr = parseFloat(document.getElementById("pl-grade").value);
     if (isFinite(g) && g > 0) LIVE.gpd = g;
-    if (isFinite(b) && b >= 0) LIVE.baseline = b;
+    if (isFinite(gr) && gr >= 0 && gr <= 100) LIVE.grade = gr;
     renderBody();
+  };
+  // Live-update the rank chip next to the grade input as the user types (no recompute).
+  window.__plGradeRank = function () {
+    var el = document.getElementById("pl-grade");
+    var chip = document.getElementById("pl-grade-rank");
+    if (!el || !chip) return;
+    var gr = parseFloat(el.value);
+    chip.textContent = isFinite(gr) ? window.rankFromGrade(Math.max(0, Math.min(100, gr))) : "—";
   };
   window.__plToggleInputs = function () {
     var body = document.getElementById("pl-inbody");

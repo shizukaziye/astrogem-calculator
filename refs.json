@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-06-22T23:09:26.957Z",
+    "generated": "2026-06-22T23:30:20.558Z",
     "note": "Captured references for the deterministic core. Regenerate with `node tools/gen-refs.js`. Scoring is REAL % damage (D = 100*ln(multiplier)); supersedes the abstract-weight model and the removed SCORE_PER_PERCENT_DAMAGE=30.96.",
     "SCORING": {
       "willpowerPerLevel": 0.0781186855277456,

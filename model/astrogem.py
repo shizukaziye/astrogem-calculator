@@ -204,18 +204,26 @@ def grade(config):
     return round(max(0.0, min(100.0, g)) * 10) / 10
 
 
+def grade_to_score(g):
+    b = grade_bounds()
+    return b["min"] + (max(0.0, min(100.0, g)) / 100) * (b["max"] - b["min"])
+
+
 # user-set rank cutoffs on the 0-100 grade; +/ /- thirds within each band.
 RANK_CUTS = [("S", 85), ("A", 75), ("B", 65), ("C", 50), ("D", 25), ("F", 0)]
 
 
-def gem_rank(config):
-    g = grade(config)
+def rank_from_grade(g):
     for i, (letter, lo) in enumerate(RANK_CUTS):
         if g >= lo:
             hi = 100 if i == 0 else RANK_CUTS[i - 1][1]
             t = (g - lo) / (hi - lo) if hi > lo else 0
             return letter + ("+" if t >= 2 / 3 else ("-" if t < 1 / 3 else ""))
     return "F-"
+
+
+def gem_rank(config):
+    return rank_from_grade(grade(config))
 
 
 def score_breakdown(config):
