@@ -25,21 +25,26 @@ data/pipeline.json  Placeholder dataset for the Pipeline tab.
 
 ## The model in one paragraph
 
-A gem has willpower, order, and two side effects (each level 1–5). The **DPS score**
-weights willpower vs. cost 4 (±2.4/level), Attack Power 1.0, Additional Damage 1.85,
-Boss Damage 2.55, and Order 5.14×(level−4); support effects score 0. A gem's **gold
-value** is its direct sale value when its score clears a `baseline`, else its
-**fusion-fodder** value. Fusing 3 gems of a tier produces a higher/lower-tier gem
-with known odds, so each tier's expected value depends on the others — resolved as
-a small **3×3 fixed point** over E[Legendary], E[Relic], E[Ancient] per
+A gem has willpower, order, and two side effects (each level 1–5). Damage is
+multiplicative, so each line is scored in **real % damage**: `D = 100·ln(multiplier)`
+(additive in log space). The per-line values are derived from real stat baselines —
+Attack Power ≈ 0.0325/lvl, Additional Damage ≈ 0.0598/lvl, Boss Damage ≈ 0.0823/lvl,
+Order ≈ 0.1599 per point (flat), Willpower ≈ ±0.0781 per cost-level vs cost 4; support
+effects score 0. A gem's **score is its approximate % damage** (a perfect gem ≈ 1.3–1.4%).
+A gem's **gold value** is its direct sale value when its % damage clears a `baseline`
+(itself a %-damage threshold), else its **fusion-fodder** value; `goldPerDamage` is
+gold per 1% damage. Fusing 3 gems of a tier produces a higher/lower-tier gem with
+known odds, so each tier's expected value depends on the others — resolved as a small
+**3×3 fixed point** over E[Legendary], E[Relic], E[Ancient] per
 `(baseCost, baseline, goldPerDamage)`. The score distribution per tier is computed
 in **closed form** (enumerating level-sum partitions × effect pairs), not by
 sampling. The **Advisor** uses a nested Monte Carlo over the official per-turn
 outcome table to rank Process / Reroll / Complete.
 
-> Constants are the **current canonical generation**. Older docs in the source
-> project quoted superseded values (27.3 / 1.65 / 2.27 / 4.32 / baseline 12) — those
-> are NOT used here.
+> Scoring is **real % damage** (log-space). This supersedes the old abstract-weight
+> model (WP ±2.4 / ATK 1.0 / AddDmg 1.85 / Boss 2.55 / Order 5.14, with a 30.96
+> score→gold conversion) and the even older `27.3 / 1.65 / 2.27 / 4.32` docs in the
+> source project — neither is used here. See `METHODOLOGY.md` §1, §8.
 
 ## Run verification
 

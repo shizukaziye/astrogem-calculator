@@ -155,7 +155,7 @@
 
 '    <div class="subh">5 · Market &amp; depth</div>' +
 '    <div class="ig">' +
-'      <div class="fld"><label>Baseline (sellable score)</label><input id="av-baseline" type="number" step="1" value="8"></div>' +
+'      <div class="fld"><label>Baseline (sellable % dmg)</label><input id="av-baseline" type="number" step="0.05" value="1.0"></div>' +
 '      <div class="fld"><label>Gold per 1% dmg</label><input id="av-gpd" type="number" step="10000" value="1500000"></div>' +
 '      <div class="fld"><label>Depth</label><select id="av-speed">' + opts([{ v: "quick", t: "Quick (fast)" }, { v: "standard", t: "Standard" }, { v: "deep", t: "Deep (slow)" }], "standard") + '</select></div>' +
 '      <div class="fld"><label>Consider Complete?</label><select id="av-sim2">' + opts([{ v: "yes", t: "Yes (rank it too)" }, { v: "no", t: "No (Process vs Reroll)" }], "yes") + '</select></div>' +
@@ -188,7 +188,7 @@
 '    <li><b>P(above baseline)</b> is the share of rollouts whose final gem score clears your sellable baseline. A below-baseline gem is valued as fusion fodder, not zero.</li>' +
 '    <li>Depth (quick/standard/deep) trades accuracy for speed by changing the outer and inner sample counts.</li>' +
 '  </ul>' +
-'  <p class="note">Score &rarr; gold uses 30.96 score points = 1% damage = your "gold per 1% dmg". The screenshot reader is best-effort &mdash; always eyeball the prefilled fields, especially the 4 outcomes, before trusting the numbers.</p>' +
+'  <p class="note">A gem\'s score IS its % damage (each line D = 100&middot;ln(multiplier), additive; a perfect gem &asymp; 1.3&ndash;1.4%). Gold = (score &minus; baseline) &times; your "gold per 1% dmg"; baseline is the % damage of your weakest equipped gem. The screenshot reader is best-effort &mdash; always eyeball the prefilled fields, especially the 4 outcomes, before trusting the numbers.</p>' +
 '</details>';
   }
 
@@ -472,7 +472,8 @@
       var v = window.validateConfig(state.config);
       if (!v.valid) { setStatus("Invalid gem: " + v.error, "err"); return; }
     }
-    var baseline = parseFloat($("av-baseline").value) || 8;
+    var baseline = parseFloat($("av-baseline").value);
+    if (!isFinite(baseline) || baseline < 0) baseline = 1.0;
     var gpd = parseFloat($("av-gpd").value) || 1500000;
     var preset = SPEED_PRESETS[$("av-speed").value] || SPEED_PRESETS.standard;
     var includeSim2 = $("av-sim2").value === "yes";
@@ -537,7 +538,7 @@
         ? '<div>Avg. spend from here: <span class="ev">' + Math.round(a.expectedCost).toLocaleString() + "g</span></div>"
         : "";
       var scoreLine = isFinite(a.expectedScore)
-        ? '<div>Exp. final score: <span class="ev">' + a.expectedScore.toFixed(1) + "</span></div>"
+        ? '<div>Exp. final gem: <span class="ev">' + a.expectedScore.toFixed(2) + "% dmg</span></div>"
         : "";
       var c = el("div", { class: "av-card" + (isBest ? " best" : "") + (disabled ? "" : "") });
       c.innerHTML =

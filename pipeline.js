@@ -38,7 +38,10 @@
   var DATA = null;          // baked data/pipeline.json (lazy-fetched)
   var MODE = "baked";       // 'baked' | 'live'
   var ROSTER = "nrb";       // 'nrb' | 'rb'   (live mode toggle)
-  var LIVE = { gpd: 1500000, baseline: 8 };
+  // baseline is now a %-DAMAGE threshold (weakest equipped gem's % damage).
+  var LIVE = { gpd: 1500000, baseline: 1.0 };
+  // The discrete baselines baked into data/pipeline.json (see collect-stats.js).
+  var BAKED_BASELINES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5];
 
   // ---------------------------------------------------------------------------
   // formatting
@@ -120,11 +123,23 @@
     return [anchors[0], anchors[0]];
   }
 
+  // Nearest baked baselines bracketing `bl` (the baked baseline axis is the discrete
+  // BAKED_BASELINES list, not consecutive integers).
+  function nearestBaselineAnchors(bl) {
+    var baked = (DATA && DATA.meta && DATA.meta.bakedBaselines) || BAKED_BASELINES;
+    if (bl <= baked[0]) return [baked[0], baked[0]];
+    if (bl >= baked[baked.length - 1]) { var hi = baked[baked.length - 1]; return [hi, hi]; }
+    for (var i = 0; i < baked.length - 1; i++) {
+      if (bl >= baked[i] && bl <= baked[i + 1]) return [baked[i], baked[i + 1]];
+    }
+    return [baked[0], baked[0]];
+  }
+
   // Bilinear interpolate a throughput field across (gpd, baseline) from the grid.
   function interpThru(cost, rarity, field, gpd, baseline) {
     if (!DATA) return null;
-    var blLo = Math.max(0, Math.floor(baseline));
-    var blHi = Math.min(16, Math.ceil(baseline));
+    var blAnc = nearestBaselineAnchors(baseline);
+    var blLo = blAnc[0], blHi = blAnc[1];
     var anc = nearestGpdAnchors(gpd);
     var gLo = anc[0], gHi = anc[1];
     function val(g, bl) {
@@ -181,8 +196,11 @@
   // BAKED table for one gpd tier
   // ---------------------------------------------------------------------------
   function bakedTable(gpd, roster) {
-    var win = (DATA.meta.baselineWindow && DATA.meta.baselineWindow[gpd]) || [0, 10];
+    var baked = (DATA.meta && DATA.meta.bakedBaselines) || BAKED_BASELINES;
+    var win = (DATA.meta.baselineWindow && DATA.meta.baselineWindow[gpd]) || [baked[0], baked[baked.length - 1]];
     var blMin = win[0], blMax = win[1];
+    // The baselines (from the baked set) that fall inside this gpd's window.
+    var rowBaselines = baked.filter(function (b) { return b >= blMin - 1e-9 && b <= blMax + 1e-9; });
     var isNrb = roster === "nrb";
 
     var head = '<table class="pipe-table"><thead>'
@@ -201,7 +219,8 @@
       + '</tr></thead><tbody>';
 
     var body = "";
-    for (var bl = blMin; bl <= blMax; bl++) {
+    for (var bli = 0; bli < rowBaselines.length; bli++) {
+      var bl = rowBaselines[bli];
       var row = '<tr><td class="pipe blcell"><b>' + bl + '</b></td>';
       // 9 gem cells: rarity x cost. (Closed-form tier values don't depend on rarity;
       // the rarity blocks differ only in the throughput columns. We still render the
@@ -298,11 +317,11 @@
         + 'Throughput numbers interpolate the dense baked grid; the per-gem table above is exact closed-form.</p>';
     }
 
-    var gpScore = window.SCORE_PER_PERCENT_DAMAGE || 30.96;
-    return '<h2>Per-gem value — ' + fmtGold(gpd) + ' gold / 1% damage, baseline ' + bl
+    return '<h2>Per-gem value — ' + fmtGold(gpd) + ' gold / 1% damage, baseline ' + bl + '% dmg'
       + ' (' + (roster === "nrb" ? "Non-Roster Bound" : "Roster Bound") + ')</h2>'
-      + '<p class="note">Direct EV = E[direct sale gold] of a random gem in that tier '
-      + '(' + gpScore.toFixed(2) + ' score = 1% damage). Fuse/gem = value of fusing 3 of that tier. '
+      + '<p class="note">Direct EV = E[direct sale gold] of a random gem in that tier. '
+      + 'Scores are real % damage (a perfect gem is ~1.3–1.4% damage); baseline is the % damage '
+      + 'of your weakest equipped gem. Fuse/gem = value of fusing 3 of that tier. '
       + 'Verdict compares them to the reset floor (' + fmtGold(GREEN_GOLD) + ').</p>'
       + gemTbl + thruTbl;
   }
@@ -336,7 +355,7 @@
       + '<p class="note">Each cost cell stacks the three tiers — <span class="legendary">Leg</span> / '
       + '<span class="relic">Relic</span> / <span class="ancient">Anc</span>. Per row: '
       + '<b>direct-sale gold EV</b> (left) and <b>% of that tier above baseline</b> (right). '
-      + 'A gem must beat the baseline score to be an upgrade.</p>'
+      + 'A gem must beat the baseline (a %-damage threshold) to be an upgrade.</p>'
       + '<div class="lg-h">Verdict colors</div>'
       + '<p><span class="sw v-green"></span> <b>Green</b> (≥ ' + fmtGold(GREEN_GOLD) + ') — worth resetting if below baseline (↻)<br>'
       + '<span class="sw v-yellow"></span> <b>Yellow-dim</b> (&gt; 0) — cut, don\'t reset<br>'
@@ -357,23 +376,27 @@
   }
 
   function methodologyHtml() {
-    var gp = (window.SCORE_PER_PERCENT_DAMAGE || 30.96).toFixed(2);
     return '<details class="method"><summary>Methodology</summary>'
-      + '<p><b>Scoring.</b> Willpower ±2.4/level vs cost 4; Attack Power 1.0; Additional Damage 1.85; '
-      + 'Boss Damage 2.55; Order 5.14×(level−4). Support lines score 0. ' + gp + ' score = 1% damage.</p>'
+      + '<p><b>Scoring is real % damage.</b> Damage is multiplicative, so each line is scored '
+      + '<b>D = 100·ln(multiplier)</b> (additive in log space, ≈ % damage). Per-level values, '
+      + 'derived from real stat baselines: Attack Power ≈ 0.0325/lvl; Additional Damage ≈ 0.0598/lvl; '
+      + 'Boss Damage ≈ 0.0823/lvl; Order ≈ 0.1599 <i>per point</i> (flat, level×0.1599); Willpower ≈ ±0.0781 per '
+      + 'cost-level vs cost 4 (cost = baseCost−wpLevel). Support lines score 0. A gem\'s total score ≈ its % damage '
+      + '(a perfect gem ≈ 1.3–1.4%).</p>'
       + '<p><b>Tiers</b> by level-sum (WP+Order+E1+E2, each 1–5): legendary 4–15, relic 16–18, ancient 19–20. '
       + 'Within a tier P(level-sum) ∝ number of 4-stat partitions; stats are <i>uniform over partitions</i> of the sum.</p>'
-      + '<p><b>Gold value.</b> Direct = max(0,(score−baseline))×goldPerDamage/' + gp + '. A below-baseline gem is fodder; '
-      + 'its value is the per-gem fusion value, resolved with the tier EVs as a 3×3 fixed point (a fused output may itself '
-      + 'be above/below baseline).</p>'
+      + '<p><b>Gold value.</b> Direct = max(0,(score−baseline))×goldPerDamage, where goldPerDamage is gold per <b>1% damage</b> '
+      + 'and baseline is a <b>%-damage</b> threshold (your weakest equipped gem). A below-baseline gem is fodder; its value is '
+      + 'the per-gem fusion value, resolved with the tier EVs as a 3×3 fixed point (a fused output may itself be above/below baseline).</p>'
       + '<p><b>Throughput.</b> A documented weekly model: Direct/wk = weekly cut budget × P(above baseline) over the fresh-cut '
       + 'tier mix; Fuse/wk recycles below-baseline cuts (3→1) through the legendary fusion lane; Total/wk = Direct+Fuse; '
       + 'Weeks = ' + SLOTS + '/Total/wk. The exact weekly-budget / box-schedule constants of the original page were not part of '
       + 'the model core, so they are reconstructed and documented (METHODOLOGY.md).</p>'
-      + '<p><b>Caveat — superseded constants.</b> Older docs used 27.3 score/1% and 1.65/2.27/4.32 weights with baseline 12; '
-      + 'this tool uses the CURRENT generation (' + gp + ', 1.85/2.55/5.14). <b>Modeling flag:</b> the deployed reference page '
-      + 'SAMPLED the per-gem stat distribution with a sequential, non-uniform partition sampler; this core is uniform over '
-      + 'partitions and runs ~10–30% higher at the tier level (worst for relic). See METHODOLOGY.md.</p>'
+      + '<p><b>Caveat — superseded model.</b> Earlier versions scored gems with abstract weights (WP ±2.4, ATK 1.0, '
+      + 'AddDmg 1.85, Boss 2.55, Order 5.14) and converted score→gold via 30.96 score = 1% damage. That is superseded: '
+      + 'the score IS % damage now. <b>Modeling flag:</b> the deployed reference page SAMPLED the per-gem stat distribution '
+      + 'with a sequential, non-uniform partition sampler; this core is uniform over partitions and runs ~10–30% higher at '
+      + 'the tier level (worst for relic). See METHODOLOGY.md.</p>'
       + '</details>';
   }
 
@@ -395,8 +418,8 @@
       + '<div class="ig" id="pl-live-fields" style="' + (MODE === "live" ? "" : "display:none") + '">'
       + '<div class="fld"><label>Gold per 1% damage</label>'
       + '<input id="pl-gpd" type="number" min="100000" step="50000" value="' + LIVE.gpd + '"></div>'
-      + '<div class="fld"><label>Baseline (weakest equipped score)</label>'
-      + '<input id="pl-bl" type="number" min="0" max="16" step="0.5" value="' + LIVE.baseline + '"></div>'
+      + '<div class="fld"><label>Baseline (weakest equipped % dmg)</label>'
+      + '<input id="pl-bl" type="number" min="0" max="3" step="0.05" value="' + LIVE.baseline + '"></div>'
       + '<div class="fld" style="align-self:end"><button class="primary" onclick="window.__plRecalc()">Recalculate</button></div>'
       + '</div>'
       + '<p class="note" id="pl-mode-note">' + modeNote() + '</p>'

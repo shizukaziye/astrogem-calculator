@@ -1,8 +1,37 @@
 {
   "meta": {
-    "generated": "2026-06-22T18:09:11.504Z",
-    "note": "Captured references for the deterministic core. Regenerate with `node tools/gen-refs.js`. Constants are the CURRENT canonical generation (not the superseded 27.3/1.65/2.27/4.32).",
-    "SCORE_PER_PERCENT_DAMAGE": 30.96,
+    "generated": "2026-06-22T19:45:22.489Z",
+    "note": "Captured references for the deterministic core. Regenerate with `node tools/gen-refs.js`. Scoring is REAL % damage (D = 100*ln(multiplier)); supersedes the abstract-weight model and the removed SCORE_PER_PERCENT_DAMAGE=30.96.",
+    "SCORING": {
+      "willpowerPerLevel": 0.0781186855277456,
+      "attackPower": 0.03254945230322734,
+      "additionalDamage": 0.05983890881649058,
+      "bossDamage": 0.08230870863457138,
+      "orderPerPoint": 0.15987213636970735,
+      "brandPower": 0,
+      "allyDamageEnh": 0,
+      "allyAttackEnh": 0,
+      "baselines": {
+        "attackPower": {
+          "other": 0.121,
+          "gridAdd": 0.011,
+          "levels": 30
+        },
+        "additionalDamage": {
+          "other": 0.336,
+          "gridAdd": 0.0242,
+          "levels": 30
+        },
+        "bossDamage": {
+          "other": 0,
+          "gridAdd": 0.025,
+          "levels": 30
+        },
+        "order": {
+          "perPoint": 0.0016
+        }
+      }
+    },
     "COSTS": {
       "processBase": 900,
       "finalReroll": 3800,
@@ -22,14 +51,15 @@
         "effect2": "Attack Power",
         "effect2Level": 5
       },
-      "score": 21.79,
+      "score": 1.339421,
+      "damagePercent": 1.348432,
       "breakdown": {
         "willpowerCost": 3,
-        "willpowerScore": 2.4,
-        "effect1Score": 9.25,
-        "effect2Score": 5,
-        "orderScore": 5.14,
-        "totalScore": 21.79
+        "willpowerScore": 0.078119,
+        "effect1Score": 0.299195,
+        "effect2Score": 0.162747,
+        "orderScore": 0.799361,
+        "totalScore": 1.339421
       }
     },
     {
@@ -43,14 +73,15 @@
         "effect2": "Attack Power",
         "effect2Level": 5
       },
-      "score": 22.89,
+      "score": 1.373651,
+      "damagePercent": 1.383129,
       "breakdown": {
         "willpowerCost": 4,
         "willpowerScore": 0,
-        "effect1Score": 12.75,
-        "effect2Score": 5,
-        "orderScore": 5.14,
-        "totalScore": 22.89
+        "effect1Score": 0.411544,
+        "effect2Score": 0.162747,
+        "orderScore": 0.799361,
+        "totalScore": 1.373651
       }
     },
     {
@@ -64,14 +95,15 @@
         "effect2": "Additional Damage",
         "effect2Level": 5
       },
-      "score": 24.74,
+      "score": 1.43198,
+      "damagePercent": 1.442282,
       "breakdown": {
         "willpowerCost": 5,
-        "willpowerScore": -2.4,
-        "effect1Score": 12.75,
-        "effect2Score": 9.25,
-        "orderScore": 5.14,
-        "totalScore": 24.74
+        "willpowerScore": -0.078119,
+        "effect1Score": 0.411544,
+        "effect2Score": 0.299195,
+        "orderScore": 0.799361,
+        "totalScore": 1.43198
       }
     },
     {
@@ -85,14 +117,15 @@
         "effect2": "Ally Damage Enh.",
         "effect2Level": 2
       },
-      "score": -2.4,
+      "score": 0.56137,
+      "damagePercent": 0.562948,
       "breakdown": {
         "willpowerCost": 5,
-        "willpowerScore": -2.4,
+        "willpowerScore": -0.078119,
         "effect1Score": 0,
         "effect2Score": 0,
-        "orderScore": 0,
-        "totalScore": -2.4
+        "orderScore": 0.639489,
+        "totalScore": 0.56137
       }
     },
     {
@@ -106,14 +139,15 @@
         "effect2": "Boss Damage",
         "effect2Level": 1
       },
-      "score": -4.99,
+      "score": 0.483806,
+      "damagePercent": 0.484979,
       "breakdown": {
         "willpowerCost": 5,
-        "willpowerScore": -2.4,
+        "willpowerScore": -0.078119,
         "effect1Score": 0,
-        "effect2Score": 2.55,
-        "orderScore": -5.14,
-        "totalScore": -4.99
+        "effect2Score": 0.082309,
+        "orderScore": 0.479616,
+        "totalScore": 0.483806
       }
     },
     {
@@ -127,14 +161,15 @@
         "effect2": "Ally Attack Enh.",
         "effect2Level": 5
       },
-      "score": -25.02,
+      "score": -0.152603,
+      "damagePercent": -0.152486,
       "breakdown": {
         "willpowerCost": 8,
-        "willpowerScore": -9.6,
+        "willpowerScore": -0.312475,
         "effect1Score": 0,
         "effect2Score": 0,
-        "orderScore": -15.42,
-        "totalScore": -25.02
+        "orderScore": 0.159872,
+        "totalScore": -0.152603
       }
     },
     {
@@ -148,14 +183,15 @@
         "effect2": "Attack Power",
         "effect2Level": 1
       },
-      "score": -19.77,
+      "score": 0.017904,
+      "damagePercent": 0.017906,
       "breakdown": {
         "willpowerCost": 7,
-        "willpowerScore": -7.2,
-        "effect1Score": 1.85,
-        "effect2Score": 1,
-        "orderScore": -15.42,
-        "totalScore": -19.77
+        "willpowerScore": -0.234356,
+        "effect1Score": 0.059839,
+        "effect2Score": 0.032549,
+        "orderScore": 0.159872,
+        "totalScore": 0.017904
       }
     },
     {
@@ -169,14 +205,15 @@
         "effect2": "Additional Damage",
         "effect2Level": 1
       },
-      "score": -23.02,
+      "score": -0.088574,
+      "damagePercent": -0.088534,
       "breakdown": {
         "willpowerCost": 9,
-        "willpowerScore": -12,
-        "effect1Score": 2.55,
-        "effect2Score": 1.85,
-        "orderScore": -15.42,
-        "totalScore": -23.02
+        "willpowerScore": -0.390593,
+        "effect1Score": 0.082309,
+        "effect2Score": 0.059839,
+        "orderScore": 0.159872,
+        "totalScore": -0.088574
       }
     },
     {
@@ -190,14 +227,15 @@
         "effect2": "Ally Damage Enh.",
         "effect2Level": 4
       },
-      "score": 3,
+      "score": 0.737137,
+      "damagePercent": 0.73986,
       "breakdown": {
         "willpowerCost": 4,
         "willpowerScore": 0,
-        "effect1Score": 3,
+        "effect1Score": 0.097648,
         "effect2Score": 0,
-        "orderScore": 0,
-        "totalScore": 3
+        "orderScore": 0.639489,
+        "totalScore": 0.737137
       }
     }
   ],
@@ -206,19 +244,19 @@
       "baseCost": 8,
       "wpLevel": 1,
       "cost": 7,
-      "score": -7.2
+      "score": -0.234356
     },
     {
       "baseCost": 8,
       "wpLevel": 2,
       "cost": 6,
-      "score": -4.8
+      "score": -0.156237
     },
     {
       "baseCost": 8,
       "wpLevel": 3,
       "cost": 5,
-      "score": -2.4
+      "score": -0.078119
     },
     {
       "baseCost": 8,
@@ -230,31 +268,31 @@
       "baseCost": 8,
       "wpLevel": 5,
       "cost": 3,
-      "score": 2.4
+      "score": 0.078119
     },
     {
       "baseCost": 9,
       "wpLevel": 1,
       "cost": 8,
-      "score": -9.6
+      "score": -0.312475
     },
     {
       "baseCost": 9,
       "wpLevel": 2,
       "cost": 7,
-      "score": -7.2
+      "score": -0.234356
     },
     {
       "baseCost": 9,
       "wpLevel": 3,
       "cost": 6,
-      "score": -4.8
+      "score": -0.156237
     },
     {
       "baseCost": 9,
       "wpLevel": 4,
       "cost": 5,
-      "score": -2.4
+      "score": -0.078119
     },
     {
       "baseCost": 9,
@@ -266,31 +304,31 @@
       "baseCost": 10,
       "wpLevel": 1,
       "cost": 9,
-      "score": -12
+      "score": -0.390593
     },
     {
       "baseCost": 10,
       "wpLevel": 2,
       "cost": 8,
-      "score": -9.6
+      "score": -0.312475
     },
     {
       "baseCost": 10,
       "wpLevel": 3,
       "cost": 7,
-      "score": -7.2
+      "score": -0.234356
     },
     {
       "baseCost": 10,
       "wpLevel": 4,
       "cost": 6,
-      "score": -4.8
+      "score": -0.156237
     },
     {
       "baseCost": 10,
       "wpLevel": 5,
       "cost": 5,
-      "score": -2.4
+      "score": -0.078119
     }
   ],
   "classifyTier": [
@@ -673,32 +711,32 @@
   ],
   "goldValue": [
     {
-      "score": 10,
-      "baseline": 8,
+      "score": 1.37,
+      "baseline": 1,
       "goldPerDamage": 1500000,
-      "value": 96899.224806
+      "value": 555000
     },
     {
-      "score": 20,
-      "baseline": 12,
+      "score": 0.8,
+      "baseline": 1,
       "goldPerDamage": 2500000,
-      "value": 645994.832041
-    },
-    {
-      "score": 5,
-      "baseline": 10,
-      "goldPerDamage": 500000,
       "value": 0
     },
     {
-      "score": 16.5,
-      "baseline": 10,
-      "goldPerDamage": 5000000,
-      "value": 1049741.602067
+      "score": 1.5,
+      "baseline": 1,
+      "goldPerDamage": 500000,
+      "value": 250000
     },
     {
-      "score": 12,
-      "baseline": 12,
+      "score": 1.2,
+      "baseline": 0.5,
+      "goldPerDamage": 5000000,
+      "value": 3500000
+    },
+    {
+      "score": 1,
+      "baseline": 1,
       "goldPerDamage": 1000000,
       "value": 0
     }
@@ -706,362 +744,362 @@
   "tierExpectedValue": [
     {
       "baseCost": 8,
-      "baseline": 6,
+      "baseline": 0.5,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 6757.595597,
-        "relic": 54204.286624,
-        "ancient": 115599.542459
+        "legendary": 62455.082852,
+        "relic": 187495.094074,
+        "ancient": 275806.616667
       }
     },
     {
       "baseCost": 8,
-      "baseline": 6,
+      "baseline": 0.5,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 20698.17315,
-        "relic": 162769.772052,
-        "ancient": 346822.112758
+        "legendary": 187568.619211,
+        "relic": 562497.822942,
+        "ancient": 827419.85
       }
     },
     {
       "baseCost": 8,
-      "baseline": 6,
+      "baseline": 0.5,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 69490.194585,
-        "relic": 542748.971051,
-        "ancient": 1156101.108802
+        "legendary": 625465.996469,
+        "relic": 1875007.373981,
+        "ancient": 2758066.166667
       }
     },
     {
       "baseCost": 8,
-      "baseline": 8,
+      "baseline": 0.75,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 3106.230506,
-        "relic": 36553.111607,
-        "ancient": 90581.085724
+        "legendary": 14195.810463,
+        "relic": 81763.10455,
+        "ancient": 152841.745391
       }
     },
     {
       "baseCost": 8,
-      "baseline": 8,
+      "baseline": 0.75,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 9775.856179,
-        "relic": 109894.616582,
-        "ancient": 271830.711367
+        "legendary": 42964.320028,
+        "relic": 245390.385903,
+        "ancient": 458536.72377
       }
     },
     {
       "baseCost": 8,
-      "baseline": 8,
+      "baseline": 0.75,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 33119.546034,
-        "relic": 366589.883992,
-        "ancient": 906204.401117
+        "legendary": 143654.103506,
+        "relic": 818085.870639,
+        "ancient": 1528469.148097
       }
     },
     {
       "baseCost": 8,
-      "baseline": 10,
+      "baseline": 1,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 1081.330235,
-        "relic": 22151.563423,
-        "ancient": 63986.573867
+        "legendary": 390.147548,
+        "relic": 15172.34416,
+        "ancient": 49258.135428
       }
     },
     {
       "baseCost": 8,
-      "baseline": 10,
+      "baseline": 1,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 3722.665194,
-        "relic": 66748.378632,
-        "ancient": 192048.381832
+        "legendary": 1658.509339,
+        "relic": 45850.450357,
+        "ancient": 147891.525685
       }
     },
     {
       "baseCost": 8,
-      "baseline": 10,
+      "baseline": 1,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 12967.337551,
-        "relic": 222837.231863,
-        "ancient": 640264.709711
+        "legendary": 6097.775607,
+        "relic": 153223.82205,
+        "ancient": 493108.391587
       }
     },
     {
       "baseCost": 8,
-      "baseline": 12,
+      "baseline": 1.25,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 161.237332,
-        "relic": 11945.106887,
-        "ancient": 42990.121574
+        "legendary": 0,
+        "relic": 0,
+        "ancient": 3788.853172
       }
     },
     {
       "baseCost": 8,
-      "baseline": 12,
+      "baseline": 1.25,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 975.705565,
-        "relic": 36203.351557,
-        "ancient": 129147.263169
+        "legendary": 0,
+        "relic": 195.39519,
+        "ancient": 11781.086081
       }
     },
     {
       "baseCost": 8,
-      "baseline": 12,
+      "baseline": 1.25,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 3826.34438,
-        "relic": 121107.207901,
-        "ancient": 430697.258752
+        "legendary": 0,
+        "relic": 1230.006001,
+        "ancient": 39753.901263
       }
     },
     {
       "baseCost": 9,
-      "baseline": 6,
+      "baseline": 0.5,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 5904.779455,
-        "relic": 53129.203745,
-        "ancient": 114476.450824
+        "legendary": 54251.088899,
+        "relic": 175957.374667,
+        "ancient": 263711.066667
       }
     },
     {
       "baseCost": 9,
-      "baseline": 6,
+      "baseline": 0.5,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 18157.138829,
-        "relic": 159593.890025,
-        "ancient": 343516.207786
+        "legendary": 162993.444443,
+        "relic": 527901.321454,
+        "ancient": 791133.2
       }
     },
     {
       "baseCost": 9,
-      "baseline": 6,
+      "baseline": 0.5,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 61040.39664,
-        "relic": 532220.292006,
-        "ancient": 1145155.357154
+        "legendary": 543591.688846,
+        "relic": 1759705.135208,
+        "ancient": 2637110.666667
       }
     },
     {
       "baseCost": 9,
-      "baseline": 8,
+      "baseline": 0.75,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 2810.019662,
-        "relic": 36905.035364,
-        "ancient": 89939.352051
+        "legendary": 12056.095503,
+        "relic": 76946.895175,
+        "ancient": 143846.022007
       }
     },
     {
       "baseCost": 9,
-      "baseline": 8,
+      "baseline": 0.75,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 8895.23374,
-        "relic": 110981.942461,
-        "ancient": 269933.376055
+        "legendary": 36572.073252,
+        "relic": 230977.974464,
+        "ancient": 431561.440534
       }
     },
     {
       "baseCost": 9,
-      "baseline": 8,
+      "baseline": 0.75,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 30193.483014,
-        "relic": 370251.117302,
-        "ancient": 899912.460069
+        "legendary": 122377.995374,
+        "relic": 770086.751974,
+        "ancient": 1438565.405378
       }
     },
     {
       "baseCost": 9,
-      "baseline": 10,
+      "baseline": 1,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 1126.636781,
-        "relic": 23527.203418,
-        "ancient": 67480.90704
+        "legendary": 474.687326,
+        "relic": 17506.773724,
+        "ancient": 57573.693987
       }
     },
     {
       "baseCost": 9,
-      "baseline": 10,
+      "baseline": 1,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 3858.140855,
-        "relic": 70873.465032,
-        "ancient": 202587.095438
+        "legendary": 1912.875456,
+        "relic": 52871.211864,
+        "ancient": 172928.267232
       }
     },
     {
       "baseCost": 9,
-      "baseline": 10,
+      "baseline": 1,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 13418.405113,
-        "relic": 236585.380681,
-        "ancient": 675458.754835
+        "legendary": 6946.533911,
+        "relic": 176646.745352,
+        "ancient": 576669.273588
       }
     },
     {
       "baseCost": 9,
-      "baseline": 12,
+      "baseline": 1.25,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 259.712951,
-        "relic": 14264.527813,
-        "ancient": 51082.364004
+        "legendary": 0,
+        "relic": 105.485312,
+        "ancient": 6242.966731
       }
     },
     {
       "baseCost": 9,
-      "baseline": 12,
+      "baseline": 1.25,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 1269.748927,
-        "relic": 43150.400684,
-        "ancient": 153454.559501
+        "legendary": 0,
+        "relic": 807.377274,
+        "ancient": 19142.95677
       }
     },
     {
       "baseCost": 9,
-      "baseline": 12,
+      "baseline": 1.25,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 4804.874842,
-        "relic": 144250.955734,
-        "ancient": 511757.243739
+        "legendary": 0,
+        "relic": 3263.999141,
+        "ancient": 64292.921907
       }
     },
     {
       "baseCost": 10,
-      "baseline": 6,
+      "baseline": 0.5,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 4384.936226,
-        "relic": 48745.665705,
-        "ancient": 111676.2376
+        "legendary": 46402.078997,
+        "relic": 167342.540265,
+        "ancient": 257399.1
       }
     },
     {
       "baseCost": 10,
-      "baseline": 6,
+      "baseline": 0.5,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 13610.664418,
-        "relic": 146463.130815,
-        "ancient": 335089.961114
+        "legendary": 139470.823105,
+        "relic": 502061.641403,
+        "ancient": 772197.3
       }
     },
     {
       "baseCost": 10,
-      "baseline": 6,
+      "baseline": 0.5,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 45900.713089,
-        "relic": 488474.258703,
-        "ancient": 1117037.993413
+        "legendary": 465211.427483,
+        "relic": 1673578.495386,
+        "ancient": 2573991
       }
     },
     {
       "baseCost": 10,
-      "baseline": 8,
+      "baseline": 0.75,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 1976.446366,
-        "relic": 33630.971797,
-        "ancient": 86347.505603
+        "legendary": 9348.50823,
+        "relic": 71266.61504,
+        "ancient": 145799.11616
       }
     },
     {
       "baseCost": 10,
-      "baseline": 8,
+      "baseline": 0.75,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 6402.119852,
-        "relic": 101178.238596,
-        "ancient": 259131.004309
+        "legendary": 28467.481224,
+        "relic": 213956.982628,
+        "ancient": 437457.59685
       }
     },
     {
       "baseCost": 10,
-      "baseline": 8,
+      "baseline": 0.75,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 21891.977053,
-        "relic": 337593.672393,
-        "ancient": 863873.249781
+        "legendary": 95383.886704,
+        "relic": 713373.269188,
+        "ancient": 1458262.279264
       }
     },
     {
       "baseCost": 10,
-      "baseline": 10,
+      "baseline": 1,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 669.979941,
-        "relic": 21736.151393,
-        "ancient": 61478.075093
+        "legendary": 186.163988,
+        "relic": 16129.732983,
+        "ancient": 49225.334981
       }
     },
     {
       "baseCost": 10,
-      "baseline": 10,
+      "baseline": 1,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 2494.199157,
-        "relic": 65527.605583,
-        "ancient": 184550.959101
+        "legendary": 1050.707274,
+        "relic": 48757.243899,
+        "ancient": 147852.903959
       }
     },
     {
       "baseCost": 10,
-      "baseline": 10,
+      "baseline": 1,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 8878.96641,
-        "relic": 218797.695249,
-        "ancient": 615306.053127
+        "legendary": 4076.608776,
+        "relic": 162953.532104,
+        "ancient": 493049.395381
       }
     },
     {
       "baseCost": 10,
-      "baseline": 12,
+      "baseline": 1.25,
       "goldPerDamage": 500000,
       "ev": {
-        "legendary": 41.64492,
-        "relic": 13377.369949,
-        "ancient": 44390.521369
+        "legendary": 0,
+        "relic": 411.844261,
+        "ancient": 11013.551251
       }
     },
     {
       "baseCost": 10,
-      "baseline": 12,
+      "baseline": 1.25,
       "goldPerDamage": 1500000,
       "ev": {
-        "legendary": 618.54683,
-        "relic": 40513.442817,
-        "ancient": 133412.608316
+        "legendary": 0,
+        "relic": 1720.858368,
+        "ancient": 33434.103366
       }
     },
     {
       "baseCost": 10,
-      "baseline": 12,
+      "baseline": 1.25,
       "goldPerDamage": 5000000,
       "ev": {
-        "legendary": 2637.703516,
-        "relic": 135489.697856,
-        "ancient": 444989.912631
+        "legendary": 0,
+        "relic": 6302.407742,
+        "ancient": 111906.035767
       }
     }
   ]

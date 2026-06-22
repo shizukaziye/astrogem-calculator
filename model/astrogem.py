@@ -9,19 +9,59 @@ NOT mirror the Monte Carlo simulation in nested.js.
 
 Stdlib only. Compatible with Python 3.6+ (no match statement, no PEP 604 unions).
 
-CANONICAL constants (current generation, NOT the superseded 27.3/1.65/2.27/4.32).
+SCORING IS REAL % DAMAGE (log-space): each line is D = 100*ln(multiplier) (additive,
+~percent for small values). Per-level D values are derived from real-game stat
+baselines (see SCORING below). This SUPERSEDES the old abstract-weight model
+(WP +/-2.4 / ATK 1.0 / AddDmg 1.85 / Boss 2.55 / Order 5.14 and the removed
+SCORE_PER_PERCENT_DAMAGE = 30.96 score->gold conversion). Mirrors astrogem.js exactly.
 """
 
-# ---- Canonical scoring weights (DPS) ----
+import math
+
+# ---- Scoring in REAL % DAMAGE (log-space) ----
+# Damage is MULTIPLICATIVE, so each line is scored D = 100*ln(multiplier) (additive
+# in log space, ~ % gain). Per-level D is computed from the gem grid's contribution
+# against the OTHER (non-grid) sources of that stat:
+#   per_level_D = 100 * ln((1 + other + grid_add) / (1 + other)) / levels
+# Baselines (editable, documented):
+#   attackPower      other 12.1%, +1.1% over 30 grid levels
+#   additionalDamage other 33.6%, +2.42% over 30 levels
+#   bossDamage       other 0%,    +2.5% over 30 levels
+#   order            flat x1.0016 per point (orderScore = orderLevel * D, NOT vs lvl 4)
+#   willpower        2.4 * attack-per-level (old willpower:attack ratio), per cost-level
+# Numeric values (~): atk 0.032549, addDmg 0.059839, boss 0.082309, order 0.159872,
+# willpower 0.078119 per cost-level from 4.
+
+STAT_BASELINES = {
+    "attackPower":      {"other": 0.121,  "gridAdd": 0.011,  "levels": 30},
+    "additionalDamage": {"other": 0.336,  "gridAdd": 0.0242, "levels": 30},
+    "bossDamage":       {"other": 0.0,    "gridAdd": 0.025,  "levels": 30},
+    "order":            {"perPoint": 0.0016},
+}
+
+
+def _per_level_d(b):
+    return 100 * math.log((1 + b["other"] + b["gridAdd"]) / (1 + b["other"])) / b["levels"]
+
+
+D_ATTACK_PER_LEVEL = _per_level_d(STAT_BASELINES["attackPower"])       # ~ 0.032549
+D_ADDDMG_PER_LEVEL = _per_level_d(STAT_BASELINES["additionalDamage"])  # ~ 0.059839
+D_BOSS_PER_LEVEL = _per_level_d(STAT_BASELINES["bossDamage"])          # ~ 0.082309
+D_ORDER_PER_POINT = 100 * math.log(1 + STAT_BASELINES["order"]["perPoint"])  # ~ 0.159872
+WILLPOWER_OVER_ATTACK_RATIO = 2.4
+D_WILLPOWER_PER_COSTLEVEL = WILLPOWER_OVER_ATTACK_RATIO * D_ATTACK_PER_LEVEL  # ~ 0.078119
+
 SCORING = {
-    "willpowerPerLevel": 2.4,
-    "attackPower": 1.0,
-    "additionalDamage": 1.85,
-    "bossDamage": 2.55,
-    "orderPerLevel": 5.14,
+    # All values are D = 100*ln(multiplier) ~ % damage (ADDITIVE in log space).
+    "willpowerPerLevel": D_WILLPOWER_PER_COSTLEVEL,
+    "attackPower": D_ATTACK_PER_LEVEL,
+    "additionalDamage": D_ADDDMG_PER_LEVEL,
+    "bossDamage": D_BOSS_PER_LEVEL,
+    "orderPerPoint": D_ORDER_PER_POINT,  # orderLevel * D (flat per point, NOT vs level 4)
     "brandPower": 0,
     "allyDamageEnh": 0,
     "allyAttackEnh": 0,
+    "baselines": STAT_BASELINES,
 }
 
 COSTS = {
@@ -29,8 +69,6 @@ COSTS = {
     "finalReroll": 3800,
     "fusion": 500,
 }
-
-SCORE_PER_PERCENT_DAMAGE = 30.96
 
 RARITY = {
     "uncommon": {"maxTurns": 5, "maxRerolls": 1},
@@ -109,7 +147,8 @@ def effect_score(effect_type, level):
 
 
 def order_score(order_level):
-    return (order_level - 4) * SCORING["orderPerLevel"]
+    # Flat per point (NOT relative to level 4).
+    return order_level * SCORING["orderPerPoint"]
 
 
 def score(config):
@@ -120,6 +159,11 @@ def score(config):
         + effect_score(config["effect2"], config["effect2Level"])
         + order_score(config["orderLevel"])
     )
+
+
+def damage_percent(config):
+    """Exact multiplicative % damage of the gem: (e^(D/100) - 1) * 100, D = score."""
+    return (math.exp(score(config) / 100.0) - 1) * 100
 
 
 def score_breakdown(config):
@@ -291,8 +335,9 @@ def outcome_probabilities(state):
 # -------------------- gold value --------------------
 
 def gold_value(score_val, baseline, gold_per_damage):
-    gold_per_score = gold_per_damage / SCORE_PER_PERCENT_DAMAGE
-    return max(0.0, (score_val - baseline) * gold_per_score)
+    # score IS % damage: gold_per_damage = gold per 1% damage, baseline = %-damage
+    # threshold. No score->damage conversion.
+    return max(0.0, (score_val - baseline) * gold_per_damage)
 
 
 # -------------------- closed-form tier score distribution --------------------

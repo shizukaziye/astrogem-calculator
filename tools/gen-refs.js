@@ -40,6 +40,7 @@ var scoreCases = [];
     scoreCases.push({
       config: c,
       score: round6(A.score(c)),
+      damagePercent: round6(A.damagePercent(c)),
       breakdown: {
         willpowerCost: bd.willpowerCost,
         willpowerScore: round6(bd.willpowerScore),
@@ -117,18 +118,18 @@ var outcomeProbCases = [];
   });
 });
 
-// ----- goldValue over a small grid -----
+// ----- goldValue over a small grid (units: score & baseline are % DAMAGE) -----
 var goldValueCases = [];
 [
-  [10, 8, 1500000], [20, 12, 2500000], [5, 10, 500000], [16.5, 10, 5000000], [12, 12, 1000000]
+  [1.37, 1.0, 1500000], [0.8, 1.0, 2500000], [1.5, 1.0, 500000], [1.2, 0.5, 5000000], [1.0, 1.0, 1000000]
 ].forEach(function (g) {
   goldValueCases.push({ score: g[0], baseline: g[1], goldPerDamage: g[2], value: round6(A.goldValue(g[0], g[1], g[2])) });
 });
 
-// ----- tierExpectedValue over the required grid -----
+// ----- tierExpectedValue over the required grid (baselines in % damage) -----
 var tierExpectedValueCases = [];
 [8, 9, 10].forEach(function (bc) {
-  [6, 8, 10, 12].forEach(function (bl) {
+  [0.5, 0.75, 1.0, 1.25].forEach(function (bl) {
     [500000, 1500000, 5000000].forEach(function (gpd) {
       var ev = A.tierExpectedValue(bc, bl, gpd);
       tierExpectedValueCases.push({
@@ -142,8 +143,8 @@ var tierExpectedValueCases = [];
 var refs = {
   meta: {
     generated: new Date().toISOString(),
-    note: "Captured references for the deterministic core. Regenerate with `node tools/gen-refs.js`. Constants are the CURRENT canonical generation (not the superseded 27.3/1.65/2.27/4.32).",
-    SCORE_PER_PERCENT_DAMAGE: A.SCORE_PER_PERCENT_DAMAGE,
+    note: "Captured references for the deterministic core. Regenerate with `node tools/gen-refs.js`. Scoring is REAL % damage (D = 100*ln(multiplier)); supersedes the abstract-weight model and the removed SCORE_PER_PERCENT_DAMAGE=30.96.",
+    SCORING: A.SCORING,
     COSTS: A.COSTS,
     floatTolerance: 1e-6
   },

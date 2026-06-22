@@ -6,10 +6,17 @@
  *
  * ============================ PUBLIC API ============================
  *
+ * SCORING IS REAL % DAMAGE (log-space). Each gem line is scored as
+ *   D = 100 · ln(multiplier)        (≈ % damage gain, and ADDITIVE in log space)
+ * so score(config) returns the gem's approximate % damage and the per-line
+ * contributions sum. The per-level D constants are derived from real-game stat
+ * baselines (see SCORING below). This SUPERSEDES the old abstract-weight model
+ * (WP ±2.4 / ATK 1.0 / AddDmg 1.85 / Boss 2.55 / Order 5.14, with the long-gone
+ * SCORE_PER_PERCENT_DAMAGE = 30.96 score→gold conversion).
+ *
  * Constants:
- *   SCORING                 — DPS scoring weights (per-level + special rules).
+ *   SCORING                 — per-level/per-point D (% damage) values + baselines.
  *   COSTS                   — gold costs: { processBase, finalReroll, fusion }.
- *   SCORE_PER_PERCENT_DAMAGE — 30.96 score points == 1% damage == goldPerDamage.
  *   RARITY                  — { uncommon, rare, epic } -> { maxTurns, maxRerolls }.
  *   EFFECT_POOLS            — available side effects keyed by base cost (8/9/10).
  *   TIER_BOUNDS             — level-sum bounds for legendary/relic/ancient.
@@ -17,11 +24,12 @@
  *
  * Functions:
  *   willpowerCost(baseCost, wpLevel)            -> number  (baseCost - wpLevel)
- *   willpowerScore(willpowerCost)               -> number  (±2.4 from cost 4)
- *   effectScore(effectType, level)              -> number
- *   orderScore(orderLevel)                      -> number  (5.14*(level-4))
- *   score(config)                               -> number  (total DPS score)
- *   scoreBreakdown(config)                      -> {...}   (component breakdown)
+ *   willpowerScore(willpowerCost)               -> number  D (±0.078119 / cost-lvl from 4)
+ *   effectScore(effectType, level)              -> number  D (% damage)
+ *   orderScore(orderLevel)                      -> number  D (flat 0.159872 / point)
+ *   score(config)                               -> number  D ≈ % damage (sum of lines)
+ *   damagePercent(config)                       -> number  exact mult % = (e^(D/100)-1)*100
+ *   scoreBreakdown(config)                      -> {...}   (component breakdown, in D)
  *   availableEffects(baseCost)                  -> string[]
  *   validateConfig(config)                      -> { valid, error? }
  *   classifyTier(levelSum)                      -> 'legendary'|'relic'|'ancient'
@@ -30,10 +38,13 @@
  *   outputLevelSumDist(tier)                    -> { sum: prob, ... }  (sums to 1)
  *   fusionOutputDist(inputTiers)                -> { legendary, relic, ancient }
  *   outcomeProbabilities(state)                 -> { possibilities:[...], byType:{...} }
- *   goldValue(score, baseline, goldPerDamage)   -> number  (direct sale value)
+ *   goldValue(scoreD, baseline, goldPerDamage)  -> number  direct sale value
+ *                                                  = max(0,(scoreD−baseline)·goldPerDamage)
+ *                                                  goldPerDamage = gold per 1% damage,
+ *                                                  baseline = a %-damage threshold.
  *   tierExpectedValue(baseCost, baseline, goldPerDamage)
  *                                               -> { legendary, relic, ancient }
- *   scoreDistributionForTier(baseCost, tier)    -> Map<score, prob>  (closed form)
+ *   scoreDistributionForTier(baseCost, tier)    -> Map<scoreD, prob>  (closed form)
  *   fusionValueForTier(inputTier, baseCost, baseline, goldPerDamage) -> number
  *
  * `config` shape:
@@ -43,25 +54,74 @@
  * `state` shape (for outcomeProbabilities — only the fields below are read):
  *   { config, currentTurn, maxTurns, rerollsRemaining, processCostMultiplier }
  *   (turnsRemaining is derived as maxTurns - currentTurn + 1 if not supplied)
- *
- * NOTE ON CONSTANTS: these are the CURRENT canonical generation. They intentionally
- * differ from older docs (which used 27.3 / 1.65 / 2.27 / 4.32 / baseline 12).
  * ===================================================================
  */
 (function (root) {
   "use strict";
 
-  // ---- Canonical scoring weights (DPS) ----
+  // ---- Scoring in REAL % DAMAGE (log-space) ----
+  //
+  // Damage in Lost Ark is MULTIPLICATIVE: each line multiplies your total. So we
+  // score every line as  D = 100 · ln(multiplier)  — additive in log space and
+  // ≈ the % damage gain for small values (the same convention as the accessory
+  // calculator, ~/lost-ark-accessory METHODOLOGY §2).
+  //
+  // Each per-level D below is computed from the gem grid's contribution against
+  // the OTHER (non-grid) sources of that stat you already have, using
+  //   per-level D = 100 · ln((1 + bucket_with) / (1 + bucket_without)) / levels
+  // with these (editable, documented) baselines:
+  //
+  //   * Attack Power      — other sources 12.1% (adrenaline relic book lv7 9% +
+  //                         accessories 3.1%); +30 grid levels add 1.1%.
+  //   * Additional Damage — other sources 33.6% (100-quality weapon 30% + high
+  //                         necklace 2.6% + pet 1%); +30 levels add 2.42%.
+  //   * Boss Damage       — no other sources; +30 levels add 2.5%.
+  //   * Order             — flat 100·ln(1.0016) per point (NOT relative to level 4):
+  //                         orderScore = orderLevel · D_ORDER_PER_POINT.
+  //   * Willpower         — efficiency, scored vs cost 4 (cost = baseCost − wpLevel).
+  //                         Converted from the old abstract ±2.4 by the old
+  //                         willpower-to-attack ratio (2.4 / 1.0 = 2.4): one
+  //                         cost-level of willpower is worth 2.4 attack-levels, so
+  //                         D_WP = 2.4 · D_ATTACK_PER_LEVEL ≈ ±0.078119 per cost-level.
+  //   * Brand Power / Ally Damage Enh. / Ally Attack Enh. — 0 (support, no DPS).
+  //
+  // The numeric values these baselines yield (≈): atk 0.032549, addDmg 0.059839,
+  // boss 0.082309, order 0.159872, willpower 0.078119 (per cost-level from 4).
+
+  // Bucket baselines (edit these to retune the assumptions).
+  var STAT_BASELINES = {
+    attackPower:      { other: 0.121, gridAdd: 0.011, levels: 30 },  // 12.1% other, +1.1% over 30
+    additionalDamage: { other: 0.336, gridAdd: 0.0242, levels: 30 }, // 33.6% other, +2.42% over 30
+    bossDamage:       { other: 0.0,   gridAdd: 0.025, levels: 30 },  // 0% other, +2.5% over 30
+    order:            { perPoint: 0.0016 }                            // flat ×1.0016 per point
+  };
+
+  // Per-line D (% damage) derived from the baselines above. Computed in code so
+  // the assumptions stay visible/editable; these equal the numbers in the comment.
+  function _perLevelD(b) {
+    return 100 * Math.log((1 + b.other + b.gridAdd) / (1 + b.other)) / b.levels;
+  }
+  var D_ATTACK_PER_LEVEL  = _perLevelD(STAT_BASELINES.attackPower);      // ≈ 0.032549
+  var D_ADDDMG_PER_LEVEL  = _perLevelD(STAT_BASELINES.additionalDamage); // ≈ 0.059839
+  var D_BOSS_PER_LEVEL    = _perLevelD(STAT_BASELINES.bossDamage);       // ≈ 0.082309
+  var D_ORDER_PER_POINT   = 100 * Math.log(1 + STAT_BASELINES.order.perPoint); // ≈ 0.159872
+  // Willpower keeps the old willpower:attack weight ratio (2.4 : 1.0) in D units.
+  var WILLPOWER_OVER_ATTACK_RATIO = 2.4;
+  var D_WILLPOWER_PER_COSTLEVEL = WILLPOWER_OVER_ATTACK_RATIO * D_ATTACK_PER_LEVEL; // ≈ 0.078119
+
   var SCORING = {
-    willpowerPerLevel: 2.4,   // cost<4 => (4-cost)*2.4 ; cost>4 => (cost-4)*(-2.4)
-    attackPower: 1.0,
-    additionalDamage: 1.85,
-    bossDamage: 2.55,
-    orderPerLevel: 5.14,      // (orderLevel - 4) * 5.14
-    // Support / non-DPS effects contribute nothing to the DPS score:
+    // All values are D = 100·ln(multiplier) ≈ % damage (ADDITIVE in log space).
+    willpowerPerLevel: D_WILLPOWER_PER_COSTLEVEL, // cost<4 => (4-cost)*D ; cost>4 => (cost-4)*(-D)
+    attackPower: D_ATTACK_PER_LEVEL,
+    additionalDamage: D_ADDDMG_PER_LEVEL,
+    bossDamage: D_BOSS_PER_LEVEL,
+    orderPerPoint: D_ORDER_PER_POINT,             // orderLevel * D (flat per point, NOT vs level 4)
+    // Support / non-DPS effects contribute nothing to the damage score:
     brandPower: 0,
     allyDamageEnh: 0,
-    allyAttackEnh: 0
+    allyAttackEnh: 0,
+    // The bucket baselines that produced the per-level D values (for documentation).
+    baselines: STAT_BASELINES
   };
 
   var COSTS = {
@@ -69,8 +129,6 @@
     finalReroll: 3800,        // cost of the LAST reroll
     fusion: 500               // gold to fuse 3 gems
   };
-
-  var SCORE_PER_PERCENT_DAMAGE = 30.96;
 
   var RARITY = {
     uncommon: { maxTurns: 5, maxRerolls: 1 },
@@ -155,16 +213,27 @@
     }
   }
 
+  // Order is FLAT per point (each order level contributes D_ORDER_PER_POINT),
+  // NOT relative to level 4.
   function orderScore(orderLevel) {
-    return (orderLevel - 4) * SCORING.orderPerLevel;
+    return orderLevel * SCORING.orderPerPoint;
   }
 
+  // Total score = approximate % damage of the gem (sum of per-line D, additive
+  // in log space).
   function score(config) {
     var wpc = willpowerCost(config.baseCost, config.willpowerLevel);
     return willpowerScore(wpc)
       + effectScore(config.effect1, config.effect1Level)
       + effectScore(config.effect2, config.effect2Level)
       + orderScore(config.orderLevel);
+  }
+
+  // Exact multiplicative % damage of the gem: the per-line D are 100·ln(mult),
+  // so the combined multiplier is e^(D/100); damagePercent = (mult − 1)·100.
+  // For small D this ≈ score(config); for large gems it is slightly below the sum.
+  function damagePercent(config) {
+    return (Math.exp(score(config) / 100) - 1) * 100;
   }
 
   function scoreBreakdown(config) {
@@ -340,10 +409,11 @@
 
   // -------------------- gold value --------------------
 
-  // Direct sale value of a single gem with the given score.
+  // Direct sale value of a single gem. score IS now % damage, so no score→damage
+  // conversion: goldPerDamage is gold per 1% damage and baseline is a %-damage
+  // threshold. value = max(0, (scoreD − baseline) · goldPerDamage).
   function goldValue(scoreVal, baseline, goldPerDamage) {
-    var goldPerScore = goldPerDamage / SCORE_PER_PERCENT_DAMAGE;
-    return Math.max(0, (scoreVal - baseline) * goldPerScore);
+    return Math.max(0, (scoreVal - baseline) * goldPerDamage);
   }
 
   // -------------------- closed-form tier score distribution --------------------
@@ -524,7 +594,6 @@
   var API = {
     SCORING: SCORING,
     COSTS: COSTS,
-    SCORE_PER_PERCENT_DAMAGE: SCORE_PER_PERCENT_DAMAGE,
     RARITY: RARITY,
     EFFECT_POOLS: EFFECT_POOLS,
     TIER_BOUNDS: TIER_BOUNDS,
@@ -535,6 +604,7 @@
     effectScore: effectScore,
     orderScore: orderScore,
     score: score,
+    damagePercent: damagePercent,
     scoreBreakdown: scoreBreakdown,
     availableEffects: availableEffects,
     validateConfig: validateConfig,

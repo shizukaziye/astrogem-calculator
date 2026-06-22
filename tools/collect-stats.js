@@ -58,25 +58,31 @@ var ALL_GPD = FIXED_GPD.concat(EXTRA_GPD).sort(function (a, b) { return a - b; }
 var COSTS = [8, 9, 10];
 var TIERS = ["legendary", "relic", "ancient"];
 
-// Per-gpd baseline window shown by the deployed page (matches the old collector's
-// GOLD_BASELINES). For any gpd we widen to a generous 0..16 so LIVE interpolation
-// never falls off the end; the baked TABLE rendering uses the windows below.
+// Baselines are now %-DAMAGE thresholds (the weakest equipped gem's % damage), not
+// abstract score. A perfect gem is ~1.34-1.44% damage, so a sensible baked set of
+// "weakest equipped" thresholds spans ~0.5%..2.5%. These seven values are baked for
+// every gpd; the per-gpd window below selects a sub-range to render in the table
+// (richer gold/1%-damage => you keep only stronger gems => higher baseline floor).
+var BAKED_BASELINES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5];
+
+// Per-gpd baseline window shown in the BAKED tables (a [min,max] over BAKED_BASELINES).
+// Cheap gold/1%: even weak gems are worth keeping -> low baseline. Expensive gold/1%:
+// only strong gems clear the bar -> higher baseline.
 var BASELINE_WINDOW = {
-  300000:  [0, 10],
-  500000:  [0, 10],
-  750000:  [1, 11],
-  1000000: [2, 12],
-  1500000: [3, 13],
-  2000000: [4, 14],
-  2500000: [5, 15],
-  3000000: [5, 15],
-  3500000: [5, 15],
-  4000000: [5, 15],
-  5000000: [5, 15],
-  6000000: [6, 16]
+  300000:  [0.5, 1.5],
+  500000:  [0.5, 1.5],
+  750000:  [0.5, 2.0],
+  1000000: [0.75, 2.0],
+  1500000: [0.75, 2.5],
+  2000000: [1.0, 2.5],
+  2500000: [1.0, 2.5],
+  3000000: [1.0, 2.5],
+  3500000: [1.0, 2.5],
+  4000000: [1.25, 2.5],
+  5000000: [1.25, 2.5],
+  6000000: [1.5, 2.5]
 };
-// LIVE mode wants a dense baseline axis everywhere; bake 0..16 for every gpd.
-var BAKE_BL_MIN = 0, BAKE_BL_MAX = 16;
+// LIVE mode interpolates the throughput block across the full baked baseline list.
 
 // ---------------------------------------------------------------------------
 // Throughput-model constants (documented; not part of the closed-form core).
@@ -110,10 +116,9 @@ var BOX_SCHEDULE = [
   { count: 1,  tier: "ancient" }
 ];
 
-// Combat-power % gain: an above-baseline keeper adds (avgAbove - baseline) score;
-// SCORE_PER_PERCENT_DAMAGE score == 1% damage. cpGain reports the % damage of the
+// Combat-power % gain: score IS % damage now, so an above-baseline keeper adds
+// exactly (avgAbove - baseline) % damage. cpGain reports the % damage of the
 // AVERAGE final equipped gem above baseline (a small, intuitive number).
-var SCORE_PER_PCT = A.SCORE_PER_PERCENT_DAMAGE;
 
 // ---------------------------------------------------------------------------
 // Closed-form per-tier statistics
@@ -223,8 +228,8 @@ function throughput(rarity, cost, baseline, gpd, perTier) {
   }
   avgScore = wsum > 0 ? avgScore / wsum : baseline;
 
-  // Combat-power % gain of the average keeper over baseline.
-  var cpGain = Math.max(0, (avgScore - baseline) / SCORE_PER_PCT);
+  // Combat-power % gain of the average keeper over baseline (score is % damage).
+  var cpGain = Math.max(0, avgScore - baseline);
 
   return {
     boxEV: boxEV,
@@ -257,7 +262,8 @@ function build() {
 
   for (var gi = 0; gi < ALL_GPD.length; gi++) {
     var gpd = ALL_GPD[gi];
-    for (var bl = BAKE_BL_MIN; bl <= BAKE_BL_MAX; bl++) {
+    for (var bi = 0; bi < BAKED_BASELINES.length; bi++) {
+      var bl = BAKED_BASELINES[bi];
       for (var ci = 0; ci < COSTS.length; ci++) {
         var cost = COSTS[ci];
         var perTier = cellClosedForm(cost, bl, gpd);
@@ -320,18 +326,19 @@ function build() {
       generated: new Date().toISOString(),
       generator: "tools/collect-stats.js",
       core: "model/astrogem.js (closed-form, dependency-free)",
-      SCORE_PER_PERCENT_DAMAGE: A.SCORE_PER_PERCENT_DAMAGE,
+      scoreUnit: "percent_damage",  // score = D = 100*ln(multiplier) ~ % damage
       COSTS: A.COSTS,
       fixedGpd: FIXED_GPD,
       anchorGpd: ALL_GPD,
       baselineWindow: BASELINE_WINDOW,
-      bakedBaselineRange: [BAKE_BL_MIN, BAKE_BL_MAX],
+      bakedBaselines: BAKED_BASELINES,
       slots: SLOTS,
       cutsPerWeek: CUTS_PER_WEEK,
       boxSchedule: BOX_SCHEDULE,
       freshTierMix: FRESH_TIER_MIX,
-      note: "Closed-form per-tier values are exact (source of truth for verdicts). "
-        + "Throughput block is a documented reconstruction (see METHODOLOGY.md); the "
+      note: "Scores and baselines are REAL % DAMAGE (D = 100*ln(multiplier)); goldPerDamage "
+        + "is gold per 1% damage. Closed-form per-tier values are exact (source of truth for "
+        + "verdicts). Throughput block is a documented reconstruction (see METHODOLOGY.md); the "
         + "deployed page's tier EVs were SAMPLED with a non-uniform partition sampler "
         + "and run ~10-30% lower than this uniform-over-partitions closed-form core.",
       verdictThresholds: { greenGold: 20000, yellowGold: 0 },
@@ -346,7 +353,7 @@ function build() {
   var kb = (fs.statSync(outPath).size / 1024).toFixed(1);
   console.log("Wrote " + outPath);
   console.log("  cells: " + n + " (" + ALL_GPD.length + " gpd x "
-    + (BAKE_BL_MAX - BAKE_BL_MIN + 1) + " baselines x " + COSTS.length + " costs)");
+    + BAKED_BASELINES.length + " baselines x " + COSTS.length + " costs)");
   console.log("  size:  " + kb + " KB");
   console.log("  time:  " + ((Date.now() - t0) / 1000).toFixed(2) + "s");
 }

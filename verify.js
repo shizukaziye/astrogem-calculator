@@ -36,6 +36,7 @@ function check(label, got, want, exact) {
 refs.score.forEach(function (cse, i) {
   var c = cse.config;
   check("score[" + i + "].score", r6(A.score(c)), cse.score);
+  if (cse.damagePercent != null) check("score[" + i + "].damagePercent", r6(A.damagePercent(c)), cse.damagePercent);
   var bd = A.scoreBreakdown(c);
   check("score[" + i + "].wpCost", bd.willpowerCost, cse.breakdown.willpowerCost, true);
   check("score[" + i + "].wpScore", r6(bd.willpowerScore), cse.breakdown.willpowerScore);

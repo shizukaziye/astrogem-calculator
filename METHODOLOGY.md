@@ -12,30 +12,55 @@ bottom — read it.**
 
 ---
 
-## 1. Scoring (DPS)
+## 1. Scoring — real % damage (log-space `D`)
 
 A gem has four levelled stats, each `1–5`: **Willpower efficiency**, **Order/Chaos**,
 and **two side effects** (effects depend on base cost; no duplicate effect).
 
-| Component | Weight |
-|-----------|--------|
-| Willpower vs cost 4 | `±2.4` per level. `willpowerCost = baseCost − willpowerLevel`; cost `<4` → `(4−cost)×2.4`, cost `>4` → `(cost−4)×(−2.4)`, cost `4` → 0 |
-| Attack Power | `1.0` / level |
-| Additional Damage | `1.85` / level |
-| Boss Damage | `2.55` / level |
-| Order/Chaos | `5.14 × (level − 4)` (lvl 4 = 0) |
-| Brand Power / Ally Damage Enh. / Ally Attack Enh. (support) | `0` |
+Damage in Lost Ark is **multiplicative**, so each line is scored as the log of its
+multiplier — additive in log space and ≈ the % damage gain (the same convention as
+the accessory calculator, `~/lost-ark-accessory` §2):
+
+```
+D = 100 · ln(multiplier)      (≈ % damage for small values)
+score(config) = Σ line D      (≈ the gem's total % damage)
+```
+
+`score(config)` therefore **returns the gem's approximate % damage** (a perfect gem
+is ≈ 1.34–1.44%). `damagePercent(config) = (e^(score/100) − 1)·100` gives the exact
+multiplicative %, which ≈ `score` for these small values.
+
+### Per-line `D` constants (derived from real stat baselines)
+
+Each damage line's per-level `D` is computed **in code** from the gem grid's
+contribution against the **other** (non-grid) sources of that stat you already have:
+
+```
+per-level D = 100 · ln( (1 + other + gridAdd) / (1 + other) ) / levels
+```
+
+| Component | Bucket baseline (`other` + grid `+30` levels) | per-level / per-point `D` |
+|-----------|-----------------------------------------------|---------------------------|
+| Attack Power | other 12.1% (adrenaline relic book lv7 9% + accessories 3.1%); +1.1% over 30 | `100·ln(1.132/1.121)/30` = **0.032549** |
+| Additional Damage | other 33.6% (100-quality weapon 30% + high necklace 2.6% + pet 1%); +2.42% over 30 | `100·ln(1.3602/1.336)/30` = **0.059839** |
+| Boss Damage | no other sources; +2.5% over 30 | `100·ln(1.025/1.0)/30` = **0.082309** |
+| Order/Chaos | flat ×1.0016 per point | `100·ln(1.0016)` = **0.159872** per point — `orderScore = orderLevel × 0.159872` (NOT relative to level 4) |
+| Willpower | efficiency vs cost 4; converted from the old ±2.4 by the old willpower:attack ratio (2.4 : 1.0) | `2.4 × 0.032549` = **±0.078119** per cost-level. `willpowerCost = baseCost − willpowerLevel`; cost `<4` → `(4−cost)×0.078119`, cost `>4` → `(cost−4)×(−0.078119)`, cost `4` → 0 |
+| Brand Power / Ally Damage Enh. / Ally Attack Enh. (support) | — | `0` |
+
+The bucket baselines live in `SCORING.baselines` (JS and Python) so the assumptions
+are **visible and editable**; the per-level `D` values are recomputed from them.
+
+> **Willpower precision note.** The constant computed from the baseline is
+> `2.4 × 0.0325494523… = 0.0781187…`; the "0.078118" you may see written elsewhere is
+> that value with the attack per-level pre-rounded to `0.032549`. The code derives it
+> from the baseline (full precision), and JS↔Python match exactly.
 
 Effect pools by base cost:
 
 - **8:** Additional Damage, Attack Power, Brand Power, Ally Damage Enh.
 - **9:** Boss Damage, Attack Power, Ally Damage Enh., Ally Attack Enh.
 - **10:** Boss Damage, Additional Damage, Brand Power, Ally Attack Enh.
-
-`SCORE_PER_PERCENT_DAMAGE = 30.96` → **30.96 score = 1% damage**.
-
-These are the **current canonical** constants (see the caveat in §8 — older docs
-used `27.3 / 1.65 / 2.27 / 4.32` and baseline 12; those are superseded).
 
 ---
 
@@ -66,12 +91,15 @@ This yields an **exact** score distribution per `(baseCost, tier)` — no sampli
 
 ## 3. Gold value of a gem
 
+Score **is** % damage now, so there is no score→damage conversion. `goldPerDamage`
+is **gold per 1% damage** and `baseline` is a **%-damage** threshold (the % damage of
+your weakest equipped gem — typically ~0.5–2.5):
+
 ```
-goldPerScore = goldPerDamage / 30.96
-directValue(score) = max(0, (score − baseline) × goldPerScore)
+directValue(scoreD) = max(0, (scoreD − baseline) × goldPerDamage)
 ```
 
-A gem whose score is **below baseline** is not a keeper; it is **fodder**, valued
+A gem whose % damage is **below baseline** is not a keeper; it is **fodder**, valued
 by fusion (§4).
 
 ---
@@ -141,8 +169,8 @@ A weekly-throughput model ("Time to Complete 24"):
 | **Weeks** | `24 / Total/wk`. Colored: `≤8` fast (green), `8–26` medium (amber), `>26` slow (red). |
 | **Gold/wk** | Total gold value flowing in per week. |
 
-LIVE mode also surfaces **avg keeper combat-power gain** = `(avgScore − baseline) / 30.96`
-(% damage of the average equipped gem above baseline).
+LIVE mode also surfaces **avg keeper combat-power gain** = `avgScore − baseline`
+(% damage of the average equipped gem above baseline — score is already % damage).
 
 ---
 
@@ -178,7 +206,7 @@ Derivations:
 - `Fuse/wk     = (fodder/wk / 3) · P(fused legendary-lane output clears baseline)`
 - `Box EV      = Σ_box count · directEV(box.tier)`
 - `Gold/wk     = Box EV + CUTS_PER_WEEK[rarity] · Σ_tier FRESH_TIER_MIX[tier]·E[tier]`
-- `avgScore    = tier-weighted E[score | above]`; `cpGain = (avgScore − baseline)/30.96`
+- `avgScore    = tier-weighted E[score | above]`; `cpGain = avgScore − baseline` (score is % damage)
 
 > **These constants do not affect the per-gem closed-form verdicts** (§7). They
 > only scale the weekly-throughput columns. Retune them in `collect-stats.js`
@@ -209,12 +237,22 @@ The reset floor (20k) and the green threshold are in `meta.verdictThresholds`.
 
 ## 8. Caveats
 
-### Superseded constants
-Older docs in `ark-grid-solver` (`PROBABILITIES.md`,
-`docs/relic-plus-2-leg-fusion-strategy.md`) use an **earlier generation**:
-`27.3 score = 1% damage`, Additional Damage `1.65`, Boss Damage `2.27`, Order
-`4.32`, Willpower `±2.1`, baseline 12. This tool uses the **current** generation
-(`30.96`, `1.85`, `2.55`, `5.14`, `±2.4`). Numbers in those docs will not match.
+### Superseded scoring models
+This tool now scores gems as **real % damage** (`D = 100·ln(multiplier)`, §1), with
+gold = `(score − baseline) × goldPerDamage` where `goldPerDamage` is gold per 1%
+damage and `baseline` is a %-damage threshold (§3). Two earlier models are superseded:
+
+1. **Abstract weights + 30.96** (the immediately prior generation of *this* tool):
+   Willpower `±2.4`, Attack `1.0`, Additional Damage `1.85`, Boss `2.55`, Order
+   `5.14×(level−4)`, with `SCORE_PER_PERCENT_DAMAGE = 30.96` converting score→gold and
+   integer baselines ~8–12. The `SCORE_PER_PERCENT_DAMAGE` constant has been **removed**.
+   The new per-line `D` keep the old willpower:attack *ratio* (2.4 : 1.0) but everything
+   is now in % damage; absolute numbers (and baselines) differ in both value and unit.
+2. **Even older docs** in `ark-grid-solver` (`PROBABILITIES.md`,
+   `docs/relic-plus-2-leg-fusion-strategy.md`): `27.3 score = 1% damage`, `1.65 / 2.27 /
+   4.32 / ±2.1`, baseline 12. Doubly superseded.
+
+Numbers in those docs/older builds will not match this tool.
 
 ### Modeling decision — corrected distribution kept (supersedes the deployed page, ~10–30% higher)
 
