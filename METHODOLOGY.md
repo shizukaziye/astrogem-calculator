@@ -216,7 +216,7 @@ Older docs in `ark-grid-solver` (`PROBABILITIES.md`,
 `4.32`, Willpower `±2.1`, baseline 12. This tool uses the **current** generation
 (`30.96`, `1.85`, `2.55`, `5.14`, `±2.4`). Numbers in those docs will not match.
 
-### ⚠️ Modeling flag — closed-form vs the deployed page (~10–30% higher)
+### Modeling decision — corrected distribution kept (supersedes the deployed page, ~10–30% higher)
 
 The deployed reference page **sampled** the within-tier stat distribution with a
 **sequential, range-clamped** partition sampler (`ark-grid-solver/solver-nested.js`,
@@ -247,9 +247,16 @@ higher EV. Net effect on `tierExpectedValue` vs the old **sampled** numbers
 Max observed `|Δ| ≈ 30%` (worst for **relic**, where the partition spread is
 largest). This is a **real modeling difference**, not Monte-Carlo noise: it is
 about whether the in-game gem-generation distribution is uniform over partitions
-(this core's assumption) or matches the old sampler's sequential bias. The core is
-**not edited** here; the Pipeline tab is built on it as-is and this discrepancy is
-flagged so the model owner can decide which distribution reflects the game.
+(this core's assumption) or matches the old sampler's sequential bias.
+
+**Decision (2026-06-22): keep the corrected uniform-over-partitions model.** It is
+equivalent to each stat being rolled independently, which is exactly what the
+documented fusion mechanic ("output level-sum ∝ number of ways to make that sum")
+implies — that statement is only true for independent rolls. The old deployed
+page's sequential-clamp sampler is therefore a **superseded sampling shortcut**,
+and this tool's fodder/fusion values intentionally run ~10–30% higher than that
+page. Per-gem verdicts on a *known* gem are unaffected (they use the gem's exact
+stats, no distribution).
 
 ---
 
