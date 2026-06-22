@@ -1,14 +1,21 @@
 # Pipeline Tables — Methodology
 
 This documents the **Pipeline Tables** tab of `astrogem-calculator` (the
-"which gems to cut / fuse / throw away" strategy view). It is built entirely on
-the dependency-free closed-form core `model/astrogem.js`. The collector
-`tools/collect-stats.js` bakes `data/pipeline.json`; `pipeline.js` renders the tab.
+"which gems to cut / fuse / throw away" strategy view). The collector
+`tools/collect-stats.js` bakes `data/pipeline.json` using the **exact Bellman DP**
+in `model/dp.js` (which runs on the closed-form core `model/astrogem.js` +
+`model/nested.js`); `pipeline.js` renders the tab.
 
-It reproduces the deployed reference page
+It reproduces the layout and verdict colors of the deployed reference page
 <https://shizukaziye.github.io/astrogem-pipeline-table/> (source:
-`ark-grid-solver/index`). **One important modeling difference is flagged at the
-bottom — read it.**
+`ark-grid-solver/index`).
+
+> **The cut/fuse/throw decision is made PER EFFECT-PAIR BUCKET, not per tier.**
+> When a gem drops, the two effects it rolled are its archetype (its bucket). That
+> is what you assess. **Tier** (legendary/relic/ancient by level-sum) is a
+> *secondary* concern — it classifies the *fodder* a below-baseline cut becomes,
+> for fusion "after the fact." A modeling difference vs the deployed page's
+> distribution sampler is flagged at the bottom — read it.
 
 ---
 
@@ -140,21 +147,60 @@ and `fusionCost = 500`. Solved by Gaussian elimination, each component clamped `
 
 ---
 
-## 5. What the Pipeline tab shows
+## 5. Buckets — the primary axis (the effect pair = the archetype)
 
-### Gem cells (per cost × tier)
+A dropped gem has a **base cost** (8/9/10) and an **effect pair** — two of the four
+effects in that cost's pool. The pair is the gem's **archetype = its bucket**, and
+it is what you assess when deciding cut / fuse / throw:
 
-Each base-cost cell stacks the three tiers (**Leg / Relic / Anc**). Per row:
+| Bucket | Label | Meaning |
+|--------|-------|---------|
+| `2_damage` | **2D** | both effects are damage — best archetype |
+| `optimal_damage` | **Op** | the *better* single damage effect + a dead effect |
+| `suboptimal_damage` | **Sub** | the *worse* single damage effect + a dead effect |
+| `no_damage` | **No** | both effects dead — DPS-worthless (≈ 0) |
 
-- **Direct EV** — `directExp[tier]` (expected direct-sale gold of a random gem of
-  that tier above baseline).
-- **% above baseline** — `P(score ≥ baseline)` for that tier.
-- A glyph: `↻` reset-worthy, `⚜` fuse-first.
+The **exact effect pairs per base cost** (from
+`ark-grid-solver/collect-statistics-v2.js` `EFFECT_BUCKETS`, baked into
+`meta.effectBuckets`):
 
-These are **exact closed-form** values (the source of truth for the verdict
-colors). They depend on `(cost, baseline, goldPerDamage)` but **not** on rarity —
-rarity only changes the throughput columns, so the per-tier gold/% is identical
-across the Uncommon / Rare / Epic blocks by construction.
+| Cost | 2D | Op | Sub | No |
+|------|----|----|-----|----|
+| 8  | Additional Dmg + Attack | Additional Dmg + Brand | Attack + Brand | Brand + Ally Dmg Enh |
+| 9  | Boss Dmg + Attack | Boss Dmg + Ally Dmg Enh | Attack + Ally Dmg Enh | Ally Dmg Enh + Ally Atk Enh |
+| 10 | Boss Dmg + Additional Dmg | Boss Dmg + Brand | Additional Dmg + Brand | Brand + Ally Atk Enh |
+
+### Cut value = the exact Bellman DP `W` of a fresh gem
+
+The **value of a bucket** is the optimal expected gold from **cutting a fresh
+(level-1) gem of that archetype**:
+
+```
+cutValue(rarity, cost, bucket, baseline, gpd)
+  = W( freshGem, maxTurns[rarity], maxRerolls[rarity], cm = 0 )
+```
+
+`freshGem` has the bucket's two effects and **willpower = order = effect1 =
+effect2 = 1** (mirrors `ark-grid-solver` `buildState`). `W` is
+`Solver.prototype.W` in `model/dp.js` — the exact Bellman value that takes the
+expectation over the random fresh 4-draw **inside** (the without-replacement
+4-distinct draw model), choosing optimally between **process / reroll / complete**
+at every node. It is **not** `evaluateActionsDP` (that needs the specific drawn
+outcomes; the advisor tab uses that). The DP value is **deterministic** (no Monte
+Carlo) and is the **source of truth** for the per-bucket verdicts.
+
+Because rarity sets the turn / reroll budget (uncommon 5/1, rare 7/2, epic 9/3),
+**cut values rise with rarity** — the Uncommon / Rare / Epic blocks differ
+genuinely (unlike the old tier-primary build, where all three were identical).
+
+Sanity check baked into the collector: at (baseline 1.0, 1.5M gold/1%, epic) the
+c10 cut values order **2D ≫ Op > Sub ≫ No** (No ≈ 0, DPS-worthless).
+
+### Per cost-cell rendering
+
+Each `(rarity, cost)` cell stacks the **four buckets** (2D / Op / Sub / No). Per
+row: the **cut value** (gold) and **P(above baseline)** = `pAbove` (probability the
+optimal cut clears baseline), colored by verdict (§7), with `↻` for reset-worthy.
 
 ### Pipeline columns (NRB only, per week)
 
@@ -162,76 +208,106 @@ A weekly-throughput model ("Time to Complete 24"):
 
 | Column | Meaning |
 |--------|---------|
-| **Box EV** | Weekly box gold above baseline (gold value of weekly box gems that clear baseline). |
+| **Boxes** | Static weekly box-gem schedule (reconstructed income). |
+| **Box EV** | Gold value/week of those box gems. |
 | **Direct/wk** | Above-baseline gems per week from **cutting**. |
 | **Fuse/wk** | Above-baseline gems per week from **recycling below-baseline fodder** (3→1). |
 | **Total/wk** | `Direct/wk + Fuse/wk`. |
 | **Weeks** | `24 / Total/wk`. Colored: `≤8` fast (green), `8–26` medium (amber), `>26` slow (red). |
-| **Gold/wk** | Total gold value flowing in per week. |
-
-LIVE mode also surfaces **avg keeper combat-power gain** = `avgScore − baseline`
-(% damage of the average equipped gem above baseline — score is already % damage).
+| **Gold** | Total gold value flowing in per week. |
+| **Avg Score** | Expected % damage of the average keeper. |
 
 ---
 
-## 6. Throughput economics (reconstruction — read this)
+## 6. Tier = fusion fodder ("for after")
 
-The deployed page's per-week numbers came from a generator script that was **not
-part of the model core** we build on, and is **not present** in the source repo.
-The throughput layer here is therefore a **faithful, fully-documented
-reconstruction** driven by the closed-form core. The two structural identities the
-deployed page obeys are reproduced **exactly** (and are exact in the baked JSON):
+Tier is **not** the cut axis — it is the **fodder classification**. A cut that ends
+**below baseline** is fodder; it is classified by its **level-sum tier** (§2:
+legendary 4–15, relic 16–18, ancient 19–20) and recycled 3→1 by fusion (§4).
+
+The collector records, per bucket, the **fodder tier split**:
+
+```
+p_fodder_leg + p_fodder_relic + p_fodder_anc  =  1 − pAbove
+```
+
+computed by **walking the SAME optimal policy** the cut value uses
+(`tools/collect-stats-worker.js` `fodderTierSplit`): at every node it follows the
+DP's optimal action and propagates reach-probability to the children, accumulating
+the terminal gem's tier whenever it ends below baseline. This is a second pass over
+the memoized policy, not a re-solve, and it sums **exactly** to `1 − pAbove`.
+
+The Pipeline tab shows this in a **separate "Fusion / fodder by tier (Leg / Relic /
+Anc)" section** — the secondary view, "for after." Fresh cuts that fail mostly land
+in **legendary** fodder (low level-sum), so the legendary lane dominates.
+
+### Throughput economics (reconstruction — read this)
+
+The deployed page's per-week numbers came from a generator that was **not part of
+the model core** and is **not in the source repo**. This throughput layer is a
+**faithful, documented reconstruction** driven by the DP cut values. The two
+structural identities are reproduced **exactly** (and are exact in the baked JSON):
 
 ```
 Total/wk = Direct/wk + Fuse/wk
 Weeks    = 24 / Total/wk
 ```
 
-Everything feeding them is closed-form; the only non-core inputs are these named,
-retunable constants (in `tools/collect-stats.js`, also echoed into `meta`):
+The only non-core inputs are these named, retunable constants (in
+`tools/collect-stats.js`, echoed into `meta`):
 
 | Constant | Value | Role |
 |----------|-------|------|
 | `SLOTS` | 24 | Gem slots to fill. |
-| `CUTS_PER_WEEK` | `{uncommon:70, rare:26, epic:9}` | Weekly fresh-cut budget by rarity. Sets the **scale** of `Direct/wk = cuts × P(above)`. Calibrated so low-baseline `Total/wk` lands in the deployed page's ~15–25/wk regime. |
-| `FRESH_TIER_MIX` | `{L:0.86, R:0.13, A:0.01}` | Tier split of a freshly-cut gem (matches the reference fresh-cut mix). |
-| `BOX_SCHEDULE` | `10×Leg, 10×Relic, 1×Anc` | Weekly box gems; valued at their tier `directEV`. |
+| `CUTS_PER_WEEK` | `{uncommon:70, rare:26, epic:9}` | Weekly fresh-cut budget by rarity. Sets the **scale** of `Direct/wk`. |
+| `FRESH_BUCKET_MIX` | `{2D:.17, Op:.33, Sub:.33, No:.17}` | Bucket mix of a dropped gem (effect pairs ≈ uniform over the C(4,2)=6 pairs, mapped onto the four archetypes). |
+| `BOX_SCHEDULE` | `10×uncommon, 10×rare, 1×epic` | Weekly box gems; valued at the 2D-bucket cut value at that rarity. |
 | `FUSION_INPUTS` | 3 | Game rule (3 gems per fusion). |
 
-Derivations:
+Derivations (now keyed on **buckets**, not tiers):
 
-- `pAboveFresh = Σ_tier FRESH_TIER_MIX[tier] · P(above|tier)`
+- `pAboveFresh = Σ_bucket FRESH_BUCKET_MIX[b] · pAbove(rarity,cost,b)`
 - `Direct/wk   = CUTS_PER_WEEK[rarity] · pAboveFresh`
 - `fodder/wk   = CUTS_PER_WEEK[rarity] · (1 − pAboveFresh)`
-- `Fuse/wk     = (fodder/wk / 3) · P(fused legendary-lane output clears baseline)`
-- `Box EV      = Σ_box count · directEV(box.tier)`
-- `Gold/wk     = Box EV + CUTS_PER_WEEK[rarity] · Σ_tier FRESH_TIER_MIX[tier]·E[tier]`
-- `avgScore    = tier-weighted E[score | above]`; `cpGain = avgScore − baseline` (score is % damage)
+- `Fuse/wk     = (fodder/wk / 3) · (legendary-fusion share × pAboveFresh)` — the recycled output's P(above), a documented legendary-lane proxy
+- `Box EV      = Σ_box count · cutValue(box.rarity, cost, 2D)`
+- `Gold/wk     = Box EV + CUTS_PER_WEEK[rarity] · Σ_bucket FRESH_BUCKET_MIX[b]·cutValue(b)`
+- `avgScore    = expScore of the fresh 2D cut`; `cpGain = max(0, avgScore − baseline)`
 
-> **These constants do not affect the per-gem closed-form verdicts** (§7). They
-> only scale the weekly-throughput columns. Retune them in `collect-stats.js`
-> without touching the model core. The exact original generator's constants are
-> not recoverable from what shipped.
+> **These constants do not affect the per-bucket DP verdicts** (§7). They only
+> scale the weekly-throughput columns. Retune them in `collect-stats.js` without
+> touching the DP. The exact original generator's constants are not recoverable.
 
 ---
 
 ## 7. Verdict colors (how a user reads the table)
 
-Per gem, comparing its closed-form **Direct EV** (and fusion value) against the
-**reset floor** (20,000 gold):
+Per bucket, comparing its **cut value** (DP `W`) — and, for the purple case, the
+fodder-fusion value — against the **reset floor**. These bands and colors are
+reproduced from the deployed page (`ark-grid-solver/index`):
 
 | Color | Rule | Meaning |
 |-------|------|---------|
-| 🟩 **Green** | `Direct EV ≥ 20k` | High value — **worth resetting** (reroll once, same bucket) if it lands below baseline. Marked `↻`. |
-| 🟨 **Yellow-dim** | `0 < Direct EV < 20k` and cutting beats fusing | **Cut, don't reset** — worth completing but not worth a reroll. |
-| 🟥 **Red** | `Direct EV ≤ 0` and no fusion value | **Don't cut** — a random gem here is worthless at this baseline. |
-| 🟪 **Purple** | fusion value `> Direct EV` (and the cut value is weak/zero) | **Fuse before cutting** — you get more by fusing 3 of these than by completing one. Marked `⚜`. |
+| 🟩 **Green** | `cut ≥ 18k` | **Worth resetting** if it lands below baseline (reroll once, same bucket). Marked `↻`. |
+| 🟨 **Yellow → dim** | `cut > 0` | **Cut, don't reset.** A 4-shade ramp by magnitude: `10–18k` / `5–10k` / `1–5k` / `<1k`. |
+| 🟥 **Red** | `cut ≤ 0` | **Don't cut** — this archetype is worthless at this baseline. |
+| 🟪 **Purple** | (NRB) fodder-fusion value `>` the weak cut value | **Fuse before cutting** — you net more by fusing 3 of these than by completing one. Marked `⚜`. |
 
-**Roster-bound (RB)** gems are *free to cut*, so a "don't cut" (red) cell that still
-has positive fusion value is shown as purple (fuse it) rather than red. The RB
-section shows gem EV and % only (no pipeline lane — you always cut free gems).
+The fodder-fusion value used for the purple test is `fusionValueForTier("legendary",
+cost, baseline, gpd)` (the dominant fodder lane). **Roster-bound (RB)** gems are
+free to cut, so the RB section shows the per-bucket cut value + % only (no pipeline
+lane, no purple — you always cut free gems). Thresholds are in `meta.verdict`.
 
-The reset floor (20k) and the green threshold are in `meta.verdictThresholds`.
+---
+
+## 7a. Live mode interpolates the baked DP grid
+
+The exact DP is **~3 s per epic cell** (turn-1, 9 turns / 3 rerolls), far too slow
+to recompute on every input change. So **live mode interpolates** the baked grid:
+for any `(gpd, baseline)` it **bilinearly interpolates** the per-bucket cut values,
+`pAbove`, and the fodder split from the dense baked anchors
+(`meta.anchorGpd` × `meta.bakedBaselines`). The throughput columns interpolate the
+same way. Only the *baked* values are exact DP; live is an interpolation of them.
 
 ---
 
@@ -301,8 +377,20 @@ stats, no distribution).
 ## Regenerate
 
 ```bash
-node tools/collect-stats.js     # writes data/pipeline.json
+node tools/collect-stats.js              # writes data/pipeline.json (auto-detects workers)
+node tools/collect-stats.js --workers=11 # pin worker count
+node tools/collect-stats.js --test --sample=4 --workers=2   # quick smoke test
 ```
 
+The bake runs **4536 exact DP solves** (3 rarities × 3 costs × 4 buckets × 9
+gold/1% anchors × 7 baselines × 2 roster modes). Because a single turn-1 **epic**
+DP is ~3 s, the collector **parallelizes with `worker_threads`**
+(`tools/collect-stats-worker.js`) and logs progress + a rarity-aware ETA. End to
+end it is roughly **15–20 min on ~11 workers** (uncommon ≈ 0.15 s, rare ≈ 1 s, epic
+≈ 3 s per cell, plus a same-magnitude fodder-policy walk per cell). The keyed schema
+is `cells["{rarity}_{cost}_{bucket}_{baseline}_{gpd}"] = { nrb:{cut,act,pAbove,
+expScore,expSpend,fLeg,fRelic,fAnc}, rb:{cut,act,pAbove,expScore,expSpend} }` plus
+`thru["{rarity}_{cost}_{baseline}_{gpd}"]` for the weekly columns.
+
 Open `index.html` via a static server; the **Pipeline** tab loads
-`data/pipeline.json` (baked) and recomputes live tables from the core.
+`data/pipeline.json` (baked, exact DP) and interpolates it for live tables.
