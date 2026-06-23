@@ -252,8 +252,14 @@
   // level, so this is exact: willpowerScore at cost (baseCost − 4.25) + orderScore
   // at 4.25, with both effect lines = 0. Shared with pipeline.js's cpBaselineScore
   // so the grader and the pipeline use the identical baseline.
+  // CHANGED: this is now ONE fixed neutral for every base cost — willpower cost 4.25 +
+  // order 4.25 — NOT the old per-cost willpowerCost(baseCost, 4.25). The per-cost neutral
+  // was cheaper at higher base costs, giving c9/c10 gems a head start that could make a
+  // c9 gem show more %dmg than a stronger c8 gem and disagree with its grade. relDamage
+  // is now score minus a constant, so it stays monotonic with the absolute score (grade).
+  // baseCost is unused now but kept in the signature so callers/pipeline don't change.
   function cpBaseline(baseCost) {
-    return willpowerScore(willpowerCost(baseCost, 4.25)) + orderScore(4.25);
+    return willpowerScore(4.25) + orderScore(4.25);
   }
 
   // relDamage(config): the gem's damage ABOVE the cp baseline at its own cost —
