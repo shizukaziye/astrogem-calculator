@@ -1064,13 +1064,16 @@
       + '#tab-pipeline .rank-badge{display:inline-block;padding:1px 7px;border-radius:99px;font-size:10.5px;font-weight:800;line-height:1.5;vertical-align:middle;font-variant-numeric:tabular-nums}'
       + '#tab-pipeline .gpd-btn{min-width:48px;text-align:center}'
       // Top bar: tucked above (only a small handle peeks); slides down on hover so the table keeps the space.
+      // The bar reveals DOWNWARD (over the table), never upward — sticking at top:0 it
+      // would otherwise slide up over the app .tabbar at scroll 0. Only the small handle
+      // shows by default (22px reserved); hovering it fades the full bar in just below.
       + '#tab-pipeline #pl-inputs{height:22px;margin:0;padding:0;border:none;border-radius:0;background:none;backdrop-filter:none;z-index:30;overflow:visible}'
-      + '#tab-pipeline #pl-inputs .pl-bar{position:absolute;left:0;right:0;top:0;transform:translateY(-100%);transition:transform .18s ease;display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:10px 16px 10px 28px;background:rgba(13,16,23,.98);border:1px solid var(--border);border-top:none;border-radius:0 0 10px 10px;backdrop-filter:blur(6px)}'
-      + '#tab-pipeline #pl-inputs:hover .pl-bar{transform:translateY(0)}'
+      + '#tab-pipeline #pl-inputs .pl-handle{position:absolute;top:0;left:0;height:22px;line-height:21px;margin-left:28px;padding:0 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);background:rgba(13,16,23,.97);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;cursor:default;user-select:none;z-index:1}'
+      + '#tab-pipeline #pl-inputs .pl-bar{position:absolute;left:0;right:0;top:22px;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-6px);transition:opacity .15s ease,transform .15s ease,visibility .15s;display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:10px 16px 10px 28px;background:rgba(13,16,23,.98);border:1px solid var(--border);border-radius:0 0 10px 10px;backdrop-filter:blur(6px)}'
+      + '#tab-pipeline #pl-inputs:hover .pl-bar{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)}'
+      + '#tab-pipeline #pl-inputs:hover .pl-handle{color:var(--accent);border-color:var(--accent)}'
       + '#tab-pipeline #pl-inputs .pl-gpd{display:inline-flex;flex-wrap:wrap;gap:7px}'
       + '#tab-pipeline #pl-inputs .pl-sep{width:1px;align-self:stretch;background:var(--border);margin:2px 4px}'
-      + '#tab-pipeline #pl-inputs .pl-handle{display:inline-block;height:22px;line-height:21px;margin-left:28px;padding:0 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);background:rgba(13,16,23,.97);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;cursor:default;user-select:none}'
-      + '#tab-pipeline #pl-inputs:hover .pl-handle{color:var(--accent)}'
       + '#tab-pipeline .tablewrap{overflow-x:auto;max-width:100%}'
       // ---- hover popover (appended to <body>, so NOT scoped under #tab-pipeline) ----
       + '.pl-pop{position:absolute;z-index:9999;max-width:420px;min-width:330px;background:#10131c;'
