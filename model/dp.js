@@ -214,6 +214,12 @@
     // with-replacement approximation (≈2x faster, ~3-5% high on long epic cuts).
     this.drawModel = (opts && opts.drawModel) || "wor";
     this._emax = this.drawModel === "iid" ? expectedMaxOfDraw : expectedMaxOfDrawWoR;
+    // Complete (finalize + keep/fodder the gem) is only legal AFTER >=1 process — you
+    // cannot finalize a 0-process gem, only Delete it (value 0). Since only Process
+    // decrements t (Reroll keeps it), "0 processes done" <=> t === maxTurns. Callers
+    // that know the gem's starting turn budget pass maxTurns so _node forbids Complete
+    // at the fresh node. Default Infinity = no gate (generic W()/self-check back-compat).
+    this.maxTurns = (opts && opts.maxTurns != null) ? opts.maxTurns : Infinity;
     this.memo = Object.create(null);     // key -> node record { v, act, expScore, pAbove, expSpend }
     this.nodes = 0;                      // diagnostic: nodes actually computed
   }
@@ -525,7 +531,8 @@
     if (hit !== undefined) return hit;
     this.nodes++;
 
-    var complete = this.gemValue(config);
+    // Cannot Complete a 0-process gem (t === maxTurns) — only Process or Delete(=0).
+    var complete = (t < this.maxTurns) ? this.gemValue(config) : 0;
     var scTerminal = A.score(config);
 
     // REROLL does not depend on the draw.
@@ -586,7 +593,7 @@
   function topLevelAdvice(state, baseline, goldPerDamage, options) {
     options = options || {};
     var rb = !!state.rosterBound;
-    var solver = new Solver(baseline, goldPerDamage, rb, { drawModel: options.drawModel });
+    var solver = new Solver(baseline, goldPerDamage, rb, { drawModel: options.drawModel, maxTurns: state.maxTurns });
     var config = cloneConfig(state.config);
     var t = Math.max(0, (state.maxTurns - state.currentTurn + 1)); // turns remaining incl. current
     var r = state.rerollsRemaining || 0;
@@ -723,8 +730,8 @@
   // tools/verify-dp.js to simulate the DP-optimal policy. allowComplete=false keeps
   // the policy to Process-vs-Reroll only (turn-1 never completes).
   function chooseAction(solver, config, t, r, cm, outcomes, allowComplete) {
-    // COMPLETE
-    var complete = allowComplete ? solver.gemValue(config) : -Infinity;
+    // COMPLETE (disallowed at the 0-process node t===maxTurns: can't finalize a fresh gem)
+    var complete = (allowComplete && t < solver.maxTurns) ? solver.gemValue(config) : -Infinity;
 
     // PROCESS from the actual 4 outcomes (no future spend term beyond -pc here; we
     // compare NET continuation values, all measured from the same point).
@@ -773,8 +780,8 @@
     chooseAction: chooseAction,
     outcomeBranchesActual: outcomeBranchesActual,
     // thin W() helper for self-checks / tools (rosterBound optional, default false)
-    W: function (config, t, r, cm, baseline, goldPerDamage, rosterBound) {
-      return new Solver(baseline, goldPerDamage, rosterBound).W(config, t, r, cm);
+    W: function (config, t, r, cm, baseline, goldPerDamage, rosterBound, maxTurns) {
+      return new Solver(baseline, goldPerDamage, rosterBound, { maxTurns: maxTurns }).W(config, t, r, cm);
     }
   };
 

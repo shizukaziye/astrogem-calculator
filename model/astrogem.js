@@ -197,25 +197,34 @@
     return baseCost - wpLevel;
   }
 
+  // OLD-SCORING comparison mode (default OFF — preserves JS/Python parity). When ON,
+  // uses the old ark-grid-solver abstract weights (÷30.96 → %damage), INCLUDING the
+  // relative-to-4 order term, so the DP can be run head-to-head with the old MC/GA on a
+  // single consistent scoring. For analysis/reconciliation only; never on in the app.
+  var OLD_SCORING_MODE = false;
+  var OLD_W = { wp: 2.4 / 30.96, atk: 1.0 / 30.96, add: 1.85 / 30.96, boss: 2.55 / 30.96, orderPer: 5.14 / 30.96 };
+  function setOldScoring(v) { OLD_SCORING_MODE = !!v; }
+
   function willpowerScore(wpCost) {
-    if (wpCost < 4) return (4 - wpCost) * SCORING.willpowerPerLevel;
-    if (wpCost > 4) return (wpCost - 4) * (-SCORING.willpowerPerLevel);
+    var W = OLD_SCORING_MODE ? OLD_W.wp : SCORING.willpowerPerLevel;
+    if (wpCost < 4) return (4 - wpCost) * W;
+    if (wpCost > 4) return (wpCost - 4) * (-W);
     return 0;
   }
 
   function effectScore(effectType, level) {
     switch (effectType) {
-      case "Attack Power": return level * SCORING.attackPower;
-      case "Additional Damage": return level * SCORING.additionalDamage;
-      case "Boss Damage": return level * SCORING.bossDamage;
+      case "Attack Power": return level * (OLD_SCORING_MODE ? OLD_W.atk : SCORING.attackPower);
+      case "Additional Damage": return level * (OLD_SCORING_MODE ? OLD_W.add : SCORING.additionalDamage);
+      case "Boss Damage": return level * (OLD_SCORING_MODE ? OLD_W.boss : SCORING.bossDamage);
       // Brand Power / Ally Damage Enh. / Ally Attack Enh. (and anything else) -> 0
       default: return 0;
     }
   }
 
-  // Order is FLAT per point (each order level contributes D_ORDER_PER_POINT),
-  // NOT relative to level 4.
+  // Order is FLAT per point (new) or relative-to-4 (old-scoring mode).
   function orderScore(orderLevel) {
+    if (OLD_SCORING_MODE) return (orderLevel - 4) * OLD_W.orderPer;
     return orderLevel * SCORING.orderPerPoint;
   }
 
@@ -661,6 +670,7 @@
     effectScore: effectScore,
     orderScore: orderScore,
     score: score,
+    setOldScoring: setOldScoring,
     damagePercent: damagePercent,
     grade: grade,
     gradeBounds: gradeBounds,

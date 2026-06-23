@@ -178,7 +178,7 @@ for (let i = workerId; i < tasks.length; i += numWorkers) {
   const task = tasks[i];
   try {
     const cfg = freshConfig(task.cost, task.effect1, task.effect2);
-    const solver = new DP.Solver(task.baseline, task.gpd, task.rosterBound);
+    const solver = new DP.Solver(task.baseline, task.gpd, task.rosterBound, { maxTurns: task.maxTurns });
     const t = task.maxTurns, r = task.maxRerolls;
     const rec = solver._node(cfg, t, r, 0);  // value + policy diagnostics in one pass
     const cutValue = rec.v;

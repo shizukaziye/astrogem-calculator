@@ -334,7 +334,7 @@
     var eff = EFFECT_BUCKETS[cost][bucket];
     var cfg = freshConfig(cost, eff.effect1, eff.effect2);
     var R = window.RARITY[rarity];
-    var solver = new window.Solver(baseline, gpd, roster === "rb");
+    var solver = new window.Solver(baseline, gpd, roster === "rb", { maxTurns: R.maxTurns });
     var rec = solver._node(cfg, R.maxTurns, R.maxRerolls, 0);
     var out = { cut: rec.v, pAbove: rec.pAbove, expScore: rec.expScore, expSpend: rec.expSpend };
     if (roster === "nrb") {
