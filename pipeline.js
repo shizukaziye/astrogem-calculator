@@ -121,18 +121,18 @@
   function fmtNum(x, dp) { return x == null ? "—" : Number(x).toFixed(dp == null ? 2 : dp); }
 
   // ---------------------------------------------------------------------------
-  // verdict (per bucket cut value). reset flag = green (reset-worthy if below BL).
+  // verdict for ONE bucket. The fuse (purple) decision is BLOCK-level and computed by
+  // gemCell — an unopened gem is fused (or not) BEFORE its side nodes are revealed, so
+  // the choice is all-or-nothing across the 4 buckets — and passed in as `blockFuse`.
   // ---------------------------------------------------------------------------
-  function verdict(cut, fuse3, roster) {
+  function verdict(cut, blockFuse) {
+    if (blockFuse) return { cls: "v-purple", glyph: "⚜", reset: false };
     if (cut == null) return { cls: "v-red", glyph: "", reset: false };
     if (cut >= V.green) return { cls: "v-green", glyph: "↻", reset: true };
     if (cut > 0) {
       var cls = cut >= V.yellowHi ? "v-y1" : cut >= V.yellowMid ? "v-y2" : cut >= V.yellowLo ? "v-y3" : "v-y4";
-      if (roster === "nrb" && fuse3 != null && fuse3 > cut) return { cls: "v-purple", glyph: "⚜", reset: false };
       return { cls: cls, glyph: "", reset: false };
     }
-    // cut <= 0
-    if (roster === "nrb" && fuse3 != null && fuse3 > 0) return { cls: "v-purple", glyph: "⚜", reset: false };
     return { cls: "v-red", glyph: "", reset: false };
   }
 
@@ -212,9 +212,106 @@
 
   // A fodder-fusion value proxy for the purple verdict: the per-gem value of fusing
   // 3 of the dominant (legendary) fodder tier at this gpd/baseline, from the core.
+  // RETAINED as the graceful null-fallback only — the verdict now uses the REAL
+  // unopened (rarity-upgrade) fusion value from unopenedFusion() below.
   function fuse3Proxy(cost, bl, gpd) {
     if (typeof window.fusionValueForTier !== "function") return null;
     return window.fusionValueForTier("legendary", cost, bl, gpd);
+  }
+
+  // ---------------------------------------------------------------------------
+  // REAL unopened (rarity-upgrade) fusion value — the fuse-value the BLOCK-level
+  // purple verdict compares against opening. Confirmed model (per (baseline, gpd)):
+  //
+  //   OV[roster][rar][cost] = open-value = (1·2D + 2·Op + 2·Sub + 1·No)/6 of the four
+  //     buckets' cut-EVs (same 1:2:2:1 reveal odds gemCell uses).
+  //   A fused output of (rar,cost) is 50% roster-bound, 50% not:
+  //     E[rar][cost] = 0.5·OV_rb[rar][cost] + 0.5·U_nrb[rar][cost].
+  //   U_rb[rar][cost]  = OV_rb[rar][cost]                       (RB can't re-fuse)
+  //   U_nrb[rar][cost] = max(OV_nrb[rar][cost], fuseA[rar][cost])   (fixed point)
+  //   fuseA[uncommon][c] = (0.85·E[unc][c] + 0.135·E[rare][c] + 0.015·E[epic][c] − 500)/3
+  //   fuseA[rare][c]     = (1/3)·Out(c) + (2/3)·max_c Out(c) − 500,
+  //       Out(c) = 0.52·E[unc][c] + 0.44·E[rare][c] + 0.04·E[epic][c]   (1R + 2 free L)
+  //   fuseA[epic]        = null   (epics are never fused → epic blocks never purple)
+  //
+  // Solve U_nrb by Jacobi iteration (it's a contraction). The verdict uses the RAW
+  // fuseA[rar][cost] (NOT the max) — that's the value of fusing instead of opening.
+  //
+  // getCut(roster, rarity, cost, bucket) -> cut EV (number) | null. Both rosters'
+  // cut-EVs must be available (for the 50/50 split). Returns
+  //   { uncommon:{8,9,10}, rare:{8,9,10}, epic:{8:null,9:null,10:null} }
+  // of raw fuseA values, or null if any required OV bucket is null/missing (caller
+  // then passes null → gemCell shows no purple, graceful).
+  // ---------------------------------------------------------------------------
+  var UNOPENED_FUSION_FEE = 500;
+  function unopenedFusion(getCut) {
+    var BW = { "2_damage": 1, "optimal_damage": 2, "suboptimal_damage": 2, "no_damage": 1 };
+    // open-value (1:2:2:1 mean of the four buckets) for one roster/rarity/cost.
+    function openValue(roster, rarity, cost) {
+      var acc = 0, wsum = 0;
+      for (var k = 0; k < BUCKETS.length; k++) {
+        var cut = getCut(roster, rarity, cost, BUCKETS[k]);
+        if (cut == null) return null;
+        acc += BW[BUCKETS[k]] * cut; wsum += BW[BUCKETS[k]];
+      }
+      return wsum > 0 ? acc / wsum : null;
+    }
+    // Build OV[roster][rarity][cost]; bail (null) if any required value is missing.
+    var OV = { nrb: {}, rb: {} };
+    var rosters = ["nrb", "rb"];
+    for (var rs = 0; rs < rosters.length; rs++) {
+      var roster = rosters[rs];
+      for (var ri = 0; ri < RARITIES.length; ri++) {
+        var rar = RARITIES[ri];
+        OV[roster][rar] = {};
+        for (var ci = 0; ci < COSTS.length; ci++) {
+          var ov = openValue(roster, rar, COSTS[ci]);
+          if (ov == null) return null;
+          OV[roster][rar][COSTS[ci]] = ov;
+        }
+      }
+    }
+    // Jacobi fixed point: init U_nrb = OV_nrb, recompute E/Out/fuseA each pass.
+    var U_nrb = {};
+    for (var r2 = 0; r2 < RARITIES.length; r2++) {
+      var rr = RARITIES[r2]; U_nrb[rr] = {};
+      for (var c2 = 0; c2 < COSTS.length; c2++) U_nrb[rr][COSTS[c2]] = OV.nrb[rr][COSTS[c2]];
+    }
+    function E(rar, cost) { return 0.5 * OV.rb[rar][cost] + 0.5 * U_nrb[rar][cost]; }
+    var fuseA = null;
+    for (var iter = 0; iter < 200; iter++) {
+      // recompute fuseA from current U_nrb (via E/Out)
+      var fA = { uncommon: {}, rare: {}, epic: {} };
+      // Out(c) and its max over costs (for the rare formula)
+      var Out = {}, maxOut = -Infinity;
+      for (var cc = 0; cc < COSTS.length; cc++) {
+        var c = COSTS[cc];
+        Out[c] = 0.52 * E("uncommon", c) + 0.44 * E("rare", c) + 0.04 * E("epic", c);
+        if (Out[c] > maxOut) maxOut = Out[c];
+      }
+      for (var cd = 0; cd < COSTS.length; cd++) {
+        var cst = COSTS[cd];
+        fA.uncommon[cst] = (0.85 * E("uncommon", cst) + 0.135 * E("rare", cst) + 0.015 * E("epic", cst) - UNOPENED_FUSION_FEE) / 3;
+        fA.rare[cst] = (1 / 3) * Out[cst] + (2 / 3) * maxOut - UNOPENED_FUSION_FEE;
+        fA.epic[cst] = null; // epics are never fused
+      }
+      // relax U_nrb = max(OV_nrb, fuseA) and measure the change
+      var maxChange = 0;
+      for (var rk = 0; rk < RARITIES.length; rk++) {
+        var rn = RARITIES[rk];
+        for (var ck = 0; ck < COSTS.length; ck++) {
+          var co = COSTS[ck];
+          var fv = fA[rn][co];
+          var nv = (fv == null) ? OV.nrb[rn][co] : Math.max(OV.nrb[rn][co], fv);
+          var ch = Math.abs(nv - U_nrb[rn][co]);
+          if (ch > maxChange) maxChange = ch;
+          U_nrb[rn][co] = nv;
+        }
+      }
+      fuseA = fA;
+      if (maxChange < 1e-9) break;
+    }
+    return fuseA; // raw fuse-values; epic.* === null
   }
 
   // ---------------------------------------------------------------------------
@@ -355,13 +452,29 @@
   // getBucket(bucket) -> { cut, pAbove, ... } | null
   // ---------------------------------------------------------------------------
   function gemCell(getBucket, fuse3, roster, sep) {
+    // BLOCK-level fuse decision: an unopened gem is fused (or not) BEFORE its side
+    // nodes are revealed, so it's all-or-nothing across the 4 buckets. Opening instead
+    // yields a random bucket with odds 2D:Op:Sub:No = 1:2:2:1, so the value of opening
+    // is that weighted mean of the buckets' cut-EVs. Fuse the whole block iff the
+    // fodder-fusion value beats opening.
+    var BW = { "2_damage": 1, "optimal_damage": 2, "suboptimal_damage": 2, "no_damage": 1 };
+    var blockFuse = false;
+    if (roster === "nrb" && fuse3 != null) {
+      var acc = 0, wsum = 0, ok = true;
+      for (var k = 0; k < BUCKETS.length; k++) {
+        var xb = getBucket(BUCKETS[k]);
+        if (!xb || xb.cut == null) { ok = false; break; }
+        acc += BW[BUCKETS[k]] * xb.cut; wsum += BW[BUCKETS[k]];
+      }
+      if (ok) blockFuse = fuse3 > (acc / wsum);
+    }
     var rows = "";
     for (var i = 0; i < BUCKETS.length; i++) {
       var b = BUCKETS[i];
       var x = getBucket(b);
       var cut = x ? x.cut : null;
       var pa = x ? x.pAbove : null;
-      var v = verdict(cut, fuse3, roster);
+      var v = verdict(cut, blockFuse);
       rows += '<div class="bkt-row ' + v.cls + '">'
         + '<span class="bkt-label">' + BUCKET_LABEL[b] + '</span>'
         + '<span class="bkt-val">' + fmtGold(cut) + '</span>'
@@ -432,10 +545,16 @@
       var blPct = window.gradeToScore(grade);   // grade -> %-damage threshold (= baked key)
       var rank = window.rankFromGrade(grade);
       var row = '<tr><td class="pipe blcell"><b>' + grade + '</b> <span class="dim">(' + rank + ')</span></td>';
+      // REAL unopened-fusion value for this (grade, gpd). bakedBucket takes the roster
+      // arg, so BOTH nrb & rb OVs are available → solve the fixed point once per row.
+      var fuseA = unopenedFusion(function (rs, r, c, b) {
+        var rec = bakedBucket(r, c, b, blPct, gpd, rs);
+        return rec ? rec.cut : null;
+      });
       for (var ri = 0; ri < RARITIES.length; ri++) {
         for (var ci = 0; ci < COSTS.length; ci++) {
           (function (rarity, cost, sep) {
-            var f3 = fuse3Proxy(cost, blPct, gpd);
+            var f3 = fuseA && fuseA[rarity] ? fuseA[rarity][cost] : null;
             // DIRECT baked lookup per bucket — the exact DP cell at this grade's baseline.
             row += gemCell(function (b) { return bakedBucket(rarity, cost, b, blPct, gpd, roster); }, f3, roster, sep);
           })(RARITIES[ri], COSTS[ci], ci === 0);
@@ -719,6 +838,15 @@
     function recKey(rarity, cost, bucket) { return rarity + "_" + cost + "_" + bucket; }
     function getBucket(rarity, cost, bucket) { return cellsR[recKey(rarity, cost, bucket)] || null; }
 
+    // REAL unopened-fusion value. computeLive solves BOTH rosters (res.cells.nrb &
+    // res.cells.rb), so the 50/50 split uses each roster's true OV — no approximation.
+    var liveNrb = res.cells.nrb || {}, liveRb = res.cells.rb || {};
+    var liveFuseA = unopenedFusion(function (rs, r, c, b) {
+      var src = (rs === "rb") ? liveRb : liveNrb;
+      var rec = src[recKey(r, c, b)];
+      return rec ? rec.cut : null;
+    });
+
     var head = '<table class="pipe-table"><thead>'
       + '<tr><th rowspan="2">Grade</th>'
       + '<th colspan="3" class="sep">Uncommon</th>'
@@ -731,7 +859,7 @@
     for (var ri = 0; ri < RARITIES.length; ri++) {
       for (var ci = 0; ci < COSTS.length; ci++) {
         (function (rarity, cost, sep) {
-          var f3 = fuse3Proxy(cost, blPct, gpd);
+          var f3 = liveFuseA && liveFuseA[rarity] ? liveFuseA[rarity][cost] : null;
           row += gemCell(function (b) { return getBucket(rarity, cost, b); }, f3, roster, sep);
         })(RARITIES[ri], COSTS[ci], ci === 0);
       }
