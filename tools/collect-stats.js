@@ -71,7 +71,7 @@ var A = require("../model/astrogem.js");
 
 // Fixed gold-per-1%-damage tiers the BAKED view renders as columns. The deployed
 // page shows 500k/1M/1.5M/2.5M/5M; the task asks to also include 3.5M.
-var FIXED_GPD = [500000, 1000000, 1500000, 2500000, 3500000, 5000000];
+var FIXED_GPD = [500000, 1000000, 1500000, 2500000, 3500000, 5000000, 7500000, 10000000];
 
 // NO INTERPOLATION anywhere: bake ONLY the displayed gold tiers — every baked cell
 // is an exact DP solve. Off-grid (live) gold/grade is computed exactly on demand
@@ -123,7 +123,9 @@ var BASELINE_WINDOW = {
   2500000: [1.0, 2.5],
   3500000: [1.0, 2.5],
   4000000: [1.25, 2.5],
-  5000000: [1.25, 2.5]
+  5000000: [1.25, 2.5],
+  7500000: [1.25, 2.5],
+  10000000: [1.25, 2.5]
 };
 
 var RARITY_PARAMS = A.RARITY; // { uncommon:{maxTurns,maxRerolls}, ... }

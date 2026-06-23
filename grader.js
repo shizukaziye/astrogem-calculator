@@ -44,6 +44,12 @@
   function gemRank(cfg) { return A ? A.gemRank(cfg) : window.gemRank(cfg); }
   function rankFromGrade(g) { return A ? A.rankFromGrade(g) : window.rankFromGrade(g); }
   function damagePercent(cfg) { return A ? A.damagePercent(cfg) : window.damagePercent(cfg); }
+  // Damage ABOVE the 4.25/4.25 cp baseline (the loadout figure; may be negative).
+  // Falls back to raw damagePercent only if the model is too old to expose relDamage.
+  function relDamage(cfg) {
+    var fn = (A && A.relDamage) || window.relDamage;
+    return fn ? fn(cfg) : damagePercent(cfg);
+  }
   function validateConfig(cfg) {
     var fn = (A && A.validateConfig) || window.validateConfig;
     return fn ? fn(cfg) : { valid: true };
@@ -75,6 +81,42 @@
   function rankClass(rank) {
     var L = (rank || "")[0];
     return ({ S: "gr-s", A: "gr-a", B: "gr-b", C: "gr-c", D: "gr-d", F: "gr-f" })[L] || "gr-c";
+  }
+
+  // Grade-tier colored pill for a rank string (shared Astrogem.rankColor palette).
+  function rankColorOf(rank) {
+    return (A && A.rankColor) ? A.rankColor(rank)
+      : (typeof window.rankColor === "function" ? window.rankColor(rank) : { bg: "#6f747a", fg: "#fff" });
+  }
+  function rankBadge(rank, extra) {
+    var c = rankColorOf(rank);
+    return '<span class="rank-badge' + (extra ? " " + extra : "") +
+      '" style="background:' + c.bg + ';color:' + c.fg + '">' + esc(rank) + '</span>';
+  }
+
+  // Compact relative age, e.g. "just now" / "2d ago" / "3h ago". (Shared format used
+  // by the Leaderboard tab too — see ageLabel there.)
+  function ageLabel(pulledAt) {
+    if (!pulledAt) return "";
+    var ms = Date.now() - pulledAt;
+    if (ms < 0) ms = 0;
+    var mins = Math.floor(ms / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return mins + "m ago";
+    var hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + "h ago";
+    var days = Math.floor(hrs / 24);
+    return days + "d ago";
+  }
+
+  // "Cached · pulled 2d ago" vs "Freshly pulled" pill for a pulled loadout, from the
+  // Worker response's cached / pulledAt fields.
+  function cacheNoteHtml(data) {
+    if (!data || data.cached == null) return "";
+    var txt = data.cached
+      ? ("Cached &middot; pulled " + esc(ageLabel(data.pulledAt)))
+      : "Freshly pulled";
+    return ' <span class="gr-cache' + (data.cached ? "" : " fresh") + '">' + txt + '</span>';
   }
 
   // ---------------- markup ----------------
@@ -122,7 +164,22 @@
 '  #tab-grader .gr-sum .stat .k{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}' +
 '  #tab-grader .gr-sum .stat .v{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}' +
 '  #tab-grader .gr-warn{color:var(--high);font-size:12px;margin-top:8px}' +
+'  #tab-grader .rank-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-weight:800;line-height:1.4;font-variant-numeric:tabular-nums}' +
+'  #tab-grader .gr-badge .rank-badge{font-size:26px;padding:4px 12px;letter-spacing:-.02em}' +
+'  #tab-grader .gr-gem .rkbox .rank-badge{font-size:15px;padding:2px 8px}' +
+'  #tab-grader .gr-sum .stat .rank-badge{font-size:18px}' +
+'  #tab-grader .gr-weak{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:4px 0 18px}' +
+'  @media(max-width:680px){#tab-grader .gr-weak{grid-template-columns:1fr}}' +
+'  #tab-grader .gr-weak .wk-col{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--panel2)}' +
+'  #tab-grader .gr-weak h4{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--high);margin:0 0 10px;font-weight:700}' +
+'  #tab-grader .gr-weak .wk-row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}' +
+'  #tab-grader .gr-weak .wk-row:last-child{border-bottom:none}' +
+'  #tab-grader .gr-weak .wk-slot{font-size:12.5px;color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+'  #tab-grader .gr-weak .wk-dmg{font-size:12px;color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap}' +
+'  #tab-grader .gr-weak .wk-empty{font-size:12px;color:var(--dim);padding:6px 0}' +
 '  #tab-grader .mbtn:disabled{opacity:.45;cursor:not-allowed}' +
+'  #tab-grader .gr-cache{display:inline-block;margin-left:10px;font-size:10px;font-weight:700;text-transform:none;letter-spacing:.02em;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 9px;vertical-align:middle}' +
+'  #tab-grader .gr-cache.fresh{color:var(--good)}' +
 '</style>' +
 
 // ---- INPUT panel ----
@@ -157,6 +214,7 @@
 '      </div>' +
 '      <div class="barrow">' +
 '        <button class="primary" id="gr-pull-go" type="button">Grade loadout</button>' +
+'        <button class="mbtn" id="gr-pull-refresh" type="button" style="display:none">Re-pull from lostark.bible</button>' +
 '        <span class="gr-status" id="gr-pull-status"></span>' +
 '      </div>' +
 '      <div class="note" id="gr-pull-note"></div>' +
@@ -176,7 +234,8 @@
 '    <li><b>Grade (0&ndash;100)</b> is min&ndash;max normalized over every possible gem: 0 = the worst gem (including the willpower penalty), 100 = a perfect 10-cost (Boss 5 + Additional Damage 5, Order 5, Willpower 5).</li>' +
 '    <li><b>Rank</b> bands the grade: S&nbsp;85 / A&nbsp;75 / B&nbsp;65 / C&nbsp;50 / D&nbsp;25 / F&nbsp;0, each split into &minus;/&nbsp;/+ thirds.</li>' +
 '  </ul>' +
-'  <p class="note">Pulling a character fetches the loadout from lostark.bible through a small Cloudflare Worker (the site blocks direct browser requests). Effect ids and each gem’s cost/type are decoded from the page’s embedded grid data. Always eyeball a gem or two against the in-game display.</p>' +
+'  <p class="note">In a pulled loadout the <b>% damage</b> shown per gem (and the total) is damage <i>above the cp baseline</i> — a willpower-4.25 / order-4.25 / dead-effect gem at that cost, the same zero-point the Pipeline tab uses — so the figures are lower (and can go negative for a support gem) than a gem’s raw multiplier. Grade and rank are unchanged.</p>' +
+'  <p class="note">Pulling a character fetches the loadout from lostark.bible through a small Cloudflare Worker (the site blocks direct browser requests) and caches it for 7 days; “Re-pull” forces a fresh fetch. Effect ids and each gem’s cost/type are decoded from the page’s embedded grid data. Always eyeball a gem or two against the in-game display.</p>' +
 '</details>';
   }
 
@@ -218,7 +277,7 @@
 '<div class="panel">' +
 '  <h2>Grade</h2>' +
 '  <div class="gr-headline">' +
-'    <div class="gr-badge ' + cls + '"><span class="rk">' + esc(rank) + '</span>' +
+'    <div class="gr-badge ' + cls + '">' + rankBadge(rank) +
 '      <span class="gd">grade <b>' + g.toFixed(1) + '</b> / 100</span></div>' +
 '    <div class="gr-dmg">% damage<br><b>' + dmg.toFixed(3) + '%</b></div>' +
 '  </div>' +
@@ -251,9 +310,10 @@
   function gemCardHtml(cfg) {
     var v = validateConfig(cfg);
     var g, rank, dmg, cls;
-    if (v.valid) { g = grade(cfg); rank = gemRank(cfg); dmg = damagePercent(cfg); cls = rankClass(rank); }
+    // %dmg shown is damage ABOVE the cp baseline (relDamage); grade/rank unchanged.
+    if (v.valid) { g = grade(cfg); rank = gemRank(cfg); dmg = relDamage(cfg); cls = rankClass(rank); }
     var rkHtml = v.valid
-      ? '<div class="rk">' + esc(rank) + '</div><div class="gd">' + g.toFixed(0) + '</div>'
+      ? rankBadge(rank) + '<div class="gd">' + g.toFixed(0) + '</div>'
       : '<div class="rk">?</div>';
     var dmgHtml = v.valid ? '<span class="dmg">' + dmg.toFixed(3) + '%</span>' : '<span class="bad">' + esc(v.error || "invalid") + '</span>';
     return '' +
@@ -268,6 +328,37 @@
 '</div>';
   }
 
+  // "Weakest 3" upgrade-priority groups: the 3 lowest-grade valid gems of one gemType.
+  // Each entry: slot/label, grade as a colored badge, %damage. Sorted worst-first.
+  function weakestColHtml(title, gems, gemType) {
+    var list = gems.filter(function (x) {
+      return x.gemType === gemType && validateConfig(x).valid;
+    }).map(function (x) {
+      return { gem: x, g: grade(x), dmg: relDamage(x) };
+    }).sort(function (a, b) { return a.g - b.g; }).slice(0, 3);
+
+    var rows;
+    if (!list.length) {
+      rows = '<div class="wk-empty">No ' + esc(gemType) + ' gems.</div>';
+    } else {
+      rows = list.map(function (e) {
+        var slot = e.gem.slot || ("Core " + (e.gem.coreBase || "?"));
+        return '<div class="wk-row">' +
+          rankBadge(rankFromGrade(e.g)) +
+          '<span class="wk-slot">' + esc(slot) + '</span>' +
+          '<span class="wk-dmg">' + e.dmg.toFixed(3) + '%</span>' +
+          '</div>';
+      }).join("");
+    }
+    return '<div class="wk-col"><h4>' + esc(title) + '</h4>' + rows + '</div>';
+  }
+  function weakestSectionHtml(gems) {
+    return '<div class="gr-weak">' +
+      weakestColHtml("Weakest 3 — Order", gems, "order") +
+      weakestColHtml("Weakest 3 — Chaos", gems, "chaos") +
+      '</div>';
+  }
+
   function renderLoadout(data) {
     var out = $("gr-result");
     var gems = (data && data.gems) || [];
@@ -276,26 +367,31 @@
       return;
     }
 
-    // overall summary over the VALID gems
+    // overall summary over the VALID gems. %dmg is damage ABOVE the cp baseline
+    // (relDamage); grade/rank are unchanged.
     var valid = gems.filter(function (x) { return validateConfig(x).valid; });
     var sumGrade = 0, sumDmg = 0;
-    valid.forEach(function (x) { sumGrade += grade(x); sumDmg += damagePercent(x); });
+    valid.forEach(function (x) { sumGrade += grade(x); sumDmg += relDamage(x); });
     var avgGrade = valid.length ? sumGrade / valid.length : 0;
     var avgRank = rankFromGrade(avgGrade);
 
     var html = '' +
 '<div class="panel">' +
-'  <h2>Loadout &mdash; ' + esc(data.name || "") + ' <span class="note" style="text-transform:none">(' + esc(data.region || "") + ')</span></h2>' +
+'  <h2>Loadout &mdash; ' + esc(data.name || "") + ' <span class="note" style="text-transform:none">(' + esc(data.region || "") + ')</span>' +
+     cacheNoteHtml(data) + '</h2>' +
 '  <div class="gr-sum">' +
 '    <div class="stat"><span class="k">Gems</span><span class="v">' + gems.length + '</span></div>' +
 '    <div class="stat"><span class="k">Avg grade</span><span class="v ' + rankClass(avgRank) + '">' + avgGrade.toFixed(1) + '</span></div>' +
-'    <div class="stat"><span class="k">Avg rank</span><span class="v ' + rankClass(avgRank) + '">' + esc(avgRank) + '</span></div>' +
+'    <div class="stat"><span class="k">Avg rank</span><span class="v">' + rankBadge(avgRank) + '</span></div>' +
 '    <div class="stat"><span class="k">Total % dmg</span><span class="v" style="color:var(--accent)">' + sumDmg.toFixed(2) + '%</span></div>' +
 '  </div>';
     if (data.warnings && data.warnings.length) {
       html += '<div class="gr-warn">' + data.warnings.length + ' parser warning(s): ' + esc(data.warnings.slice(0, 4).join("; ")) + (data.warnings.length > 4 ? "…" : "") + '</div>';
     }
     html += '</div>';
+
+    // upgrade priorities: weakest 3 Order + weakest 3 Chaos, side by side, at the top
+    html += weakestSectionHtml(gems);
 
     // group by core slot, preserving order of first appearance
     var order = [], groups = {};
@@ -306,7 +402,7 @@
     });
     order.forEach(function (key) {
       var list = groups[key];
-      var cdmg = 0; list.forEach(function (x) { if (validateConfig(x).valid) cdmg += damagePercent(x); });
+      var cdmg = 0; list.forEach(function (x) { if (validateConfig(x).valid) cdmg += relDamage(x); });
       html += '<div class="gr-core"><h3>' + esc(key) + ' <span class="ct">' + list.length + ' gems &middot; ' + cdmg.toFixed(2) + '% dmg</span></h3>' +
         '<div class="gr-gems">' + list.map(gemCardHtml).join("") + '</div></div>';
     });
@@ -320,7 +416,7 @@
     el.className = "gr-status" + (kind ? " " + kind : "");
   }
 
-  function runPull() {
+  function runPull(refresh) {
     if (!WORKER_URL) {
       setPullStatus("", "");
       $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">The lostark.bible Worker isn’t configured. Deploy worker/astrogem-bible.js and set WORKER_URL at the top of grader.js.</div></div>';
@@ -330,11 +426,14 @@
     var name = ($("gr-name").value || "").trim();
     if (!name) { setPullStatus("Enter a character name.", "err"); return; }
 
-    setPullStatus("Fetching " + name + " (" + region + ")…", "working");
+    setPullStatus((refresh ? "Re-pulling " : "Fetching ") + name + " (" + region + ")…", "working");
     $("gr-pull-go").disabled = true;
+    var refreshBtn = $("gr-pull-refresh");
+    if (refreshBtn) refreshBtn.disabled = true;
 
     var url = WORKER_URL.replace(/\/+$/, "") +
-      "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name);
+      "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) +
+      (refresh ? "&refresh=1" : "");
     fetch(url).then(function (resp) {
       return resp.json().then(function (data) { return { ok: resp.ok, data: data }; });
     }).then(function (r) {
@@ -346,11 +445,13 @@
       }
       lastLoadout = r.data;
       setPullStatus("Graded " + ((r.data.gems || []).length) + " gems.", "");
+      if (refreshBtn) refreshBtn.style.display = "";
       renderLoadout(r.data);
     }).catch(function (e) {
       setPullStatus("Request failed: " + (e && e.message || e), "err");
     }).then(function () {
       $("gr-pull-go").disabled = false;
+      if (refreshBtn) refreshBtn.disabled = false;
     });
   }
 
@@ -407,9 +508,32 @@
     $("gr-mode-custom").addEventListener("click", function () { selectMode("custom"); });
     $("gr-mode-pull").addEventListener("click", function () { selectMode("pull"); });
 
-    // pull mode
-    $("gr-pull-go").addEventListener("click", runPull);
-    $("gr-name").addEventListener("keydown", function (e) { if (e.key === "Enter" && WORKER_URL) runPull(); });
+    // pull mode (wrap so the click Event isn't passed as the refresh flag)
+    $("gr-pull-go").addEventListener("click", function () { runPull(false); });
+    $("gr-pull-refresh").addEventListener("click", function () { runPull(true); });
+    $("gr-name").addEventListener("keydown", function (e) { if (e.key === "Enter" && WORKER_URL) runPull(false); });
+
+    // Public hook for the Leaderboard tab: switch to the Grader tab (pull mode) and
+    // render a previously stored loadout WITHOUT re-fetching. charData is a Worker
+    // record ({ region, name, gems, pulledAt, cached? }). The Re-pull button is shown
+    // so the user can force a fresh pull of that same character.
+    window.graderShowLoadout = function (charData) {
+      if (!charData) return;
+      if (typeof window.selectTab === "function") window.selectTab("grader");
+      selectMode("pull");
+      if (charData.region && $("gr-region")) {
+        var r = String(charData.region).toUpperCase();
+        if (REGIONS.indexOf(r) !== -1) $("gr-region").value = r;
+      }
+      if (charData.name && $("gr-name")) $("gr-name").value = charData.name;
+      lastLoadout = charData;
+      // Listed characters are cached records; reflect that unless told otherwise.
+      if (charData.cached == null && charData.pulledAt != null) charData.cached = true;
+      var refreshBtn = $("gr-pull-refresh");
+      if (refreshBtn && WORKER_URL) refreshBtn.style.display = "";
+      setPullStatus("Showing stored loadout for " + (charData.name || "") + ".", "");
+      renderLoadout(charData);
+    };
 
     // first paint
     renderCustom();

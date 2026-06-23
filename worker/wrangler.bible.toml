@@ -16,6 +16,15 @@ name = "astrogem-bible"
 main = "astrogem-bible.js"
 compatibility_date = "2026-06-01"
 
+# KV namespace: caches each pulled character (key = "region:name" lowercased) +
+# a "__index__" key listing every cached key, so the Leaderboard tab can list all
+# stored characters via ?list=1. The Worker degrades gracefully if this binding is
+# absent (fetches fresh, no caching). The owner creates the namespace (id below)
+# and deploys; see worker/README-bible.md.
+[[kv_namespaces]]
+binding = "CHARS"
+id = "0f51c3b5ac6d45a59186375d62879ad7"
+
 # Observability (logs) — optional, handy while validating the parser.
 [observability]
 enabled = true

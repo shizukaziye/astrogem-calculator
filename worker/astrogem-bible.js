@@ -15,9 +15,17 @@
  * (WORKER_URL), exactly like the Workers-AI vision Worker.
  *
  * Endpoints:
- *   GET /?region=NA&name=Paroxysmal  -> { region, name, gems:[...] }
+ *   GET /?region=NA&name=Paroxysmal  -> { region, name, gems:[...], pulledAt, cached }
+ *                                       (KV-cached 7d; add &refresh=1 to force fresh)
+ *   GET /?list=1                     -> { characters:[{region,name,gems,pulledAt}, ...] }
  *   GET /                            -> health JSON { ok, service }
  *   OPTIONS /                        -> CORS preflight
+ *
+ * KV (binding CHARS, see wrangler.bible.toml): each pulled character is stored under
+ * key "region:name" (lowercased) as { region, name, gems, pulledAt, ... }, and its
+ * key is appended to the "__index__" array so ?list=1 can enumerate every character.
+ * If the CHARS binding is absent the Worker still works — it just fetches fresh every
+ * time (cached:false) and ?list=1 returns an empty list.
  *
  * --- The two reverse-engineered maps (derived by cross-referencing arkGridCores
  *     with the RENDERED gem display for NA/Paroxysmal; see worker/README-bible.md) ---
@@ -161,7 +169,41 @@ function mapGem(rawGem, core) {
   };
 }
 
-async function handleCharacter(region, name) {
+// ---- KV cache config + helpers ----
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // a cached character is "fresh" for 7 days.
+const INDEX_KEY = "__index__";               // KV key holding a JSON array of all char keys.
+
+// key = "region:name" lowercased (e.g. "na:paroxysmal").
+function charKey(region, name) {
+  return (region + ":" + name).toLowerCase();
+}
+
+// Read + JSON.parse a KV value, tolerating missing/corrupt entries.
+async function kvGetJson(env, key) {
+  if (!env || !env.CHARS) return null;
+  try {
+    const raw = await env.CHARS.get(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Add a key to the "__index__" array if it isn't already there.
+async function indexAdd(env, key) {
+  if (!env || !env.CHARS) return;
+  let idx = await kvGetJson(env, INDEX_KEY);
+  if (!Array.isArray(idx)) idx = [];
+  if (idx.indexOf(key) === -1) {
+    idx.push(key);
+    await env.CHARS.put(INDEX_KEY, JSON.stringify(idx));
+  }
+}
+
+// Fetch a lostark.bible character page and parse it into the stored gem shape.
+// Returns { ok:true, data } on success, or { ok:false, status, body } describing
+// the error so the caller can decide whether to return it or skip it (list mode).
+async function fetchCharacterData(region, name) {
   // lostark.bible character page: /character/<REGION>/<Name>
   const url =
     "https://lostark.bible/character/" +
@@ -179,23 +221,23 @@ async function handleCharacter(region, name) {
       redirect: "follow"
     });
   } catch (e) {
-    return json({ error: "Upstream fetch failed: " + (e && e.message || e), url: url }, 502);
+    return { ok: false, status: 502, body: { error: "Upstream fetch failed: " + (e && e.message || e), url: url } };
   }
 
   if (resp.status === 404) {
-    return json({ error: "Character not found on lostark.bible.", region: region, name: name, url: url, upstreamStatus: 404 }, 404);
+    return { ok: false, status: 404, body: { error: "Character not found on lostark.bible.", region: region, name: name, url: url, upstreamStatus: 404 } };
   }
   if (!resp.ok) {
-    return json({ error: "lostark.bible returned HTTP " + resp.status + ".", region: region, name: name, url: url, upstreamStatus: resp.status }, 502);
+    return { ok: false, status: 502, body: { error: "lostark.bible returned HTTP " + resp.status + ".", region: region, name: name, url: url, upstreamStatus: resp.status } };
   }
 
   const html = await resp.text();
   const cores = extractArkGridCores(html);
   if (!cores) {
-    return json({
+    return { ok: false, status: 422, body: {
       error: "Could not find arkGridCores data on the page (the character may have no Ark Grid set, or the site layout changed).",
       region: region, name: name, url: url
-    }, 422);
+    } };
   }
 
   const gems = [];
@@ -209,7 +251,7 @@ async function handleCharacter(region, name) {
     }
   }
 
-  return json({
+  return { ok: true, data: {
     region: region,
     name: name,
     source: "lostark.bible",
@@ -218,11 +260,56 @@ async function handleCharacter(region, name) {
     gemCount: gems.length,
     gems: gems,
     warnings: warnings
-  }, 200);
+  } };
+}
+
+// GET /?region=&name= — cache-aware single-character pull.
+//   - cache hit (key present, pulledAt < 7d, no &refresh=1) -> return stored JSON, cached:true.
+//   - else fetch fresh, store { region, name, gems, pulledAt, ... }, index the key, cached:false.
+//   - &refresh=1 bypasses the cache read (force fresh + re-store).
+//   - no env.CHARS -> fetch fresh every time, no caching (cached:false, no pulledAt write).
+async function handleCharacter(env, region, name, refresh) {
+  const key = charKey(region, name);
+
+  if (env && env.CHARS && !refresh) {
+    const cached = await kvGetJson(env, key);
+    if (cached && typeof cached.pulledAt === "number" && (Date.now() - cached.pulledAt) < CACHE_TTL_MS) {
+      return json(Object.assign({}, cached, { cached: true }), 200);
+    }
+  }
+
+  const res = await fetchCharacterData(region, name);
+  if (!res.ok) return json(res.body, res.status);
+
+  const record = Object.assign({}, res.data, { pulledAt: Date.now() });
+  if (env && env.CHARS) {
+    try {
+      await env.CHARS.put(key, JSON.stringify(record));
+      await indexAdd(env, key);
+    } catch (e) {
+      // Storage failure is non-fatal: still return the freshly fetched data.
+    }
+  }
+  return json(Object.assign({}, record, { cached: false }), 200);
+}
+
+// GET /?list=1 — every stored character (from the "__index__" key). No KV -> empty.
+async function handleList(env) {
+  if (!env || !env.CHARS) return json({ characters: [] }, 200);
+  const idx = await kvGetJson(env, INDEX_KEY);
+  const keys = Array.isArray(idx) ? idx : [];
+  const characters = [];
+  for (const k of keys) {
+    const c = await kvGetJson(env, k);
+    if (c && Array.isArray(c.gems)) {
+      characters.push({ region: c.region, name: c.name, gems: c.gems, pulledAt: c.pulledAt });
+    }
+  }
+  return json({ characters: characters }, 200);
 }
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders() });
     }
@@ -231,16 +318,23 @@ export default {
     }
 
     const u = new URL(request.url);
+
+    // Leaderboard listing.
+    if (u.searchParams.get("list") === "1") {
+      return handleList(env);
+    }
+
     const region = (u.searchParams.get("region") || "").trim();
     const name = (u.searchParams.get("name") || "").trim();
+    const refresh = u.searchParams.get("refresh") === "1";
 
     if (!region && !name) {
-      return json({ ok: true, service: "astrogem-bible", usage: "GET /?region=NA&name=CharacterName" });
+      return json({ ok: true, service: "astrogem-bible", usage: "GET /?region=NA&name=CharacterName (add &refresh=1 to bypass cache, ?list=1 to list all)" });
     }
     if (!region || !name) {
       return json({ error: "Both ?region= and ?name= are required (e.g. ?region=NA&name=Paroxysmal)." }, 400);
     }
 
-    return handleCharacter(region, name);
+    return handleCharacter(env, region, name, refresh);
   }
 };

@@ -112,6 +112,7 @@
 '  #tab-advisor .av-card .ev{font-variant-numeric:tabular-nums;font-weight:700}' +
 '  #tab-advisor .av-best{font-size:13px;margin:2px 0 0;color:var(--dim)}' +
 '  #tab-advisor .av-best b{color:var(--accent);font-size:18px}' +
+'  #tab-advisor .rank-badge{display:inline-block;padding:1px 9px;border-radius:99px;font-size:15px;font-weight:800;line-height:1.5;vertical-align:middle;font-variant-numeric:tabular-nums}' +
 '  #tab-advisor .av-bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:8px;display:none}' +
 '  #tab-advisor .av-bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .1s}' +
 '</style>' +
@@ -535,6 +536,12 @@
     return sign + n.toLocaleString() + "g";
   }
 
+  // Grade-tier colored pill for a rank string (shared Astrogem.rankColor palette).
+  function rankBadge(rank) {
+    var c = (window.Astrogem && window.Astrogem.rankColor) ? window.Astrogem.rankColor(rank) : { bg: "#6f747a", fg: "#fff" };
+    return '<span class="rank-badge" style="background:' + c.bg + ';color:' + c.fg + '">' + rank + '</span>';
+  }
+
   function renderResult(result, state, preset, includeSim2, engineUsed) {
     var best = result.allActions[0];
     var byName = {};
@@ -544,7 +551,7 @@
     var gemRk = (typeof window.gemRank === "function") ? window.gemRank(state.config) : null;
     $("av-best-line").innerHTML = "Best: <b>" + best.name + "</b> &nbsp;·&nbsp; "
       + "net " + fmtGold(best.value) + " EV"
-      + (gemGrade != null ? ' &nbsp;·&nbsp; gem ' + (gemRk ? '<b>' + gemRk + '</b> · ' : "") + gemGrade + '/100' : "");
+      + (gemGrade != null ? ' &nbsp;·&nbsp; gem ' + (gemRk ? rankBadge(gemRk) + ' · ' : "") + gemGrade + '/100' : "");
 
     // Heuristic one-liner (a plain-English SUMMARY of this query's DP numbers, NOT
     // the decision source — the recommendation above is the exact DP's). It states

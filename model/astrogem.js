@@ -245,6 +245,24 @@
     return (Math.exp(score(config) / 100) - 1) * 100;
   }
 
+  // -------------------- cp% damage baseline (the zero-point) --------------------
+  // cpBaseline(baseCost): the score (D) of a "cp" reference gem at that cost — a
+  // willpower-4.25 / order-4.25 gem whose two side effects contribute nothing
+  // (the damage zero-point a real gem is measured against). Scoring is linear in
+  // level, so this is exact: willpowerScore at cost (baseCost − 4.25) + orderScore
+  // at 4.25, with both effect lines = 0. Shared with pipeline.js's cpBaselineScore
+  // so the grader and the pipeline use the identical baseline.
+  function cpBaseline(baseCost) {
+    return willpowerScore(willpowerCost(baseCost, 4.25)) + orderScore(4.25);
+  }
+
+  // relDamage(config): the gem's damage ABOVE the cp baseline at its own cost —
+  // score(config) − cpBaseline(config.baseCost). May be negative (a gem below the
+  // 4.25/4.25 reference loses damage). This is the figure the Grader displays.
+  function relDamage(config) {
+    return score(config) - cpBaseline(config.baseCost);
+  }
+
   // -------------------- 0-100 grade + letter rank --------------------
   // grade: 0 = the worst possible gem (incl. the willpower penalty), 100 = the
   // best (perfect 10-cost: Boss5 + AddDmg5, order5, wp5). Min-max over every gem,
@@ -301,6 +319,25 @@
     return "F-";
   }
   function gemRank(config) { return rankFromGrade(grade(config)); }
+
+  // Grade-tier colors (owner's percentile palette): F/D gray, C green, B blue,
+  // A purple, S- orange, S pink, S+ white. rank = "S+"|"S"|"S-"|"A+"|"A"|… .
+  var RANK_COLORS = {
+    F:    { bg: "#6f747a", fg: "#ffffff" },
+    D:    { bg: "#6f747a", fg: "#ffffff" },
+    C:    { bg: "#4f9d5d", fg: "#ffffff" },
+    B:    { bg: "#3b7fd0", fg: "#ffffff" },
+    A:    { bg: "#7e5cc0", fg: "#ffffff" },
+    "S-": { bg: "#dd8a2e", fg: "#ffffff" },
+    "S":  { bg: "#c95f85", fg: "#ffffff" },
+    "S+": { bg: "#e8e2cc", fg: "#1a1a1a" }
+  };
+  function rankColor(rank) {
+    if (!rank) return RANK_COLORS.F;
+    if (rank.charAt(0) === "S") return RANK_COLORS[rank] || RANK_COLORS.S;
+    return RANK_COLORS[rank.charAt(0)] || RANK_COLORS.F;
+  }
+  function gradeColor(g) { return rankColor(rankFromGrade(g)); }
 
   function scoreBreakdown(config) {
     var wpc = willpowerCost(config.baseCost, config.willpowerLevel);
@@ -746,12 +783,16 @@
     score: score,
     setOldScoring: setOldScoring,
     damagePercent: damagePercent,
+    cpBaseline: cpBaseline,
+    relDamage: relDamage,
     grade: grade,
     gradeBounds: gradeBounds,
     gradeToScore: gradeToScore,
     gemRank: gemRank,
     rankFromGrade: rankFromGrade,
     RANK_CUTS: RANK_CUTS,
+    rankColor: rankColor,
+    gradeColor: gradeColor,
     scoreBreakdown: scoreBreakdown,
     availableEffects: availableEffects,
     validateConfig: validateConfig,

@@ -6,8 +6,10 @@
 <!--
   App shell for the Lost Ark astrogem-cutting tool.
 
-  Three tabs: "Grader" (#tab-grader, first/default), "Pipeline" (#tab-pipeline),
-  and "Advisor" (#tab-advisor). The tab bar toggles the .active class on the panes.
+  Four tabs: "Grader" (#tab-grader, first/default), "Pipeline" (#tab-pipeline),
+  "Advisor" (#tab-advisor), and "Leaderboard" (#tab-leaderboard). The tab bar
+  toggles the .active class on the panes and fires a 'tabselected' event so a pane
+  can lazy-load on activation (the Leaderboard fetches ?list=1 the first time).
   The model core is loaded first so the tab scripts can call its globals
   (window.Astrogem.grade, window.score, window.tierExpectedValue,
   window.evaluateActions, ...).
@@ -45,12 +47,14 @@
     <button class="tab active" data-tab="grader" onclick="selectTab('grader')">Grader</button>
     <button class="tab" data-tab="pipeline" onclick="selectTab('pipeline')">Pipeline</button>
     <button class="tab" data-tab="advisor" onclick="selectTab('advisor')">Advisor</button>
+    <button class="tab" data-tab="leaderboard" onclick="selectTab('leaderboard')">Leaderboard</button>
   </div>
 
   <!-- Tab panes -->
   <section id="tab-grader" class="tabpane active"></section>
   <section id="tab-pipeline" class="tabpane"></section>
   <section id="tab-advisor" class="tabpane"></section>
+  <section id="tab-leaderboard" class="tabpane"></section>
 </div>
 
 <!-- Tab switching: toggle .active on the matching button + pane. -->
@@ -63,6 +67,8 @@ function selectTab(name){
   for (var j=0;j<panes.length;j++){
     panes[j].classList.toggle('active', panes[j].id === ('tab-'+name));
   }
+  // Notify tab modules that lazy-load on activation (e.g. the Leaderboard fetch).
+  try { document.dispatchEvent(new CustomEvent('tabselected', { detail: { tab: name } })); } catch (e) {}
 }
 </script>
 
@@ -76,4 +82,5 @@ function selectTab(name){
 <script src="grader.js"></script>
 <script src="pipeline.js"></script>
 <script src="advisor.js"></script>
+<script src="leaderboard.js"></script>
 </body></html>
