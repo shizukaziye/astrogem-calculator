@@ -15,13 +15,19 @@
  * classification, shown in a SEPARATE "Fusion / fodder by tier" section ("for
  * after"): below-baseline cuts become fodder, classified by tier, fused 3->1.
  *
- * Two modes:
- *   BAKED  fetch data/pipeline.json; render the fixed gold tiers (NRB then RB),
- *          one table per tier, BL rows x (Uncommon/Rare/Epic)x(c8/c9/c10) cells,
- *          each stacking the 4 buckets; NRB tables add the weekly "Pipeline" group.
- *   LIVE   any gold-per-1%-damage + baseline: INTERPOLATE the baked DP grid for the
- *          per-bucket cut values (the exact DP is ~3s/cell — too slow live) and the
- *          weekly throughput. The interpolation is bilinear over (gpd, baseline).
+ * >>> NO INTERPOLATION ANYWHERE. <<<
+ * Every number on this tab is an EXACT Bellman-DP solve:
+ *   BAKED  fetch data/pipeline.json and read each cell by DIRECT KEY LOOKUP. The
+ *          bake stores one exact DP solve per (rarity, cost, bucket, baseline, gpd),
+ *          keyed by baseline = gradeToScore(grade). The grade rows we render use the
+ *          SAME gradeToScore(grade) float, so the key matches exactly — no interp.
+ *   LIVE   any gold-per-1%-damage + grade the user types: compute the EXACT DP on
+ *          demand in the browser for all 36 cells (3 rarities x 3 costs x 4 buckets)
+ *          via window.Solver._node, plus the fodder split (the same optimal-policy
+ *          walk the bake uses) and an exact throughput block derived from those
+ *          cells. This is ~60-90s, so it runs ONLY on a "Recalculate" click and is
+ *          chunked with setTimeout (a few cells, update the progress bar, yield) so
+ *          the page never freezes. Real DP for every cell — never interpolated.
  *
  * VERDICT COLORS (reproduced from the deployed ark-grid-solver/index page; bands on
  * the cut-value gold EV):
@@ -44,23 +50,53 @@
   var BUCKET_LABEL = { "2_damage": "2D", "optimal_damage": "Op", "suboptimal_damage": "Sub", "no_damage": "No" };
   var TIERS = ["legendary", "relic", "ancient"];
   var TIER_LABEL = { legendary: "Leg", relic: "Relic", ancient: "Anc" };
-  var BAKED_BASELINES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5];
 
-  // Baseline is now expressed as a 0-100 gem-quality GRADE. Each grade maps to a
-  // %-damage threshold via window.gradeToScore(grade) — grades 50-85 land at
-  // %-damage 0.60-1.18, inside the baked range, so the existing bilinear
-  // interpolation over the baked (gpd, baseline) grid stays valid.
-  // One row per rank C- … S+ (the grade is mid-band so rankFromGrade returns that rank).
+  // Baseline is expressed as a 0-100 gem-quality GRADE. Each grade maps to a
+  // %-damage threshold via window.gradeToScore(grade). The bake stores ONE exact DP
+  // solve per grade row at baseline = gradeToScore(grade), so the baked cell for a
+  // grade is read by DIRECT KEY LOOKUP (no interpolation). One row per rank C- … S+.
   var GRADE_ROWS = [52, 57, 62, 66, 70, 73, 77, 80, 83, 87, 92, 97];
+
+  // Exact effect pairs per (cost, bucket) — used for the LIVE on-demand DP. These
+  // mirror data/pipeline.json meta.effectBuckets / tools/collect-stats.js EFFECT_BUCKETS.
+  var EFFECT_BUCKETS = {
+    8: {
+      "2_damage": { effect1: "Additional Damage", effect2: "Attack Power" },
+      "optimal_damage": { effect1: "Additional Damage", effect2: "Brand Power" },
+      "suboptimal_damage": { effect1: "Attack Power", effect2: "Brand Power" },
+      "no_damage": { effect1: "Brand Power", effect2: "Ally Damage Enh." }
+    },
+    9: {
+      "2_damage": { effect1: "Boss Damage", effect2: "Attack Power" },
+      "optimal_damage": { effect1: "Boss Damage", effect2: "Ally Damage Enh." },
+      "suboptimal_damage": { effect1: "Attack Power", effect2: "Ally Damage Enh." },
+      "no_damage": { effect1: "Ally Damage Enh.", effect2: "Ally Attack Enh." }
+    },
+    10: {
+      "2_damage": { effect1: "Boss Damage", effect2: "Additional Damage" },
+      "optimal_damage": { effect1: "Boss Damage", effect2: "Brand Power" },
+      "suboptimal_damage": { effect1: "Additional Damage", effect2: "Brand Power" },
+      "no_damage": { effect1: "Brand Power", effect2: "Ally Attack Enh." }
+    }
+  };
+
+  // Throughput reconstruction constants (mirrored from tools/collect-stats.js;
+  // overridden by DATA.meta when the baked file is present). NOT part of the DP.
+  var SLOTS = 24;
+  var DEF_CUTS_PER_WEEK = { uncommon: 70, rare: 26, epic: 9 };
+  var DEF_FRESH_BUCKET_MIX = { "2_damage": 0.17, optimal_damage: 0.33, suboptimal_damage: 0.33, no_damage: 0.17 };
+  var DEF_BOX_SCHEDULE = [{ count: 10, rarity: "uncommon" }, { count: 10, rarity: "rare" }, { count: 1, rarity: "epic" }];
+  var FUSION_INPUTS = 3;
 
   // Verdict gold-EV bands (from the deployed page).
   var V = { green: 18000, yellowHi: 10000, yellowMid: 5000, yellowLo: 1000 };
-  var SLOTS = 24;
 
-  var DATA = null;          // baked data/pipeline.json (lazy-fetched)
+  var DATA = null;          // baked data/pipeline.json (lazy-fetched, BAKED mode only)
   var MODE = "baked";       // 'baked' | 'live'
   var ROSTER = "nrb";       // 'nrb' | 'rb'
   var LIVE = { gpd: 1500000, grade: 65 };
+  var LIVE_RESULT = null;   // last computed exact-DP live result (see computeLive)
+  var LIVE_BUSY = false;    // a compute is in flight
 
   // ---------------------------------------------------------------------------
   // formatting
@@ -87,15 +123,10 @@
   // ---------------------------------------------------------------------------
   // verdict (per bucket cut value). reset flag = green (reset-worthy if below BL).
   // ---------------------------------------------------------------------------
-  // cut    = DP value of cutting a fresh gem of this bucket.
-  // fuse3  = per-gem fodder value if cut fails (used only for the purple "fuse first").
-  // For NRB, when the cut value is below the reset floor AND fusing the fodder beats
-  // it, the deployed page paints PURPLE (fuse pre-cutting). RB gems are free to cut.
   function verdict(cut, fuse3, roster) {
     if (cut == null) return { cls: "v-red", glyph: "", reset: false };
     if (cut >= V.green) return { cls: "v-green", glyph: "↻", reset: true };
     if (cut > 0) {
-      // dim-yellow sub-bands by magnitude (mirrors the deployed 4-shade ramp).
       var cls = cut >= V.yellowHi ? "v-y1" : cut >= V.yellowMid ? "v-y2" : cut >= V.yellowLo ? "v-y3" : "v-y4";
       if (roster === "nrb" && fuse3 != null && fuse3 > cut) return { cls: "v-purple", glyph: "⚜", reset: false };
       return { cls: cls, glyph: "", reset: false };
@@ -106,57 +137,77 @@
   }
 
   // ---------------------------------------------------------------------------
-  // baked lookups
+  // baked lookups — DIRECT KEY MATCH (no interpolation).
+  //
+  // The bake keys each cell by baseline = gradeToScore(grade). The UI computes the
+  // SAME gradeToScore(grade) float, so String(baseline) is byte-identical and the
+  // direct key hits. As a defensive guard against any float-string drift, when a
+  // direct lookup misses we fall back to the cell whose baked baseline is numerically
+  // closest to the requested baseline (within a tiny epsilon) — still an exact DP
+  // value, never an interpolation.
   // ---------------------------------------------------------------------------
-  function cellKey(rarity, cost, bucket, bl, gpd) { return rarity + "_" + cost + "_" + bucket + "_" + bl + "_" + gpd; }
-  function thruKey(rarity, cost, bl, gpd) { return rarity + "_" + cost + "_" + bl + "_" + gpd; }
+  function cellKey(rarity, cost, bucket, baseline, gpd) { return rarity + "_" + cost + "_" + bucket + "_" + baseline + "_" + gpd; }
+  function thruKey(rarity, cost, baseline, gpd) { return rarity + "_" + cost + "_" + baseline + "_" + gpd; }
 
-  function bakedBucket(rarity, cost, bucket, bl, gpd, roster) {
-    if (!DATA) return null;
-    var c = DATA.cells[cellKey(rarity, cost, bucket, bl, gpd)];
-    if (!c) return null;
-    return c[roster] || null;
-  }
-
-  // ---------------------------------------------------------------------------
-  // bilinear interpolation over the baked (gpd, baseline) grid
-  // ---------------------------------------------------------------------------
-  function anchors(list, x) {
-    if (x <= list[0]) return [list[0], list[0]];
-    if (x >= list[list.length - 1]) { var hi = list[list.length - 1]; return [hi, hi]; }
-    for (var i = 0; i < list.length - 1; i++) if (x >= list[i] && x <= list[i + 1]) return [list[i], list[i + 1]];
-    return [list[0], list[0]];
-  }
-  function gpdAnchors(gpd) { return anchors((DATA && DATA.meta.anchorGpd) || FIXED_GPD, gpd); }
-  function blAnchors(bl) { return anchors((DATA && DATA.meta.bakedBaselines) || BAKED_BASELINES, bl); }
-
-  // Bilinear-interpolate a numeric field from a (gpd, bl) -> value accessor.
-  function bilerp(getter, gpd, bl) {
-    var ga = gpdAnchors(gpd), ba = blAnchors(bl);
-    var gLo = ga[0], gHi = ga[1], bLo = ba[0], bHi = ba[1];
-    var v00 = getter(gLo, bLo), v01 = getter(gLo, bHi), v10 = getter(gHi, bLo), v11 = getter(gHi, bHi);
-    if (v00 == null) return null;
-    if (v01 == null) v01 = v00; if (v10 == null) v10 = v00; if (v11 == null) v11 = v10;
-    var tb = bHi === bLo ? 0 : (bl - bLo) / (bHi - bLo);
-    var tg = gHi === gLo ? 0 : (gpd - gLo) / (gHi - gLo);
-    var lo = v00 + (v01 - v00) * tb;
-    var hi = v10 + (v11 - v10) * tb;
-    return lo + (hi - lo) * tg;
-  }
-
-  // Interpolated per-bucket cut value + pAbove + fodder split for LIVE mode.
-  function liveBucket(rarity, cost, bucket, bl, gpd, roster) {
-    if (!DATA) return null;
-    var cut = bilerp(function (g, b) { var x = bakedBucket(rarity, cost, bucket, b, g, roster); return x ? x.cut : null; }, gpd, bl);
-    if (cut == null) return null;
-    var pAbove = bilerp(function (g, b) { var x = bakedBucket(rarity, cost, bucket, b, g, roster); return x ? x.pAbove : null; }, gpd, bl);
-    var out = { cut: cut, pAbove: pAbove };
-    if (roster === "nrb") {
-      out.fLeg = bilerp(function (g, b) { var x = bakedBucket(rarity, cost, bucket, b, g, "nrb"); return x ? x.fLeg : null; }, gpd, bl);
-      out.fRelic = bilerp(function (g, b) { var x = bakedBucket(rarity, cost, bucket, b, g, "nrb"); return x ? x.fRelic : null; }, gpd, bl);
-      out.fAnc = bilerp(function (g, b) { var x = bakedBucket(rarity, cost, bucket, b, g, "nrb"); return x ? x.fAnc : null; }, gpd, bl);
+  // The distinct baked baseline values present in DATA (from meta if available, else
+  // recovered from the cell keys), cached so the closest-match fallback is cheap.
+  function bakedBaselineList() {
+    if (!DATA) return [];
+    if (bakedBaselineList._cache && bakedBaselineList._for === DATA) return bakedBaselineList._cache;
+    var set = {};
+    if (DATA.meta && DATA.meta.bakedBaselines) {
+      DATA.meta.bakedBaselines.forEach(function (b) { set[b] = true; });
+    } else {
+      Object.keys(DATA.cells || {}).forEach(function (k) {
+        var parts = k.split("_");
+        // key = rarity_cost_<bucket words...>_baseline_gpd  -> baseline is 2nd-from-last
+        var bl = parts[parts.length - 2];
+        set[bl] = true;
+      });
     }
-    return out;
+    var list = Object.keys(set).map(Number).filter(function (x) { return isFinite(x); }).sort(function (a, b) { return a - b; });
+    bakedBaselineList._cache = list; bakedBaselineList._for = DATA;
+    return list;
+  }
+
+  // Nearest baked baseline to `bl` (string form, ready to drop into a key). Returns
+  // null if no baked baseline is within epsilon (genuinely absent -> render "—").
+  function nearestBakedBaseline(bl) {
+    var list = bakedBaselineList();
+    if (!list.length) return null;
+    var best = null, bestD = Infinity;
+    for (var i = 0; i < list.length; i++) {
+      var d = Math.abs(list[i] - bl);
+      if (d < bestD) { bestD = d; best = list[i]; }
+    }
+    // gradeToScore grades are spaced ~0.05+ apart in %-damage; 1e-6 catches only
+    // true float-string drift of an otherwise-identical baseline.
+    return (best != null && bestD <= 1e-6) ? best : null;
+  }
+
+  // Resolve a baked cell record by (rarity, cost, bucket, baseline, gpd): direct key
+  // first, then the closest-baseline guard. Returns the cell object { nrb?, rb? } or null.
+  function bakedCell(rarity, cost, bucket, baseline, gpd) {
+    if (!DATA || !DATA.cells) return null;
+    var c = DATA.cells[cellKey(rarity, cost, bucket, baseline, gpd)];
+    if (c) return c;
+    var nb = nearestBakedBaseline(baseline);
+    if (nb == null) return null;
+    return DATA.cells[cellKey(rarity, cost, bucket, nb, gpd)] || null;
+  }
+  // Per-roster bucket record (the SOURCE OF TRUTH for verdicts). EXACT DP, no interp.
+  function bakedBucket(rarity, cost, bucket, baseline, gpd, roster) {
+    var c = bakedCell(rarity, cost, bucket, baseline, gpd);
+    return c ? (c[roster] || null) : null;
+  }
+  // Throughput cell record by the same direct-then-closest baseline resolution.
+  function bakedThru(rarity, cost, baseline, gpd) {
+    if (!DATA || !DATA.thru) return null;
+    var t = DATA.thru[thruKey(rarity, cost, baseline, gpd)];
+    if (t) return t;
+    var nb = nearestBakedBaseline(baseline);
+    if (nb == null) return null;
+    return DATA.thru[thruKey(rarity, cost, nb, gpd)] || null;
   }
 
   // A fodder-fusion value proxy for the purple verdict: the per-gem value of fusing
@@ -167,7 +218,141 @@
   }
 
   // ---------------------------------------------------------------------------
+  // LIVE exact DP — compute a fresh-gem cut record on demand (no interpolation).
+  //
+  // Mirrors tools/collect-stats-worker.js exactly: build the fresh level-1 config
+  // for the bucket, solve W via Solver._node (value + pAbove + expScore + expSpend +
+  // act in one pass), and — for NRB — walk the SAME optimal policy to get the
+  // fusion-fodder tier split (fLeg/fRelic/fAnc, normalized to 1 - pAbove).
+  // ---------------------------------------------------------------------------
+  function freshConfig(cost, effect1, effect2) {
+    return {
+      baseCost: cost, gemType: "order",
+      willpowerLevel: 1, orderLevel: 1,
+      effect1: effect1, effect1Level: 1,
+      effect2: effect2, effect2Level: 1
+    };
+  }
+
+  // --- fodder tier split (replicated from collect-stats-worker.js) -----------
+  // Walk the optimal policy the Solver already memoized, folding identical
+  // (config,t,r,cm) frames each layer so the work stays bounded by the small
+  // reachable state space. Whenever a node terminates (t<=0 or act==='complete')
+  // below baseline, add its reach-probability to acc[tier(config)].
+  function clampReroll(r) { return r < 0 ? 0 : r; }
+  function clampCm(cm) { return Math.max(-100, Math.min(100, cm)); }
+  function cloneConfig(c) {
+    return { baseCost: c.baseCost, gemType: c.gemType, willpowerLevel: c.willpowerLevel,
+      orderLevel: c.orderLevel, effect1: c.effect1, effect1Level: c.effect1Level,
+      effect2: c.effect2, effect2Level: c.effect2Level };
+  }
+  function transitionBranches(config, p) {
+    var A = window;
+    var t = p.type;
+    if (t === "willpower" || t === "order" || t === "effect1" || t === "effect2") {
+      var o = { type: p.change > 0 ? "raise_effect" : "lower_effect", target: t, amount: Math.abs(p.change) };
+      return [{ config: A.applyOutcome(config, o), dCm: 0, dRerolls: 0 }];
+    }
+    if (t === "change_effect1" || t === "change_effect2") {
+      var target = (t === "change_effect1") ? "effect1" : "effect2";
+      var pool = (A.EFFECT_POOLS && A.EFFECT_POOLS[config.baseCost]) || [];
+      var current = [config.effect1, config.effect2];
+      var candidates = pool.filter(function (e) { return current.indexOf(e) === -1; });
+      if (candidates.length === 0) return [{ config: cloneConfig(config), dCm: 0, dRerolls: 0 }];
+      var branches = [];
+      for (var k = 0; k < candidates.length; k++) {
+        var oc = { type: "change_side_option", target: target, newEffect: candidates[k] };
+        branches.push({ config: A.applyOutcome(config, oc), dCm: 0, dRerolls: 0, w: 1 / candidates.length });
+      }
+      return branches;
+    }
+    if (t === "cost") return [{ config: cloneConfig(config), dCm: p.change, dRerolls: 0 }];
+    if (t === "reroll") return [{ config: cloneConfig(config), dCm: 0, dRerolls: p.change || 1 }];
+    return [{ config: cloneConfig(config), dCm: 0, dRerolls: 0 }];
+  }
+  function childConfigs(config, t, r, cm) {
+    var A = window;
+    var op = A.outcomeProbabilities({ config: config, processCostMultiplier: cm || 0, turnsRemaining: t });
+    var out = [];
+    for (var i = 0; i < op.possibilities.length; i++) {
+      var p = op.possibilities[i];
+      var branches = transitionBranches(config, p);
+      for (var b = 0; b < branches.length; b++) {
+        var br = branches[b];
+        out.push({
+          config: br.config,
+          r: clampReroll(r + br.dRerolls),
+          cm: clampCm(cm + br.dCm),
+          prob: p.prob * (br.w != null ? br.w : 1 / branches.length)
+        });
+      }
+    }
+    return out;
+  }
+  function fodderTierSplit(solver, rootConfig, t0, r0) {
+    var A = window;
+    var acc = { legendary: 0, relic: 0, ancient: 0 };
+    var baseline = solver.baseline;
+    function keyOf(c, t, r, cm) {
+      return c.willpowerLevel + "|" + c.orderLevel + "|" + c.effect1 + ":" + c.effect1Level
+        + "|" + c.effect2 + ":" + c.effect2Level + "|" + t + "|" + r + "|" + cm;
+    }
+    function pushFrame(map, config, t, r, cm, prob) {
+      var k = keyOf(config, t, r, cm);
+      var e = map.get(k);
+      if (e) e.prob += prob;
+      else map.set(k, { config: config, t: t, r: r, cm: cm, prob: prob });
+    }
+    function addFodder(c, prob) {
+      if (A.score(c) < baseline) acc[A.classifyTier(A.levelSum(c))] += prob;
+    }
+    var frontier = new Map();
+    pushFrame(frontier, rootConfig, t0, r0, 0, 1);
+    while (frontier.size > 0) {
+      var next = new Map();
+      frontier.forEach(function (f) {
+        var c = f.config, t = f.t, r = f.r, cm = f.cm, prob = f.prob;
+        if (prob <= 0) return;
+        if (t <= 0) { addFodder(c, prob); return; }
+        var act = solver._node(c, t, r, cm).act;
+        if (act === "complete") { addFodder(c, prob); return; }
+        if (act === "reroll") { pushFrame(next, c, t, r - 1, cm, prob); return; }
+        var kids = childConfigs(c, t, r, cm);
+        for (var i = 0; i < kids.length; i++) {
+          var k = kids[i];
+          pushFrame(next, k.config, t - 1, k.r, k.cm, prob * k.prob);
+        }
+      });
+      frontier = next;
+    }
+    return acc;
+  }
+
+  // Exact per-bucket record for ONE (rarity, cost, bucket, baseline, gpd, roster).
+  // { cut, pAbove, expScore, [fLeg, fRelic, fAnc] }. Replicates the worker.
+  function liveBucketDP(rarity, cost, bucket, baseline, gpd, roster) {
+    var eff = EFFECT_BUCKETS[cost][bucket];
+    var cfg = freshConfig(cost, eff.effect1, eff.effect2);
+    var R = window.RARITY[rarity];
+    var solver = new window.Solver(baseline, gpd, roster === "rb");
+    var rec = solver._node(cfg, R.maxTurns, R.maxRerolls, 0);
+    var out = { cut: rec.v, pAbove: rec.pAbove, expScore: rec.expScore, expSpend: rec.expSpend };
+    if (roster === "nrb") {
+      var below = Math.max(0, 1 - rec.pAbove);
+      var fl = 0, fr = 0, fa = 0;
+      if (below > 1e-9) {
+        var split = fodderTierSplit(solver, cfg, R.maxTurns, R.maxRerolls);
+        var tot = split.legendary + split.relic + split.ancient;
+        if (tot > 0) { var s = below / tot; fl = split.legendary * s; fr = split.relic * s; fa = split.ancient * s; }
+      }
+      out.fLeg = fl; out.fRelic = fr; out.fAnc = fa;
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
   // render: one bucket-stacked gem cell (4 rows: 2D / Op / Sub / No)
+  // getBucket(bucket) -> { cut, pAbove, ... } | null
   // ---------------------------------------------------------------------------
   function gemCell(getBucket, fuse3, roster, sep) {
     var rows = "";
@@ -189,36 +374,22 @@
 
   function weeksClass(w) { return w == null ? "slow" : (w <= 8 ? "fast" : (w <= 26 ? "med" : "slow")); }
 
-  // Aggregate the three rarity throughput lanes into one (the deployed page's single
-  // per-baseline Pipeline lane). Sum Direct/Fuse/Gold across rarities, derive Total
-  // and Weeks from the sums so the identities stay exact. Box EV / Avg Score are
-  // cell-level (not per-rarity) — taken from the uncommon lane (all rarities share them).
-  // Single-lane Pipeline aggregate, INTERPOLATED over the baked (gpd, bl)
-  // grid via bilerp — so it works at the off-grid %-damage baselines a GRADE maps
-  // to (raw cells only hit exact baked baselines). Sum the three rarity
-  // lanes' Direct/Fuse/Gold, derive Total + Weeks from the sums (identities stay
-  // exact); Box EV / Avg Score are cell-level (taken from the cost-`cost` lane).
-  function aggThruInterp(blPct, gpd, cost) {
-    function sumLane(field) {
-      return bilerp(function (g, b) {
-        var s = 0, any = false;
-        for (var ri = 0; ri < RARITIES.length; ri++) {
-          var t = DATA.thru[thruKey(RARITIES[ri], cost, b, g)];
-          if (!t) continue;
-          any = true; s += t[field] || 0;
-        }
-        return any ? s : null;
-      }, gpd, blPct);
+  // ---------------------------------------------------------------------------
+  // Single-lane Pipeline aggregate from EXACT baked throughput cells. Sum the three
+  // rarity lanes' Direct/Fuse/Gold, derive Total + Weeks from the sums (identities
+  // stay exact); Box EV / Avg Score are cell-level (taken from the cost-`cost` lane).
+  // Direct key lookup on each baked thru cell — no interpolation.
+  // ---------------------------------------------------------------------------
+  function aggThruBaked(baseline, gpd, cost) {
+    var d = 0, f = 0, gold = 0, any = false;
+    for (var ri = 0; ri < RARITIES.length; ri++) {
+      var t = bakedThru(RARITIES[ri], cost, baseline, gpd);
+      if (!t) continue;
+      any = true;
+      d += t.directPerWk || 0; f += t.fusePerWk || 0; gold += t.goldPerWk || 0;
     }
-    function cellField(field) {
-      return bilerp(function (g, b) {
-        var t = DATA.thru[thruKey(RARITIES[0], cost, b, g)];
-        return t ? t[field] : null;
-      }, gpd, blPct);
-    }
-    var d = sumLane("directPerWk") || 0;
-    var f = sumLane("fusePerWk") || 0;
-    var gold = sumLane("goldPerWk") || 0;
+    if (!any) return null;
+    var c0 = bakedThru(RARITIES[0], cost, baseline, gpd);
     var tot = d + f;
     return {
       directPerWk: Math.round(d * 100) / 100,
@@ -226,12 +397,12 @@
       totalPerWk: Math.round(tot * 100) / 100,
       weeks: tot > 0 ? Math.round((SLOTS / tot) * 10) / 10 : null,
       goldPerWk: Math.round(gold),
-      boxEV: cellField("boxEV"), avgScore: cellField("avgScore")
+      boxEV: c0 ? c0.boxEV : null, avgScore: c0 ? c0.avgScore : null
     };
   }
 
   // ---------------------------------------------------------------------------
-  // BAKED table for one gpd tier (roster = 'nrb' | 'rb')
+  // BAKED table for one gpd tier (roster = 'nrb' | 'rb'). EXACT DP cells, direct lookup.
   // ---------------------------------------------------------------------------
   function bakedTable(gpd, roster) {
     var isNrb = roster === "nrb";
@@ -252,38 +423,34 @@
         : '')
       + '</tr></thead><tbody>';
 
+    var box = (DATA.meta && DATA.meta.boxSchedule) || DEF_BOX_SCHEDULE;
+    var boxTxt = box.map(function (s) { return s.count + "x" + s.rarity.slice(0, 3); }).join("<br>");
+
     var body = "";
     for (var bi = 0; bi < GRADE_ROWS.length; bi++) {
       var grade = GRADE_ROWS[bi];
-      var blPct = window.gradeToScore(grade);   // grade -> %-damage threshold
+      var blPct = window.gradeToScore(grade);   // grade -> %-damage threshold (= baked key)
       var rank = window.rankFromGrade(grade);
       var row = '<tr><td class="pipe blcell"><b>' + grade + '</b> <span class="dim">(' + rank + ')</span></td>';
       for (var ri = 0; ri < RARITIES.length; ri++) {
         for (var ci = 0; ci < COSTS.length; ci++) {
           (function (rarity, cost, sep) {
             var f3 = fuse3Proxy(cost, blPct, gpd);
-            // Interpolated path (liveBucket) — GRADE rows land at off-grid baselines.
-            row += gemCell(function (b) { return liveBucket(rarity, cost, b, blPct, gpd, roster); }, f3, roster, sep);
+            // DIRECT baked lookup per bucket — the exact DP cell at this grade's baseline.
+            row += gemCell(function (b) { return bakedBucket(rarity, cost, b, blPct, gpd, roster); }, f3, roster, sep);
           })(RARITIES[ri], COSTS[ci], ci === 0);
         }
       }
       if (isNrb) {
-        // The deployed page's Pipeline is a SINGLE per-baseline lane that mixes the
-        // whole weekly production. We reconstruct it by AGGREGATING the three rarity
-        // lanes (you cut uncommons in bulk + some rare/epic): sum Direct/Fuse/Gold,
-        // derive Total + Weeks from the summed values (identities stay exact). Box EV
-        // and Avg Score are cell-level (not per-rarity); use the c9 lane. Interpolated
-        // so it works at the off-grid baseline this GRADE maps to.
-        var agg = aggThruInterp(blPct, gpd, 9);
-        var boxTxt = (DATA.meta.boxSchedule || []).map(function (s) { return s.count + "x" + s.rarity.slice(0, 3); }).join("<br>");
+        var agg = aggThruBaked(blPct, gpd, 9);
         row += '<td class="pipe sep boxcell">' + (boxTxt || "—") + '</td>'
-          + '<td class="pipe num">' + fmtGoldFull(agg.boxEV) + '</td>'
-          + '<td class="pipe num">' + fmtNum(agg.directPerWk) + '</td>'
-          + '<td class="pipe num">' + fmtNum(agg.fusePerWk) + '</td>'
-          + '<td class="pipe num"><b>' + fmtNum(agg.totalPerWk) + '</b></td>'
-          + '<td class="pipe num ' + weeksClass(agg.weeks) + '">' + (agg.weeks == null ? "—" : agg.weeks) + '</td>'
-          + '<td class="pipe num">' + fmtGold(agg.goldPerWk) + '/wk</td>'
-          + '<td class="pipe num"><b>' + fmtNum(agg.avgScore) + '</b></td>';
+          + '<td class="pipe num">' + (agg ? fmtGoldFull(agg.boxEV) : "—") + '</td>'
+          + '<td class="pipe num">' + (agg ? fmtNum(agg.directPerWk) : "—") + '</td>'
+          + '<td class="pipe num">' + (agg ? fmtNum(agg.fusePerWk) : "—") + '</td>'
+          + '<td class="pipe num"><b>' + (agg ? fmtNum(agg.totalPerWk) : "—") + '</b></td>'
+          + '<td class="pipe num ' + weeksClass(agg ? agg.weeks : null) + '">' + (agg && agg.weeks != null ? agg.weeks : "—") + '</td>'
+          + '<td class="pipe num">' + (agg ? fmtGold(agg.goldPerWk) + "/wk" : "—") + '</td>'
+          + '<td class="pipe num"><b>' + (agg ? fmtNum(agg.avgScore) : "—") + '</b></td>';
       }
       row += "</tr>";
       body += row;
@@ -292,9 +459,8 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Fodder VALUE per gem by tier — the "worth that much as fodder" numbers: what a
-  // single below-baseline gem of each tier is worth as fusion material (3->1).
-  // Depends only on (cost, baseline, gpd), so it's the same for baked and live.
+  // Fodder VALUE per gem by tier — depends only on (cost, baseline, gpd) via the
+  // core's fusionValueForTier, so it's identical for baked and live (and exact).
   function fodderValueTable(gpd, bl) {
     if (typeof window.fusionValueForTier !== "function") return "";
     var rows = "";
@@ -312,13 +478,12 @@
       + rows + '</tbody></table>';
   }
 
-  // Fusion / fodder by tier section (the "for after" view).
-  // Below-baseline cuts become fodder; this shows where that fodder lands (Leg /
-  // Relic / Anc) per rarity/cost, averaged over the four buckets weighted by the
-  // fresh-drop bucket mix. Baked: read p_fodder_*; Live: interpolate.
-  // ---------------------------------------------------------------------------
+  // Fusion / fodder by tier section (the "for after" view). Below-baseline cuts
+  // become fodder; this shows where that fodder lands per rarity/cost, averaged over
+  // the fresh-drop bucket mix. getBucket(rarity,cost,bucket) -> exact record (baked
+  // direct lookup or live DP) carrying fLeg/fRelic/fAnc/pAbove.
   function fodderSection(gpd, blPct, grade, getBucket) {
-    var mix = (DATA && DATA.meta.freshBucketMix) || { "2_damage": 0.17, optimal_damage: 0.33, suboptimal_damage: 0.33, no_damage: 0.17 };
+    var mix = (DATA && DATA.meta && DATA.meta.freshBucketMix) || DEF_FRESH_BUCKET_MIX;
     var rows = "";
     for (var ri = 0; ri < RARITIES.length; ri++) {
       var rarity = RARITIES[ri];
@@ -356,7 +521,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // BAKED view (all fixed gpd tiers, NRB then RB) + fodder section
+  // BAKED view (all fixed gpd tiers, NRB then RB) + fodder section — exact DP cells.
   // ---------------------------------------------------------------------------
   function bakedResults() {
     var out = '<div class="toc"><b>Jump to:</b> '
@@ -364,33 +529,195 @@
     out += '<h1 class="sec" id="nrb">Non-Roster Bound</h1>'
       + '<p class="note">NRB gems cost gold to cut. Each cell stacks the four buckets '
       + '(<b>2D</b> / <b>Op</b> / <b>Sub</b> / <b>No</b>); the number is the exact DP value of cutting a fresh gem '
-      + 'of that archetype, colored by verdict. The Pipeline group is the weekly production flow.</p>';
+      + 'of that archetype, read by direct lookup from the baked exact-DP grid, colored by verdict. '
+      + 'The Pipeline group is the weekly production flow.</p>';
     for (var i = 0; i < FIXED_GPD.length; i++) {
       out += '<h2>' + fmtGold(FIXED_GPD[i]) + ' gold / 1% damage — NRB</h2>' + bakedTable(FIXED_GPD[i], "nrb");
     }
     out += '<h1 class="sec" id="rb">Roster Bound</h1>'
-      + '<p class="note">Roster-bound gems are free to cut — always cut. Per-bucket cut value + % above baseline shown (no pipeline lane).</p>';
+      + '<p class="note">Roster-bound gems are free to cut — always cut. Per-bucket exact-DP cut value + % above baseline shown (no pipeline lane).</p>';
     for (var j = 0; j < FIXED_GPD.length; j++) {
       out += '<h2>' + fmtGold(FIXED_GPD[j]) + ' gold / 1% damage — RB</h2>' + bakedTable(FIXED_GPD[j], "rb");
     }
-    // Fodder section uses a representative tier (1.5M, baseline grade 65) of the baked
-    // grid. Grade 65 -> off-grid %-damage, so read the buckets via the interpolated path.
+    // Fodder section uses a representative tier (1.5M, baseline grade 65). Direct
+    // lookup of the exact baked cell at that grade's baseline.
     var fodGrade = 65, fodBl = window.gradeToScore(fodGrade);
-    out += fodderSection(1500000, fodBl, fodGrade, function (rarity, cost, b) { return liveBucket(rarity, cost, b, fodBl, 1500000, "nrb"); });
+    out += fodderSection(1500000, fodBl, fodGrade, function (rarity, cost, b) { return bakedBucket(rarity, cost, b, fodBl, 1500000, "nrb"); });
     return out;
   }
 
   // ---------------------------------------------------------------------------
-  // LIVE view — interpolate the baked DP grid for any gpd/baseline.
+  // LIVE exact-DP compute (chunked, runs on Recalculate). Computes all 36 cells
+  // (3 rarities x 3 costs x 4 buckets) at the user's exact gpd + gradeToScore(grade)
+  // for BOTH rosters, plus the throughput block derived exactly from those cells.
+  // Reports progress via a bar; yields between chunks so the page stays responsive.
+  // ---------------------------------------------------------------------------
+  function computeLive(gpd, grade, onProgress, onDone) {
+    var blPct = window.gradeToScore(grade);
+    // Build the job list: every (roster, rarity, cost, bucket). RB skips fodder.
+    var jobs = [];
+    var rosters = ["nrb", "rb"];
+    for (var rsi = 0; rsi < rosters.length; rsi++) {
+      for (var ri = 0; ri < RARITIES.length; ri++) {
+        for (var ci = 0; ci < COSTS.length; ci++) {
+          for (var bi = 0; bi < BUCKETS.length; bi++) {
+            jobs.push({ roster: rosters[rsi], rarity: RARITIES[ri], cost: COSTS[ci], bucket: BUCKETS[bi] });
+          }
+        }
+      }
+    }
+    var total = jobs.length;
+    var cells = { nrb: {}, rb: {} }; // cells[roster][rarity_cost_bucket] = record
+    var done = 0, idx = 0;
+    var CHUNK = 2; // a couple of cells per tick (epic turn-1 ≈ 2-3s each) then yield
+
+    function recKey(rarity, cost, bucket) { return rarity + "_" + cost + "_" + bucket; }
+
+    function step() {
+      var t0 = Date.now();
+      // Compute until the chunk budget is hit or ~120ms elapsed (whichever first),
+      // then yield so the progress bar can paint.
+      var did = 0;
+      while (idx < total && did < CHUNK && (Date.now() - t0) < 120) {
+        var j = jobs[idx++];
+        var rec = liveBucketDP(j.rarity, j.cost, j.bucket, blPct, gpd, j.roster);
+        cells[j.roster][recKey(j.rarity, j.cost, j.bucket)] = rec;
+        did++; done++;
+      }
+      if (onProgress) onProgress(done, total);
+      if (idx < total) {
+        setTimeout(step, 0);
+      } else {
+        // Build throughput EXACTLY from the computed NRB cells (mirrors the bake's
+        // assemble() identities). Per (rarity,cost): freshPAbove over the mix, then
+        // direct/fuse/gold, then aggregate the three rarity lanes per cost.
+        var result = { gpd: gpd, grade: grade, blPct: blPct, cells: cells, thru: buildLiveThru(cells.nrb, blPct, gpd) };
+        if (onDone) onDone(result);
+      }
+    }
+    setTimeout(step, 0);
+  }
+
+  // Exact throughput from the live NRB cells — same reconstruction as
+  // tools/collect-stats.js assemble(): direct/wk = cuts * mix-weighted pAbove;
+  // fuse/wk recycles below-baseline fodder (3->1) through the legendary lane;
+  // gold/wk = box gold + cuts * mix-weighted max(0,cut). Per-rarity lanes (cost 9)
+  // plus a single aggregate lane per cost (summing the three rarities).
+  function buildLiveThru(nrbCells, blPct, gpd) {
+    var cuts = (DATA && DATA.meta && DATA.meta.cutsPerWeek) || DEF_CUTS_PER_WEEK;
+    var mix = (DATA && DATA.meta && DATA.meta.freshBucketMix) || DEF_FRESH_BUCKET_MIX;
+    var box = (DATA && DATA.meta && DATA.meta.boxSchedule) || DEF_BOX_SCHEDULE;
+    function recKey(rarity, cost, bucket) { return rarity + "_" + cost + "_" + bucket; }
+    function get(rarity, cost, bucket) { return nrbCells[recKey(rarity, cost, bucket)] || null; }
+
+    function freshPAbove(rarity, cost) {
+      var p = 0, wsum = 0;
+      for (var bi = 0; bi < BUCKETS.length; bi++) {
+        var nb = get(rarity, cost, BUCKETS[bi]);
+        if (!nb) continue;
+        var w = mix[BUCKETS[bi]] || 0;
+        p += w * (nb.pAbove || 0); wsum += w;
+      }
+      return wsum > 0 ? p / wsum : 0;
+    }
+    function fusionOutPAbove(rarity, cost) {
+      // legendary-3-fusion output is dominantly legendary; the bake uses
+      // mix.legendary * freshPAbove as a documented conservative proxy. The
+      // legendary share of a 3xLeg fusion output (~0.99) — read from the core when
+      // available, else the bake's published 0.99.
+      var legShare = 0.99;
+      if (typeof window.fusionOutputDist === "function") {
+        var m = window.fusionOutputDist(["legendary", "legendary", "legendary"]);
+        if (m && isFinite(m.legendary)) legShare = m.legendary;
+      }
+      return legShare * freshPAbove(rarity, cost);
+    }
+    function cutValMix(rarity, cost) {
+      var v = 0, wsum = 0;
+      for (var bi = 0; bi < BUCKETS.length; bi++) {
+        var nb = get(rarity, cost, BUCKETS[bi]);
+        if (!nb) continue;
+        var w = mix[BUCKETS[bi]] || 0;
+        v += w * Math.max(0, nb.cut); wsum += w;
+      }
+      return wsum > 0 ? v / wsum : 0;
+    }
+    function boxEVat(cost) {
+      var ev = 0;
+      for (var b = 0; b < box.length; b++) {
+        var nb = get(box[b].rarity, cost, "2_damage");
+        if (nb) ev += box[b].count * Math.max(0, nb.cut);
+      }
+      return ev;
+    }
+
+    // Per-rarity lane (cost 9, like the live throughput table the page showed).
+    var perRarity = {};
+    for (var ri = 0; ri < RARITIES.length; ri++) {
+      var rarity = RARITIES[ri], c = cuts[rarity] || 0, cost = 9;
+      var pa = freshPAbove(rarity, cost);
+      var direct = c * pa;
+      var fuse = (c * (1 - pa) / FUSION_INPUTS) * fusionOutPAbove(rarity, cost);
+      var tot = direct + fuse;
+      var nb2D = get(rarity, cost, "2_damage");
+      perRarity[rarity] = {
+        directPerWk: Math.round(direct * 100) / 100,
+        fusePerWk: Math.round(fuse * 100) / 100,
+        totalPerWk: Math.round(tot * 100) / 100,
+        weeks: tot > 0 ? Math.round((SLOTS / tot) * 10) / 10 : null,
+        goldPerWk: Math.round(boxEVat(cost) + c * cutValMix(rarity, cost)),
+        avgScore: nb2D ? nb2D.expScore : blPct
+      };
+    }
+    // Single aggregate lane per cost (sum the three rarity lanes' direct/fuse/gold).
+    function aggForCost(cost) {
+      var d = 0, f = 0, gold = 0;
+      for (var ri2 = 0; ri2 < RARITIES.length; ri2++) {
+        var rarity2 = RARITIES[ri2], c2 = cuts[rarity2] || 0;
+        var pa2 = freshPAbove(rarity2, cost);
+        d += c2 * pa2;
+        f += (c2 * (1 - pa2) / FUSION_INPUTS) * fusionOutPAbove(rarity2, cost);
+        gold += boxEVat(cost) / RARITIES.length + c2 * cutValMix(rarity2, cost);
+      }
+      var nb2D = get(RARITIES[0], cost, "2_damage");
+      var tot = d + f;
+      return {
+        directPerWk: Math.round(d * 100) / 100,
+        fusePerWk: Math.round(f * 100) / 100,
+        totalPerWk: Math.round(tot * 100) / 100,
+        weeks: tot > 0 ? Math.round((SLOTS / tot) * 10) / 10 : null,
+        goldPerWk: Math.round(gold),
+        boxEV: Math.round(boxEVat(cost)),
+        avgScore: nb2D ? nb2D.expScore : blPct
+      };
+    }
+    return { perRarity: perRarity, agg9: aggForCost(9) };
+  }
+
+  // ---------------------------------------------------------------------------
+  // LIVE view — render the last computed exact-DP result (or a prompt to compute).
   // ---------------------------------------------------------------------------
   function liveResults() {
-    var gpd = LIVE.gpd, grade = LIVE.grade, roster = ROSTER;
-    var blPct = window.gradeToScore(grade);     // grade -> %-damage threshold
-    var rank = window.rankFromGrade(grade);
-    if (!DATA) {
-      return '<div class="placeholder"><b>Live mode needs the baked grid.</b>'
-        + '<div class="note">data/pipeline.json is still loading (live mode interpolates it).</div></div>';
+    var roster = ROSTER;
+    if (LIVE_BUSY) {
+      // The progress UI is rendered separately (renderLiveProgress); keep the host
+      // content stable while computing.
+      return liveProgressHtml();
     }
+    if (!LIVE_RESULT) {
+      return '<div class="placeholder"><b>Live exact-DP mode</b>'
+        + '<div class="note">Set a gold-per-1%-damage and a baseline grade above, then click '
+        + '<b>Recalculate</b>. The tool will solve the exact Bellman DP on demand for all 36 cells '
+        + '(3 rarities × 3 costs × 4 buckets) at your exact numbers — no interpolation. This takes '
+        + '~60–90 seconds; a progress bar will show while it runs.</div></div>';
+    }
+
+    var res = LIVE_RESULT;
+    var gpd = res.gpd, grade = res.grade, blPct = res.blPct;
+    var rank = window.rankFromGrade(grade);
+    var cellsR = res.cells[roster] || {};
+    function recKey(rarity, cost, bucket) { return rarity + "_" + cost + "_" + bucket; }
+    function getBucket(rarity, cost, bucket) { return cellsR[recKey(rarity, cost, bucket)] || null; }
 
     var head = '<table class="pipe-table"><thead>'
       + '<tr><th rowspan="2">Grade</th>'
@@ -400,55 +727,60 @@
       + '<th class="sep">c8</th><th>c9</th><th>c10</th>'
       + '<th class="sep">c8</th><th>c9</th><th>c10</th>'
       + '<th class="sep">c8</th><th>c9</th><th>c10</th></tr></thead><tbody>';
-    // Single "row" whose cells stack the four buckets (like one grade row of the baked table).
     var row = '<tr><td class="pipe blcell"><b>' + grade + '</b> <span class="dim">(' + rank + ')</span></td>';
     for (var ri = 0; ri < RARITIES.length; ri++) {
       for (var ci = 0; ci < COSTS.length; ci++) {
         (function (rarity, cost, sep) {
           var f3 = fuse3Proxy(cost, blPct, gpd);
-          row += gemCell(function (b) { return liveBucket(rarity, cost, b, blPct, gpd, roster); }, f3, roster, sep);
+          row += gemCell(function (b) { return getBucket(rarity, cost, b); }, f3, roster, sep);
         })(RARITIES[ri], COSTS[ci], ci === 0);
       }
     }
     row += "</tr>";
     var gemTbl = head + row + "</tbody></table>";
 
-    // Weekly throughput (interpolated) for the epic c9/c10 lanes.
+    // Weekly throughput (exact from the computed cells) — per rarity, cost 9.
     var thruTbl = "";
-    if (roster === "nrb") {
-      thruTbl = '<h2>Weekly throughput (interpolated)</h2>'
+    if (roster === "nrb" && res.thru) {
+      var pr = res.thru.perRarity;
+      thruTbl = '<h2>Weekly throughput (exact DP)</h2>'
         + '<table class="pipe-table"><thead><tr><th>Rarity</th><th class="sep num">Direct/wk</th>'
         + '<th class="num">Fuse/wk</th><th class="num">Total/wk</th><th class="num">Weeks to ' + SLOTS + '</th>'
         + '<th class="num">Gold/wk</th><th class="num">Avg Score</th></tr></thead><tbody>';
       for (var rj = 0; rj < RARITIES.length; rj++) {
         var rar = RARITIES[rj];
-        var d = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.directPerWk : null; }, gpd, blPct);
-        var f = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.fusePerWk : null; }, gpd, blPct);
-        var tot = (d || 0) + (f || 0);
-        var wk = tot > 0 ? SLOTS / tot : null;
-        var gold = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.goldPerWk : null; }, gpd, blPct);
-        var avg = bilerp(function (g, b) { var t = DATA.thru[thruKey(rar, 9, b, g)]; return t ? t.avgScore : null; }, gpd, blPct);
+        var t = pr[rar] || {};
         thruTbl += '<tr><td><b>' + RARITY_LABEL[rar] + '</b></td>'
-          + '<td class="sep num">' + fmtNum(d) + '</td><td class="num">' + fmtNum(f) + '</td>'
-          + '<td class="num"><b>' + fmtNum(tot) + '</b></td>'
-          + '<td class="num ' + weeksClass(wk) + '">' + (wk == null ? "—" : wk.toFixed(1)) + '</td>'
-          + '<td class="num">' + (gold == null ? "—" : fmtGold(gold) + "/wk") + '</td>'
-          + '<td class="num">' + fmtNum(avg) + '</td></tr>';
+          + '<td class="sep num">' + fmtNum(t.directPerWk) + '</td><td class="num">' + fmtNum(t.fusePerWk) + '</td>'
+          + '<td class="num"><b>' + fmtNum(t.totalPerWk) + '</b></td>'
+          + '<td class="num ' + weeksClass(t.weeks) + '">' + (t.weeks == null ? "—" : t.weeks.toFixed(1)) + '</td>'
+          + '<td class="num">' + (t.goldPerWk == null ? "—" : fmtGold(t.goldPerWk) + "/wk") + '</td>'
+          + '<td class="num">' + fmtNum(t.avgScore) + '</td></tr>';
       }
       thruTbl += '</tbody></table>';
     }
 
-    // Fodder section (interpolated).
-    var fod = roster === "nrb"
-      ? fodderSection(gpd, blPct, grade, function (rarity, cost, b) { return liveBucket(rarity, cost, b, blPct, gpd, "nrb"); })
-      : "";
+    // Fodder section (exact from the computed NRB cells).
+    var fod = "";
+    if (roster === "nrb") {
+      var nrbCells = res.cells.nrb || {};
+      fod = fodderSection(gpd, blPct, grade, function (rarity, cost, b) { return nrbCells[recKey(rarity, cost, b)] || null; });
+    }
 
     return '<h2>Per-bucket cut value — ' + fmtGold(gpd) + ' gold / 1% damage, baseline grade ' + grade + ' (' + rank + ')'
       + ' (' + (roster === "nrb" ? "Non-Roster Bound" : "Roster Bound") + ')</h2>'
-      + '<p class="note">Interpolated from the baked DP grid (the exact DP is ~3s/cell — too slow to recompute live). '
-      + 'Each cell stacks the four buckets; the number is the cut value of a fresh gem of that archetype. '
+      + '<p class="note"><b>Exact DP, computed on demand</b> — every cell is a fresh Bellman-DP solve at your exact gold + grade, '
+      + 'with no interpolation. Each cell stacks the four buckets; the number is the cut value of a fresh gem of that archetype. '
       + 'Verdict bands: green ≥ ' + fmtGold(V.green) + ' (reset-worthy) · yellow > 0 · red ≤ 0 · purple = fuse first.</p>'
       + gemTbl + thruTbl + fod;
+  }
+
+  function liveProgressHtml() {
+    return '<div class="placeholder"><b id="pl-prog-title">Computing exact DP…</b>'
+      + '<div class="note">Solving the exact Bellman DP for all 36 cells at your exact gold + grade — no interpolation. '
+      + 'This is the slow-but-exact path (~60–90s).</div>'
+      + '<div class="pl-progwrap"><div class="pl-prog" id="pl-prog"><i id="pl-prog-i"></i></div>'
+      + '<div class="pl-progtxt" id="pl-prog-txt">0%</div></div></div>';
   }
 
   // ---------------------------------------------------------------------------
@@ -500,15 +832,16 @@
       + '<p><b>Tier is the fusion fodder, not the cut axis.</b> A below-baseline cut becomes fodder, classified by '
       + 'level-sum tier (legendary 4–15, relic 16–18, ancient 19–20) and fused 3→1. The bake records the per-bucket '
       + 'fodder tier split (p_fodder_leg/relic/anc, summing to 1−P(above)) by walking the SAME optimal policy the value '
-      + 'uses. Shown separately in "Fusion / fodder by tier".</p>'
+      + 'uses; live mode walks that same policy on demand. Shown separately in "Fusion / fodder by tier".</p>'
       + '<p><b>Verdict colors</b> reproduce the deployed ark-grid-solver page: green ≥ 18k (reset-worthy), a yellow→dim '
       + 'ramp for >0 (10–18k / 5–10k / 1–5k / <1k), red ≤ 0 (don\'t cut), purple = fuse the fodder before cutting (NRB).</p>'
       + '<p><b>Throughput</b> is a documented reconstruction (the deployed page\'s weekly generator was not part of the '
       + 'model core): Direct/wk = weekly cut budget × P(above) over the fresh-drop bucket mix; Fuse/wk recycles '
       + 'below-baseline cuts (3→1); Total/wk = Direct+Fuse; Weeks = ' + SLOTS + '/Total/wk. Constants (cut budget, box '
       + 'schedule, bucket mix) are in data/pipeline.json meta and METHODOLOGY.md — retunable without touching the DP.</p>'
-      + '<p><b>Live mode interpolates</b> the baked DP grid bilinearly over (gpd, baseline): the exact DP is ~3s/cell, '
-      + 'too slow to recompute live, so any gold/baseline reads off the dense baked anchors.</p>'
+      + '<p><b>No interpolation anywhere.</b> Baked tables read each cell by direct key lookup from the baked exact-DP '
+      + 'grid (one solve per grade row at baseline = gradeToScore(grade)). Live mode computes the exact DP on demand in '
+      + 'the browser for every cell at your exact gold + grade — slower (~60–90s, run on Recalculate), but exact.</p>'
       + '</details>';
   }
 
@@ -533,15 +866,15 @@
       + '<div style="display:flex;align-items:center;gap:8px">'
       + '<input id="pl-grade" type="number" min="0" max="100" step="1" value="' + LIVE.grade + '" oninput="window.__plGradeRank()" style="flex:1">'
       + '<span id="pl-grade-rank" class="grade-rank">' + window.rankFromGrade(LIVE.grade) + '</span></div></div>'
-      + '<div class="fld" style="align-self:end"><button class="primary" onclick="window.__plRecalc()">Recalculate</button></div>'
+      + '<div class="fld" style="align-self:end"><button class="primary" id="pl-recalc" onclick="window.__plRecalc()">Recalculate</button></div>'
       + '</div>'
       + '<p class="note" id="pl-mode-note">' + modeNote() + '</p>'
       + '</div></div>';
   }
   function modeNote() {
     return MODE === "baked"
-      ? "Baked view: the fixed gold tiers (500k · 1M · 1.5M · 2.5M · 3.5M · 5M), NRB then RB, one row per baseline rank C- … S+ (grades 52–97), read off the baked DP grid (interpolated to each grade's %-damage threshold)."
-      : "Live view: per-bucket cut values interpolated from the baked DP grid for any gold + baseline grade (the exact DP is too slow to recompute live).";
+      ? "Baked view: the fixed gold tiers (500k · 1M · 1.5M · 2.5M · 3.5M · 5M), NRB then RB, one row per baseline rank C- … S+ (grades 52–97). Each cell is read by direct lookup from the baked exact-DP grid (one DP solve per grade) — no interpolation."
+      : "Live view: computes the EXACT Bellman DP on demand for any gold + baseline grade, for all 36 cells (3 rarities × 3 costs × 4 buckets). No interpolation — real DP for every cell, so it's slower (~60–90s) and runs only on Recalculate.";
   }
 
   // ---------------------------------------------------------------------------
@@ -590,6 +923,11 @@
       + '#tab-pipeline .dim{color:var(--dim);font-weight:400;font-size:10.5px}'
       + '#tab-pipeline .grade-rank{display:inline-block;min-width:34px;text-align:center;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel2);color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}'
       + '#tab-pipeline .tablewrap{overflow-x:auto;max-width:100%}'
+      // live exact-DP progress bar (scoped; reuses theme vars)
+      + '#tab-pipeline .pl-progwrap{display:flex;align-items:center;gap:10px;margin-top:12px}'
+      + '#tab-pipeline .pl-prog{flex:1;height:10px;border-radius:5px;background:var(--border);overflow:hidden}'
+      + '#tab-pipeline .pl-prog > i{display:block;height:100%;width:0;background:var(--accent);transition:width .12s}'
+      + '#tab-pipeline .pl-progtxt{font-variant-numeric:tabular-nums;color:var(--accent);font-weight:700;min-width:84px;text-align:right}'
       + '</style>';
   }
 
@@ -613,7 +951,9 @@
     el.innerHTML = scopedStyle() + inputsHtml() + legendHtml()
       + '<div id="pl-results"></div>' + methodologyHtml();
     renderBody();
-    ensureData();
+    // BAKED mode needs the baked file; LIVE mode computes everything in-browser and
+    // only uses DATA.meta (constants) if it happens to be loaded.
+    if (MODE === "baked") ensureData();
   }
 
   function ensureData() {
@@ -621,9 +961,10 @@
     ensureData._loading = true;
     fetch("data/pipeline.json")
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then(function (j) { DATA = j; ensureData._loading = false; renderBody(); })
+      .then(function (j) { DATA = j; ensureData._loading = false; if (MODE === "baked") renderBody(); })
       .catch(function (e) {
         ensureData._loading = false;
+        if (MODE !== "baked") return;
         var host = document.getElementById("pl-results");
         if (host) {
           host.innerHTML = '<div class="placeholder"><b>Could not load data/pipeline.json</b>'
@@ -643,6 +984,7 @@
     if (lf) lf.style.display = m === "live" ? "" : "none";
     var note = document.getElementById("pl-mode-note");
     if (note) note.textContent = modeNote();
+    if (m === "baked") ensureData();
     renderBody();
   };
   window.__plSetRoster = function (rb) {
@@ -652,11 +994,40 @@
     renderBody();
   };
   window.__plRecalc = function () {
+    if (LIVE_BUSY) return;
     var g = parseFloat(document.getElementById("pl-gpd").value);
     var gr = parseFloat(document.getElementById("pl-grade").value);
     if (isFinite(g) && g > 0) LIVE.gpd = g;
     if (isFinite(gr) && gr >= 0 && gr <= 100) LIVE.grade = gr;
-    renderBody();
+    if (MODE !== "live") { MODE = "live"; window.__plSetMode("live"); }
+
+    if (typeof window.Solver !== "function") {
+      var host0 = document.getElementById("pl-results");
+      if (host0) host0.innerHTML = '<div class="placeholder"><b>Model not loaded.</b>'
+        + '<div class="note">window.Solver (model/dp.js) is unavailable — cannot compute the exact DP.</div></div>';
+      return;
+    }
+
+    LIVE_BUSY = true;
+    var btn = document.getElementById("pl-recalc");
+    if (btn) btn.disabled = true;
+    renderBody(); // paints the progress shell (liveProgressHtml)
+
+    var t0 = Date.now();
+    computeLive(LIVE.gpd, LIVE.grade,
+      function (done, total) {
+        var pct = total ? Math.round((done / total) * 100) : 0;
+        var bar = document.getElementById("pl-prog-i");
+        var txt = document.getElementById("pl-prog-txt");
+        if (bar) bar.style.width = pct + "%";
+        if (txt) txt.textContent = pct + "% (" + done + "/" + total + " cells)";
+      },
+      function (result) {
+        LIVE_RESULT = result;
+        LIVE_BUSY = false;
+        if (btn) btn.disabled = false;
+        renderBody();
+      });
   };
   // Live-update the rank chip next to the grade input as the user types (no recompute).
   window.__plGradeRank = function () {

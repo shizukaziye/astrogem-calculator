@@ -137,8 +137,10 @@
         var ne = outcome.newEffect && candidates.indexOf(outcome.newEffect) !== -1
           ? outcome.newEffect
           : candidates[Math.floor(Math.random() * candidates.length)];
-        if (outcome.target === "effect1") { c.effect1 = ne; c.effect1Level = 1; }
-        else if (outcome.target === "effect2") { c.effect2 = ne; c.effect2Level = 1; }
+        // The swapped-in effect KEEPS the level of the effect it replaced (confirmed
+        // in-game) — so you can level any line and then change it into a damage line.
+        if (outcome.target === "effect1") { c.effect1 = ne; }
+        else if (outcome.target === "effect2") { c.effect2 = ne; }
       }
     }
     // change_gold_cost / do_nothing / reroll_increase: no config change here.

@@ -73,11 +73,11 @@ var A = require("../model/astrogem.js");
 // page shows 500k/1M/1.5M/2.5M/5M; the task asks to also include 3.5M.
 var FIXED_GPD = [500000, 1000000, 1500000, 2500000, 3500000, 5000000];
 
-// Extra anchors so LIVE mode can interpolate the throughput block smoothly across
-// the whole range without being limited to the six fixed tiers.
-var EXTRA_GPD = [750000, 2000000, 4000000];
-
-var ALL_GPD = FIXED_GPD.concat(EXTRA_GPD).sort(function (a, b) { return a - b; });
+// NO INTERPOLATION anywhere: bake ONLY the displayed gold tiers — every baked cell
+// is an exact DP solve. Off-grid (live) gold/grade is computed exactly on demand
+// in the browser, never interpolated. (Previously there were extra anchors here
+// purely to interpolate; removed.)
+var ALL_GPD = FIXED_GPD.slice();
 
 var COSTS = [8, 9, 10];
 var RARITIES = ["uncommon", "rare", "epic"];
@@ -105,9 +105,12 @@ var EFFECT_BUCKETS = {
   }
 };
 
-// Baselines are %-DAMAGE thresholds (the weakest equipped gem's % damage). A
-// perfect gem is ~1.3-1.4% damage, so a sensible baked set spans ~0.5%..2.5%.
-var BAKED_BASELINES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5];
+// Bake EXACTLY at the grade rows the pipeline renders (ranks C- … S+), so every
+// baked cell is an exact DP value at that baseline grade — no interpolation noise.
+// Each grade -> its %-damage threshold via gradeToScore (the SAME fn the UI uses,
+// so the UI's grade rows land precisely on these baked baselines = exact lookup).
+var BAKED_GRADES = [52, 57, 62, 66, 70, 73, 77, 80, 83, 87, 92, 97]; // C- … S+
+var BAKED_BASELINES = BAKED_GRADES.map(function (g) { return A.gradeToScore(g); });
 
 // Per-gpd baseline window shown in the BAKED tables. Cheap gold/1%: even weak gems
 // are worth keeping -> low floor. Expensive gold/1%: only strong gems clear -> high.
@@ -476,12 +479,12 @@ function main() {
 
     // Sanity: c10 epic at (baseline 1.0, 1.5M) must order 2D >> Op > Sub >> No.
     if (!testMode) {
-      var g = 1500000, blS = 1.0, cS = 10, rS = "epic";
+      var g = 1500000, blI = 3, blS = BAKED_BASELINES[blI], cS = 10, rS = "epic";
       var vals = BUCKETS.map(function (b) {
         var c = asm.cells[cellKey(rS, cS, b, blS, g)];
         return c && c.nrb ? c.nrb.cut : null;
       });
-      console.log("\nSanity (epic c10, baseline " + blS + ", " + (g / 1e6) + "M): "
+      console.log("\nSanity (epic c10, grade " + BAKED_GRADES[blI] + " / bl=" + blS.toFixed(3) + ", " + (g / 1e6) + "M): "
         + "2D=" + vals[0] + " Op=" + vals[1] + " Sub=" + vals[2] + " No=" + vals[3]);
       var ok = vals[0] > vals[1] && vals[1] > vals[2] && vals[2] > vals[3];
       console.log("  ordering 2D>Op>Sub>No: " + (ok ? "PASS" : "FAIL"));
