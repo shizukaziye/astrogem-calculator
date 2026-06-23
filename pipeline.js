@@ -460,9 +460,11 @@
       + '<div class="lg-h">Gem cells — stacked by BUCKET</div>'
       + '<p class="note">Each cost cell stacks the four effect-pair buckets: '
       + '<b>2D</b> (both damage) · <b>Op</b> (best single damage) · <b>Sub</b> (worse single damage) · <b>No</b> (no damage). '
-      + 'Per row: <b>cut value</b> (the DP value of cutting a fresh gem of that archetype) and <b>% above baseline</b>. '
-      + 'A gem must beat the baseline <b>grade</b> (0–100; your weakest equipped gem\'s grade) to be an upgrade — the grade is '
-      + 'converted to its %-damage threshold internally. Values rise with rarity (more turns/rerolls).</p>'
+      + 'Per row: the <b>net EV of cutting</b> a fresh gem of that archetype (expected gold AFTER the ~900g/process cost) and its '
+      + '<b>% chance to beat your baseline grade</b>. <b>The EV size is the marginality measure</b> — bigger = more worth cutting, '
+      + 'near 0 = marginal, ≤0 (or ⚜ = fuse instead) = don\'t cut. Note: at a high gold-per-1%-damage almost every gem is '
+      + 'positive-EV, so prioritise by EV size, not just by color. You beat your baseline <b>grade</b> (0–100; your weakest '
+      + 'equipped gem\'s grade, converted to a %-damage threshold internally). Values rise with rarity (more turns/rerolls).</p>'
       + '<div class="lg-h">Verdict colors</div>'
       + '<p><span class="sw v-green"></span> <b>Green</b> (≥ ' + fmtGold(V.green) + ') — worth resetting if below baseline (↻)<br>'
       + '<span class="sw v-y1"></span><span class="sw v-y2"></span><span class="sw v-y3"></span> <b>Yellow–dim</b> (&gt; 0) — cut, don\'t reset<br>'
@@ -538,7 +540,7 @@
   }
   function modeNote() {
     return MODE === "baked"
-      ? "Baked view: the fixed gold tiers (500k · 1M · 1.5M · 2.5M · 3.5M · 5M), NRB then RB, one row per baseline GRADE (50–85), read off the baked DP grid (interpolated to each grade's %-damage threshold)."
+      ? "Baked view: the fixed gold tiers (500k · 1M · 1.5M · 2.5M · 3.5M · 5M), NRB then RB, one row per baseline rank C- … S+ (grades 52–97), read off the baked DP grid (interpolated to each grade's %-damage threshold)."
       : "Live view: per-bucket cut values interpolated from the baked DP grid for any gold + baseline grade (the exact DP is too slow to recompute live).";
   }
 
