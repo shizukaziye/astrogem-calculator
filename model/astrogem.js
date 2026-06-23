@@ -545,88 +545,162 @@
     map.set(k, (map.get(k) || 0) + w);
   }
 
-  // -------------------- tier expected value (joint fixed point) --------------------
+  // -------------------- tier expected value (JOINT fixed point across costs) --------------------
 
-  // E[value of a random gem in tier T] at (baseCost, baseline, goldPerDamage).
+  // E[value of a random PROCESSED gem of grade T (L/R/A) at base cost c], for all
+  // three costs at once, at a given (baseline, goldPerDamage). The three costs are
+  // COUPLED: a below-baseline gem is fodder, and the relic/ancient fusions keep two
+  // FREE surplus legendaries that can be steered to whichever cost has the most
+  // valuable output — so the fodder value of a relic/ancient at cost c depends on
+  // the best cost (max over c), not just c itself. We therefore solve one JOINT
+  // 9-variable system (3 grades × 3 costs) by iteration.
   //
-  // For each tier we split the exact score distribution into:
-  //   directExp[T] = sum over scores>=baseline of P(score) * directGold(score)
-  //   pBelow[T]    = P(score < baseline)
-  // A below-baseline gem is fodder: its value is the fusion value of 3 copies of
-  // that tier, which itself depends on E[L], E[R], E[A] (the output can be a
-  // higher/lower tier). That circularity is resolved as a 3x3 linear fixed point:
+  // For each (c, T):
+  //   directExp[T_c] = sum over scores>=baseline of P(score)*goldValue(score)   (cost-specific)
+  //   pBelow[T_c]    = P(score < baseline)                                       (cost-specific)
+  //   E[T_c]         = directExp[T_c] + pBelow[T_c] * max(0, fodder[T_c])
   //
-  //   E[T] = directExp[T] + pBelow[T] * ( (mix(T) . E) - fusionCost ) / 3
+  // Fodder (the per-input value of using a below-baseline gem as fusion material):
+  //   3L  -> 99/1/0  (L/R/A):  fodder[L_c] = (0.99*E[L_c] + 0.01*E[R_c] - FC) / 3
+  //   1R + 2L (2 L's free)  with 73/25/2 output, steering: 1/3 of the relic stays at
+  //                          its own cost, 2/3 goes to the best cost (maxG):
+  //     G(c)        = 0.73*E[L_c] + 0.25*E[R_c] + 0.02*E[A_c]
+  //     fodder[R_c] = (1/3)*G(c) + (2/3)*maxG - FC
+  //   1A + 2L (2 L's free)  with 35/40/25 output, same steering against the best cost:
+  //     H(c)        = 0.35*E[L_c] + 0.40*E[R_c] + 0.25*E[A_c]
+  //     fodder[A_c] = (1/3)*H(c) + (2/3)*maxH - FC
+  //   FC = COSTS.fusion (=500); maxG = max_c G(c); maxH = max_c H(c).
   //
-  // where mix(T) is the fusion output distribution over {L,R,A} for 3 copies of T:
-  //   mix(L) = 3-legendary special-case (0.99 L, 0.01 R, 0 A)
-  //   mix(R) = fusionOutputDist([R,R,R])  (0.19, 0.75, 0.06)
-  //   mix(A) = fusionOutputDist([A,A,A])  (0,    0.25, 0.75)
-  //
-  // Rearranged to A_mat . E = rhs and solved by Gaussian elimination, then each
-  // component clamped to >=0 (matches the reference solver).
+  // It's a contraction (the only coupling is the per-iterate scalars maxG/maxH),
+  // so plain iteration converges fast. PARITY: the loop below is implemented
+  // IDENTICALLY in astrogem.py (same cost order, same operation order, same
+  // 1e-9 convergence test) so JS and Python converge bit-identically.
+  var JOINT_COSTS = [8, 9, 10];
+  var _jointEVCache = {};
+
+  // Solve the joint system once for (baseline, goldPerDamage). Returns
+  //   { E: {8:{legendary,relic,ancient}, 9:{...}, 10:{...}}, maxG, maxH, iters }.
+  function _solveJointEV(baseline, goldPerDamage) {
+    var key = baseline + "_" + goldPerDamage;
+    if (_jointEVCache[key]) return _jointEVCache[key];
+
+    var tiers = ["legendary", "relic", "ancient"];
+    var FC = COSTS.fusion;
+    var ci, ti, c, tier;
+
+    // Per-(cost,tier) directExp / pBelow from the exact score distribution.
+    var directExp = {}, pBelow = {}, E = {};
+    for (ci = 0; ci < JOINT_COSTS.length; ci++) {
+      c = JOINT_COSTS[ci];
+      directExp[c] = {}; pBelow[c] = {}; E[c] = {};
+      for (ti = 0; ti < tiers.length; ti++) {
+        tier = tiers[ti];
+        var dist = scoreDistributionForTier(c, tier);
+        var dExp = 0, below = 0;
+        dist.forEach(function (p, sc) {
+          if (sc >= baseline) dExp += p * goldValue(sc, baseline, goldPerDamage);
+          else below += p;
+        });
+        directExp[c][tier] = dExp;
+        pBelow[c][tier] = below;
+        E[c][tier] = dExp; // init E = directExp
+      }
+    }
+
+    var maxG = 0, maxH = 0;
+    var iters = 0, MAX_ITERS = 10000;
+    while (iters < MAX_ITERS) {
+      // G(c), H(c) from the current E, then maxG / maxH over costs.
+      var G = {}, H = {};
+      maxG = -Infinity; maxH = -Infinity;
+      for (ci = 0; ci < JOINT_COSTS.length; ci++) {
+        c = JOINT_COSTS[ci];
+        var gC = 0.73 * E[c].legendary + 0.25 * E[c].relic + 0.02 * E[c].ancient;
+        var hC = 0.35 * E[c].legendary + 0.40 * E[c].relic + 0.25 * E[c].ancient;
+        G[c] = gC; H[c] = hC;
+        if (gC > maxG) maxG = gC;
+        if (hC > maxH) maxH = hC;
+      }
+      // Update all 9 E values; track the max abs change.
+      var maxDelta = 0;
+      for (ci = 0; ci < JOINT_COSTS.length; ci++) {
+        c = JOINT_COSTS[ci];
+        var fodderL = (0.99 * E[c].legendary + 0.01 * E[c].relic - FC) / 3;
+        var fodderR = (1 / 3) * G[c] + (2 / 3) * maxG - FC;
+        var fodderA = (1 / 3) * H[c] + (2 / 3) * maxH - FC;
+        var newL = directExp[c].legendary + pBelow[c].legendary * Math.max(0, fodderL);
+        var newR = directExp[c].relic + pBelow[c].relic * Math.max(0, fodderR);
+        var newA = directExp[c].ancient + pBelow[c].ancient * Math.max(0, fodderA);
+        var dL = Math.abs(newL - E[c].legendary);
+        var dR = Math.abs(newR - E[c].relic);
+        var dA = Math.abs(newA - E[c].ancient);
+        if (dL > maxDelta) maxDelta = dL;
+        if (dR > maxDelta) maxDelta = dR;
+        if (dA > maxDelta) maxDelta = dA;
+        E[c].legendary = newL;
+        E[c].relic = newR;
+        E[c].ancient = newA;
+      }
+      iters++;
+      if (maxDelta < 1e-9) break;
+    }
+
+    // Recompute maxG / maxH from the CONVERGED E so callers see the final values.
+    maxG = -Infinity; maxH = -Infinity;
+    for (ci = 0; ci < JOINT_COSTS.length; ci++) {
+      c = JOINT_COSTS[ci];
+      var gF = 0.73 * E[c].legendary + 0.25 * E[c].relic + 0.02 * E[c].ancient;
+      var hF = 0.35 * E[c].legendary + 0.40 * E[c].relic + 0.25 * E[c].ancient;
+      if (gF > maxG) maxG = gF;
+      if (hF > maxH) maxH = hF;
+    }
+
+    var result = { E: E, maxG: maxG, maxH: maxH, iters: iters };
+    _jointEVCache[key] = result;
+    return result;
+  }
+
+  // E[value of a random processed gem in tier T] at (baseCost, baseline,
+  // goldPerDamage) — this base cost's slice of the joint solve. Signature
+  // preserved for callers. The joint solve is computed once per (baseline,
+  // goldPerDamage) and cached.
   var _tierEVCache = {};
   function tierExpectedValue(baseCost, baseline, goldPerDamage) {
     var key = baseCost + "_" + baseline + "_" + goldPerDamage;
     if (_tierEVCache[key]) return _tierEVCache[key];
-
-    var tiers = ["legendary", "relic", "ancient"];
-    var directExp = {}, pBelow = {};
-    for (var t = 0; t < tiers.length; t++) {
-      var tier = tiers[t];
-      var dist = scoreDistributionForTier(baseCost, tier);
-      var dExp = 0, below = 0;
-      dist.forEach(function (p, sc) {
-        if (sc >= baseline) dExp += p * goldValue(sc, baseline, goldPerDamage);
-        else below += p;
-      });
-      directExp[tier] = dExp;
-      pBelow[tier] = below;
-    }
-
-    // Fusion output mixes for 3 copies of each tier (order: [L, R, A]).
-    var mixL = fusionOutputDist(["legendary", "legendary", "legendary"]);
-    var mixR = fusionOutputDist(["relic", "relic", "relic"]);
-    var mixA = fusionOutputDist(["ancient", "ancient", "ancient"]);
-    var mix = {
-      legendary: [mixL.legendary, mixL.relic, mixL.ancient],
-      relic:     [mixR.legendary, mixR.relic, mixR.ancient],
-      ancient:   [mixA.legendary, mixA.relic, mixA.ancient]
-    };
-    var fc = COSTS.fusion / 3;
-
-    // Build A_mat . E = rhs.
-    //   E[i] - pBelow[i]/3 * (mix[i] . E) = directExp[i] - pBelow[i]*fc
-    var A_mat = [], rhs = [];
-    for (var i = 0; i < 3; i++) {
-      var tierI = tiers[i];
-      var row = [0, 0, 0];
-      var k = pBelow[tierI] / 3;
-      for (var j = 0; j < 3; j++) {
-        row[j] = (i === j ? 1 : 0) - k * mix[tierI][j];
-      }
-      A_mat.push(row);
-      rhs.push(directExp[tierI] - pBelow[tierI] * fc);
-    }
-
-    var E = _solve3x3(A_mat, rhs);
+    var joint = _solveJointEV(baseline, goldPerDamage);
+    var Ec = joint.E[baseCost];
     var result = {
-      legendary: Math.max(0, E[0]),
-      relic: Math.max(0, E[1]),
-      ancient: Math.max(0, E[2])
+      legendary: Math.max(0, Ec.legendary),
+      relic: Math.max(0, Ec.relic),
+      ancient: Math.max(0, Ec.ancient)
     };
     _tierEVCache[key] = result;
     return result;
   }
 
-  // Value (per input gem) of fusing 3 copies of `inputTier` at this (baseCost,
-  // baseline, goldPerDamage): (E[output] - fusionCost) / 3, clamped >= 0.
+  // Value (per input gem) of using a below-baseline gem of grade `inputTier` at
+  // this (baseCost, baseline, goldPerDamage) as fusion fodder. Uses the joint E +
+  // maxG/maxH and the confirmed fusion mixes:
+  //   legendary: 3L (99/1/0)            -> (0.99*E[L_c] + 0.01*E[R_c] - FC)/3
+  //   relic:     1R + 2L (73/25/2)      -> (1/3)*G(c) + (2/3)*maxG - FC
+  //   ancient:   1A + 2L (35/40/25)     -> (1/3)*H(c) + (2/3)*maxH - FC
+  // (the 2 L's are free surplus, so only the FC=500 fusion fee is paid). Clamped >= 0.
   function fusionValueForTier(inputTier, baseCost, baseline, goldPerDamage) {
-    var E = tierExpectedValue(baseCost, baseline, goldPerDamage);
-    var Earr = [E.legendary, E.relic, E.ancient];
-    var mix = fusionOutputDist([inputTier, inputTier, inputTier]);
-    var outVal = mix.legendary * Earr[0] + mix.relic * Earr[1] + mix.ancient * Earr[2];
-    return Math.max(0, (outVal - COSTS.fusion) / 3);
+    var joint = _solveJointEV(baseline, goldPerDamage);
+    var Ec = joint.E[baseCost];
+    var FC = COSTS.fusion;
+    var v;
+    if (inputTier === "legendary") {
+      v = (0.99 * Ec.legendary + 0.01 * Ec.relic - FC) / 3;
+    } else if (inputTier === "relic") {
+      var gC = 0.73 * Ec.legendary + 0.25 * Ec.relic + 0.02 * Ec.ancient;
+      v = (1 / 3) * gC + (2 / 3) * joint.maxG - FC;
+    } else { // ancient
+      var hC = 0.35 * Ec.legendary + 0.40 * Ec.relic + 0.25 * Ec.ancient;
+      v = (1 / 3) * hC + (2 / 3) * joint.maxH - FC;
+    }
+    return Math.max(0, v);
   }
 
   // Gaussian elimination with partial pivoting for a 3x3 system. Returns [0,0,0]

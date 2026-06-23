@@ -442,7 +442,111 @@ def score_distribution_for_tier(base_cost, tier):
     return dist
 
 
-# -------------------- tier expected value (joint fixed point) --------------------
+# -------------------- tier expected value (JOINT fixed point across costs) --------------------
+# Mirrors astrogem.js _solveJointEV / tier_expected_value / fusion_value_for_tier
+# EXACTLY: same cost order, same operation order, same 1e-9 convergence test, so the
+# iteration converges bit-identically (IEEE-754 doubles + identical ops).
+#
+# The three base costs are COUPLED: a below-baseline gem is fodder, and the
+# relic/ancient fusions keep two FREE surplus legendaries that can be steered to
+# whichever cost has the most valuable output (max over c). So we solve one JOINT
+# 9-variable system (3 grades x 3 costs) by iteration. See astrogem.js for the
+# full derivation of the fodder formulas.
+
+JOINT_COSTS = [8, 9, 10]
+_JOINT_EV_CACHE = {}
+
+
+def _solve_joint_ev(baseline, gold_per_damage):
+    """Solve the joint system once for (baseline, gold_per_damage).
+
+    Returns {"E": {8:{legendary,relic,ancient}, 9:{...}, 10:{...}},
+             "maxG": ..., "maxH": ..., "iters": ...}.
+    """
+    key = (baseline, gold_per_damage)
+    if key in _JOINT_EV_CACHE:
+        return _JOINT_EV_CACHE[key]
+
+    tiers = ["legendary", "relic", "ancient"]
+    fc = COSTS["fusion"]
+
+    direct_exp = {}
+    p_below = {}
+    e = {}
+    for c in JOINT_COSTS:
+        direct_exp[c] = {}
+        p_below[c] = {}
+        e[c] = {}
+        for tier in tiers:
+            dist = score_distribution_for_tier(c, tier)
+            d_exp = 0.0
+            below = 0.0
+            for sc, p in dist.items():
+                if sc >= baseline:
+                    d_exp += p * gold_value(sc, baseline, gold_per_damage)
+                else:
+                    below += p
+            direct_exp[c][tier] = d_exp
+            p_below[c][tier] = below
+            e[c][tier] = d_exp  # init E = directExp
+
+    max_g = 0.0
+    max_h = 0.0
+    iters = 0
+    MAX_ITERS = 10000
+    while iters < MAX_ITERS:
+        g = {}
+        h = {}
+        max_g = float("-inf")
+        max_h = float("-inf")
+        for c in JOINT_COSTS:
+            g_c = 0.73 * e[c]["legendary"] + 0.25 * e[c]["relic"] + 0.02 * e[c]["ancient"]
+            h_c = 0.35 * e[c]["legendary"] + 0.40 * e[c]["relic"] + 0.25 * e[c]["ancient"]
+            g[c] = g_c
+            h[c] = h_c
+            if g_c > max_g:
+                max_g = g_c
+            if h_c > max_h:
+                max_h = h_c
+        max_delta = 0.0
+        for c in JOINT_COSTS:
+            fodder_l = (0.99 * e[c]["legendary"] + 0.01 * e[c]["relic"] - fc) / 3
+            fodder_r = (1 / 3) * g[c] + (2 / 3) * max_g - fc
+            fodder_a = (1 / 3) * h[c] + (2 / 3) * max_h - fc
+            new_l = direct_exp[c]["legendary"] + p_below[c]["legendary"] * max(0, fodder_l)
+            new_r = direct_exp[c]["relic"] + p_below[c]["relic"] * max(0, fodder_r)
+            new_a = direct_exp[c]["ancient"] + p_below[c]["ancient"] * max(0, fodder_a)
+            d_l = abs(new_l - e[c]["legendary"])
+            d_r = abs(new_r - e[c]["relic"])
+            d_a = abs(new_a - e[c]["ancient"])
+            if d_l > max_delta:
+                max_delta = d_l
+            if d_r > max_delta:
+                max_delta = d_r
+            if d_a > max_delta:
+                max_delta = d_a
+            e[c]["legendary"] = new_l
+            e[c]["relic"] = new_r
+            e[c]["ancient"] = new_a
+        iters += 1
+        if max_delta < 1e-9:
+            break
+
+    # Recompute maxG / maxH from the CONVERGED E so callers see the final values.
+    max_g = float("-inf")
+    max_h = float("-inf")
+    for c in JOINT_COSTS:
+        g_f = 0.73 * e[c]["legendary"] + 0.25 * e[c]["relic"] + 0.02 * e[c]["ancient"]
+        h_f = 0.35 * e[c]["legendary"] + 0.40 * e[c]["relic"] + 0.25 * e[c]["ancient"]
+        if g_f > max_g:
+            max_g = g_f
+        if h_f > max_h:
+            max_h = h_f
+
+    result = {"E": e, "maxG": max_g, "maxH": max_h, "iters": iters}
+    _JOINT_EV_CACHE[key] = result
+    return result
+
 
 _TIER_EV_CACHE = {}
 
@@ -451,59 +555,30 @@ def tier_expected_value(base_cost, baseline, gold_per_damage):
     key = (base_cost, baseline, gold_per_damage)
     if key in _TIER_EV_CACHE:
         return _TIER_EV_CACHE[key]
-
-    tiers = ["legendary", "relic", "ancient"]
-    direct_exp = {}
-    p_below = {}
-    for tier in tiers:
-        dist = score_distribution_for_tier(base_cost, tier)
-        d_exp = 0.0
-        below = 0.0
-        for sc, p in dist.items():
-            if sc >= baseline:
-                d_exp += p * gold_value(sc, baseline, gold_per_damage)
-            else:
-                below += p
-        direct_exp[tier] = d_exp
-        p_below[tier] = below
-
-    mix_l = fusion_output_dist(["legendary", "legendary", "legendary"])
-    mix_r = fusion_output_dist(["relic", "relic", "relic"])
-    mix_a = fusion_output_dist(["ancient", "ancient", "ancient"])
-    mix = {
-        "legendary": [mix_l["legendary"], mix_l["relic"], mix_l["ancient"]],
-        "relic": [mix_r["legendary"], mix_r["relic"], mix_r["ancient"]],
-        "ancient": [mix_a["legendary"], mix_a["relic"], mix_a["ancient"]],
-    }
-    fc = COSTS["fusion"] / 3.0
-
-    a_mat = []
-    rhs = []
-    for i in range(3):
-        tier_i = tiers[i]
-        k = p_below[tier_i] / 3.0
-        row = []
-        for j in range(3):
-            row.append((1 if i == j else 0) - k * mix[tier_i][j])
-        a_mat.append(row)
-        rhs.append(direct_exp[tier_i] - p_below[tier_i] * fc)
-
-    e = _solve3x3(a_mat, rhs)
+    joint = _solve_joint_ev(baseline, gold_per_damage)
+    e_c = joint["E"][base_cost]
     result = {
-        "legendary": max(0.0, e[0]),
-        "relic": max(0.0, e[1]),
-        "ancient": max(0.0, e[2]),
+        "legendary": max(0.0, e_c["legendary"]),
+        "relic": max(0.0, e_c["relic"]),
+        "ancient": max(0.0, e_c["ancient"]),
     }
     _TIER_EV_CACHE[key] = result
     return result
 
 
 def fusion_value_for_tier(input_tier, base_cost, baseline, gold_per_damage):
-    e = tier_expected_value(base_cost, baseline, gold_per_damage)
-    e_arr = [e["legendary"], e["relic"], e["ancient"]]
-    mix = fusion_output_dist([input_tier, input_tier, input_tier])
-    out_val = mix["legendary"] * e_arr[0] + mix["relic"] * e_arr[1] + mix["ancient"] * e_arr[2]
-    return max(0.0, (out_val - COSTS["fusion"]) / 3.0)
+    joint = _solve_joint_ev(baseline, gold_per_damage)
+    e_c = joint["E"][base_cost]
+    fc = COSTS["fusion"]
+    if input_tier == "legendary":
+        v = (0.99 * e_c["legendary"] + 0.01 * e_c["relic"] - fc) / 3
+    elif input_tier == "relic":
+        g_c = 0.73 * e_c["legendary"] + 0.25 * e_c["relic"] + 0.02 * e_c["ancient"]
+        v = (1 / 3) * g_c + (2 / 3) * joint["maxG"] - fc
+    else:  # ancient
+        h_c = 0.35 * e_c["legendary"] + 0.40 * e_c["relic"] + 0.25 * e_c["ancient"]
+        v = (1 / 3) * h_c + (2 / 3) * joint["maxH"] - fc
+    return max(0.0, v)
 
 
 def _solve3x3(a, b):

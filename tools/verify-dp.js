@@ -81,10 +81,10 @@ function dpSelfCheck() {
     // t==0 base case MUST equal the terminal gem value.
     ["t0 base-case == gemValue", W(c10perfect, 0, 3, 0, 1.0, 1500000, false, "wor"), gv(c10perfect, 1.0, 1500000)],
     ["perfect t0 base1", W(c10perfect, 0, 3, 0, 1.0, 1500000, false, "wor"), 647970.1254],
-    ["start10 t5 r3 base1 wor", W(start10, 5, 3, 0, 1.0, 1500000, false, "wor"), 1578.8649],
-    ["start10 t5 r3 base1 iid", W(start10, 5, 3, 0, 1.0, 1500000, false, "iid"), 987.0122],
-    ["mid t3 r2 base1 wor", W(mid, 3, 2, 0, 1.0, 1500000, false, "wor"), 26737.6561],
-    ["start10 t6 r3 base0.5 RB wor", W(start10, 6, 3, 0, 0.5, 1500000, true, "wor"), 264324.4839]
+    ["start10 t5 r3 base1 wor", W(start10, 5, 3, 0, 1.0, 1500000, false, "wor"), 1592.0427],
+    ["start10 t5 r3 base1 iid", W(start10, 5, 3, 0, 1.0, 1500000, false, "iid"), 998.2995],
+    ["mid t3 r2 base1 wor", W(mid, 3, 2, 0, 1.0, 1500000, false, "wor"), 26817.1735],
+    ["start10 t6 r3 base0.5 RB wor", W(start10, 6, 3, 0, 0.5, 1500000, true, "wor"), 264369.3536]
   ];
   var ok = 0, bad = [];
   cases.forEach(function (c) {
