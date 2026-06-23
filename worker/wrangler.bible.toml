@@ -1,0 +1,28 @@
+# wrangler.bible.toml — Cloudflare Worker for the Grader tab's "pull from
+# lostark.bible" feature. Separate from wrangler.toml (the Workers-AI vision
+# Worker) so the two deploy independently and neither breaks the other.
+#
+# Fetches a lostark.bible character page server-side with a browser User-Agent
+# (the site 403s default fetchers but returns 200 for a browser UA), extracts the
+# embedded arkGridCores data, and returns each equipped astrogem as JSON with CORS
+# headers. No bindings, no secrets, no external paid API — just an HTML fetch.
+#
+# Deploy:   cd worker && wrangler deploy --config wrangler.bible.toml
+# Local:    cd worker && wrangler dev --config wrangler.bible.toml
+#
+# After deploy, copy the printed https URL into grader.js (WORKER_URL).
+
+name = "astrogem-bible"
+main = "astrogem-bible.js"
+compatibility_date = "2026-06-01"
+
+# Observability (logs) — optional, handy while validating the parser.
+[observability]
+enabled = true
+
+# --- Optional: lock CORS to your Pages origin instead of "*" ---
+# The Worker hardcodes ALLOW_ORIGIN = "*" (see TODO in astrogem-bible.js). To
+# restrict it without editing source you could read an env var; left commented to
+# keep the default zero-config.
+# [vars]
+# ALLOW_ORIGIN = "https://astrogem-calculator.pages.dev"

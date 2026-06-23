@@ -6,9 +6,10 @@
 <!--
   App shell for the Lost Ark astrogem-cutting tool.
 
-  Two tabs: "Pipeline" (#tab-pipeline) and "Advisor" (#tab-advisor). The tab bar
-  toggles the .active class on the panes. The model core is loaded first so the
-  tab scripts can call its globals (window.score, window.tierExpectedValue,
+  Three tabs: "Grader" (#tab-grader, first/default), "Pipeline" (#tab-pipeline),
+  and "Advisor" (#tab-advisor). The tab bar toggles the .active class on the panes.
+  The model core is loaded first so the tab scripts can call its globals
+  (window.Astrogem.grade, window.score, window.tierExpectedValue,
   window.evaluateActions, ...).
 
   Load order matters:
@@ -17,8 +18,10 @@
     3. model/dp.js        -> attaches the exact Bellman DP (evaluateActionsDP,
                              topLevelAdvice; needs astrogem.js + nested.js). The
                              advisor uses this by default and falls back to the MC.
-    4. pipeline.js        -> renders #tab-pipeline (STUB for now)
-    5. advisor.js         -> renders #tab-advisor (STUB for now)
+    4. grader.js          -> renders #tab-grader (grades finished gems; calls
+                             Astrogem.grade / gemRank / damagePercent)
+    5. pipeline.js        -> renders #tab-pipeline
+    6. advisor.js         -> renders #tab-advisor
 
   Styling lives in styles.css (shared dark theme + tab styling). The two UI
   agents will flesh out pipeline.js / advisor.js using the sticky-input,
@@ -39,12 +42,14 @@
 
   <!-- Tab bar -->
   <div class="tabbar" id="tabbar">
-    <button class="tab active" data-tab="pipeline" onclick="selectTab('pipeline')">Pipeline</button>
+    <button class="tab active" data-tab="grader" onclick="selectTab('grader')">Grader</button>
+    <button class="tab" data-tab="pipeline" onclick="selectTab('pipeline')">Pipeline</button>
     <button class="tab" data-tab="advisor" onclick="selectTab('advisor')">Advisor</button>
   </div>
 
   <!-- Tab panes -->
-  <section id="tab-pipeline" class="tabpane active"></section>
+  <section id="tab-grader" class="tabpane active"></section>
+  <section id="tab-pipeline" class="tabpane"></section>
   <section id="tab-advisor" class="tabpane"></section>
 </div>
 
@@ -68,6 +73,7 @@ function selectTab(name){
 <script src="ocr/engine.js"></script>
 <script src="ocr/tesseract-engine.js"></script>
 <script src="ocr/workersai-engine.js"></script>
+<script src="grader.js"></script>
 <script src="pipeline.js"></script>
 <script src="advisor.js"></script>
 </body></html>
