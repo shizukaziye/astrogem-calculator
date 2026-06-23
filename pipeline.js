@@ -885,39 +885,53 @@
     return '<div class="lg-cellwrap">'
       + '<div class="lg-cell"><div class="lg-cell-hdr">Uncommon · c9</div><div class="bkt-grid">' + rh + '</div></div>'
       + '<div class="lg-callouts">'
-      + '<div class="lg-co"><b>Rows</b> = effect pair: <b>2D</b> both dmg · <b>Op</b> best single · <b>Sub</b> worse single · <b>No</b> both dead.</div>'
-      + '<div class="lg-co"><b>Number</b> = cut-EV (gold, after cost). Bigger = cut it.</div>'
-      + '<div class="lg-legendrow">'
-      + '<span class="lg-chip"><span class="sw v-green"></span><b class="reset-ico">↻</b> reset-worthy (≥' + fmtGold(V.green) + ')</span>'
-      + '<span class="lg-chip"><span class="sw v-y2"></span>cut, no reset (&gt;0)</span>'
-      + '<span class="lg-chip"><span class="sw v-red"></span>don\'t cut (≤0)</span>'
-      + '<span class="lg-chip"><span class="sw v-purple"></span>⚜ fuse block first (NRB)</span>'
+      + '<p class="lg-co">Every gem column is split into <b>four rows, one per effect pair</b>. The pair is fixed when the gem rolls, so each row answers: <i>if your gem ends up with this pair, is it worth cutting?</i></p>'
+      + '<dl class="lg-defs">'
+      + '<dt>2D</dt><dd>both effects deal damage</dd>'
+      + '<dt>Op</dt><dd>the better single damage effect, other dead</dd>'
+      + '<dt>Sub</dt><dd>the weaker single damage effect, other dead</dd>'
+      + '<dt>No</dt><dd>both effects dead</dd>'
+      + '</dl>'
+      + '<p class="lg-co">The <b>number</b> is the cut’s expected gold after the cutting cost. <b>Higher is better</b>; the cell color tells you what to do:</p>'
+      + '<div class="lg-keyrows">'
+      + '<div class="lg-keyrow"><span class="sw v-green"></span><span><b>Cut, and reset if it lands low</b> — cut-EV ≥ ' + fmtGold(V.green) + ' (marked <b class="reset-ico">↻</b>)</span></div>'
+      + '<div class="lg-keyrow"><span class="sw v-y2"></span><span><b>Cut, but don’t reset</b> — cut-EV is positive but under ' + fmtGold(V.green) + '</span></div>'
+      + '<div class="lg-keyrow"><span class="sw v-red"></span><span><b>Don’t cut</b> — cut-EV is zero or negative</span></div>'
+      + '<div class="lg-keyrow"><span class="sw v-purple"></span><span><b>Fuse the whole gem first</b> — a rarity upgrade beats cutting it (NRB only, marked ⚜)</span></div>'
       + '</div>'
-      + '<div class="lg-co" style="color:#8fd0ff;margin-top:2px"><b>Hover a cell</b> → hit %, exp. spend &amp; score, fodder split, fuse-vs-open.</div>'
+      + '<p class="lg-co lg-hover">Hover any cell for the full breakdown: hit chance, expected spend &amp; score, fodder split, and fuse-vs-open.</p>'
       + '</div></div>';
   }
 
   function legendHtml() {
-    return '<div class="legend-box"><div class="lg-title">How to read these tables</div>'
+    return '<div class="legend-box">'
+      + '<div class="lg-title">How to read these tables</div>'
+      + '<div class="lg-cols">'
+      // --- left column: reading one gem cell ---
+      + '<div class="lg-sec">'
+      + '<div class="lg-h">Reading a gem cell</div>'
       + sampleCellSvg()
-      + '<div class="lg-legendrow" style="margin-top:12px">'
-      + '<span class="k">Boxes</span> buy if EV&gt;cost (vendor ' + fmtGold(CONST.BOX_VENDOR.cost) + ' · mat ' + fmtGold(CONST.BOX_MAT.cost) + ' · epic ' + fmtGold(CONST.BOX_EPIC.cost) + ')'
-      + ' &nbsp;·&nbsp; <span class="k">Direct/Fuse/wk</span> above-baseline gems/wk (cut+reset / post-cut fusion)'
-      + ' &nbsp;·&nbsp; <span class="k">Weeks</span> = ' + CONST.SLOTS + '/Total'
       + '</div>'
-      + '<div class="lg-legendrow">'
-      + '<span class="lg-chip"><span class="sw fast"></span>≤8 wk</span>'
-      + '<span class="lg-chip"><span class="sw med"></span>8–26</span>'
-      + '<span class="lg-chip"><span class="sw slow"></span>&gt;26</span>'
-      + ' &nbsp;·&nbsp; <span class="k">Gold</span> boxes+cut+reset+fuse/wk'
-      + ' &nbsp;·&nbsp; <span class="k">cp%</span> = ' + CONST.CP_MULT + '·(1+Total%dmg/100)−1 &nbsp; <span class="pt-dim">(Total = ' + CONST.SLOTS + '·Avg, vs wp/order ' + CONST.CP_BASELINE_WP + ' = 0 dmg)</span>'
+      // --- right column: the weekly pipeline columns ---
+      + '<div class="lg-sec">'
+      + '<div class="lg-h">The weekly pipeline columns</div>'
+      + '<p class="lg-co">Right of the gem grid, each baseline row shows what one week of cutting toward all ' + CONST.SLOTS + ' gems looks like at that quality target.</p>'
+      + '<dl class="lg-defs lg-defs-wide">'
+      + '<dt>Boxes</dt><dd>Gem boxes worth buying that week — bought only when a box’s expected gem value beats its price (vendor ' + fmtGold(CONST.BOX_VENDOR.cost) + ' · mat ' + fmtGold(CONST.BOX_MAT.cost) + ' · epic ' + fmtGold(CONST.BOX_EPIC.cost) + ').</dd>'
+      + '<dt>Direct · Fuse · Total</dt><dd>Above-baseline gems earned per week: <b>Direct</b> from cutting and resetting, <b>Fuse</b> from fusing the leftovers, <b>Total</b> their sum.</dd>'
+      + '<dt>Weeks</dt><dd>Weeks to fill all ' + CONST.SLOTS + ' slots at that rate (' + CONST.SLOTS + ' ÷ Total), shaded by speed: '
+      + '<span class="lg-pill fast">≤ 8</span><span class="lg-pill med">8–26</span><span class="lg-pill slow">&gt; 26</span></dd>'
+      + '<dt>Gold</dt><dd>Net gold per week from the whole loop — boxes, cutting, resets, and fusion combined.</dd>'
+      + '<dt>cp%</dt><dd>Combat-power gain once all ' + CONST.SLOTS + ' gems clear this baseline: ' + CONST.CP_MULT + ' × (1 + Total%dmg ÷ 100) − 1, with Total%dmg = ' + CONST.SLOTS + ' × average gem damage. Zero point: a willpower-/order-' + CONST.CP_BASELINE_WP + ' gem with dead side-effects.</dd>'
+      + '</dl>'
       + '</div>'
-      + '<div class="lg-legendrow pt-dim">Pipeline economy is NRB-based (income/boxes/gold aren\'t roster-bound) — shown in both views; RB only swaps the cell cut-EVs. Weeks = vendor + dailies only.</div>'
+      + '</div>'
+      + '<p class="lg-foot">The pipeline columns are always computed Non-Roster-Bound — income, boxes, and gold don’t depend on roster binding — so they stay the same in both views. Switching to Roster Bound only changes the per-gem cut-EVs in the grid.</p>'
       + '</div>';
   }
 
   function methodologyHtml() {
-    return '<details class="method"><summary>Methodology</summary>'
+    return '<details class="method"><summary>How these tables are computed</summary>'
       + '<p><b>The cut decision is per BUCKET (effect pair).</b> A gem\'s two effects are its archetype: <b>2_damage</b> (both '
       + 'damage), <b>optimal_damage</b> (better single damage + dead), <b>suboptimal_damage</b> (worse single + dead), '
       + '<b>no_damage</b> (both dead). Each bucket\'s cut value is the exact Bellman-DP value of cutting a fresh level-1 gem of '
@@ -974,13 +988,35 @@
   // ---------------------------------------------------------------------------
   function scopedStyle() {
     return '<style>'
-      // full-width: break the Pipeline tab out of the centered .wrap (max-width:1180px)
-      // so the table can use the whole viewport. Re-pad the inner content horizontally.
-      + '#tab-pipeline.active{width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw)}'
-      + '#tab-pipeline > *{padding-left:18px;padding-right:18px}'
-      + '#tab-pipeline .legend-box{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin:8px 0 16px}'
-      + '#tab-pipeline .legend-box .lg-title{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);font-weight:700;margin-bottom:8px}'
-      + '#tab-pipeline .lg-h{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);font-weight:700;margin:10px 0 4px}'
+      // The Pipeline table is wide (~1520px natural min), so break it out of the centered
+      // .wrap (max-width:1180px) — BUT cap it to a comfortable centered width with side
+      // deadspace, never edge-to-edge. --pl-w = min(1560px, viewport - 96px): on a wide
+      // window it tops out at 1560 (leaving margins); on a narrower one it tracks the
+      // viewport. The negative-margin recenters this block on the viewport regardless of
+      // .wrap's own width. If the window ever gets narrower than the table, only the inner
+      // .tablewrap scrolls (overflow-x:auto) — the page itself never scrolls sideways.
+      + '#tab-pipeline.active{--pl-w:min(1560px, calc(100vw - 96px));width:var(--pl-w);max-width:none;margin-left:calc(-1 * ((var(--pl-w) - 100%) / 2));margin-right:0}'
+      + '#tab-pipeline > *{padding-left:0;padding-right:0}'
+      + '#tab-pipeline .legend-box{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin:8px 0 16px}'
+      + '#tab-pipeline .legend-box .lg-title{font-size:13px;font-weight:800;letter-spacing:-.01em;color:var(--text);margin:0 0 14px}'
+      + '#tab-pipeline .lg-cols{display:grid;grid-template-columns:1fr 1fr;gap:28px}'
+      + '#tab-pipeline .lg-cols > .lg-sec + .lg-sec{padding-left:28px;border-left:1px solid var(--border)}'
+      + '@media(max-width:1080px){#tab-pipeline .lg-cols{grid-template-columns:1fr;gap:0}'
+      + '#tab-pipeline .lg-cols > .lg-sec + .lg-sec{padding-left:0;border-left:none;padding-top:16px;margin-top:16px;border-top:1px solid var(--border)}}'
+      + '#tab-pipeline .lg-h{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--accent);font-weight:700;margin:0 0 12px}'
+      + '#tab-pipeline .lg-co{font-size:12.5px;line-height:1.55;color:var(--text);margin:0 0 12px}'
+      + '#tab-pipeline .lg-co i{color:var(--dim);font-style:italic}'
+      + '#tab-pipeline .lg-defs{display:grid;grid-template-columns:max-content 1fr;gap:7px 14px;margin:0 0 12px;font-size:12.5px;line-height:1.5;align-items:baseline}'
+      + '#tab-pipeline .lg-defs dt{font-weight:800;color:var(--accent);font-variant-numeric:tabular-nums;white-space:nowrap}'
+      + '#tab-pipeline .lg-defs dd{margin:0;color:var(--text)}'
+      + '#tab-pipeline .lg-defs-wide dt{color:var(--high)}'
+      + '#tab-pipeline .lg-pill{display:inline-block;font-size:10.5px;font-weight:700;border-radius:5px;padding:1px 7px;margin:0 0 0 5px;font-variant-numeric:tabular-nums;vertical-align:baseline}'
+      + '#tab-pipeline .lg-keyrows{display:grid;gap:8px;margin:2px 0 0}'
+      + '#tab-pipeline .lg-keyrow{display:flex;align-items:flex-start;gap:9px;font-size:12.5px;line-height:1.45;color:var(--text)}'
+      + '#tab-pipeline .lg-keyrow .sw{margin-top:2px;flex-shrink:0}'
+      + '#tab-pipeline .lg-keyrow b{font-weight:700}'
+      + '#tab-pipeline .lg-hover{color:#8fd0ff;margin:12px 0 0}'
+      + '#tab-pipeline .lg-foot{font-size:11.5px;line-height:1.5;color:var(--dim);margin:18px 0 0;padding-top:14px;border-top:1px solid var(--border)}'
       + '#tab-pipeline .sw{display:inline-block;width:13px;height:13px;border-radius:3px;vertical-align:middle;margin-right:5px;border:1px solid #0006}'
       + '#tab-pipeline h1.sec{font-size:16px;color:var(--accent);border-top:2px solid var(--border);padding-top:16px;margin-top:30px}'
       + '#tab-pipeline h2{font-size:15px;color:var(--accent);margin-top:22px}'
@@ -989,8 +1025,6 @@
       + '#tab-pipeline .lg-cell{flex:0 0 200px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--panel2)}'
       + '#tab-pipeline .lg-cell-hdr{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);font-weight:700;padding:5px 8px;border-bottom:1px solid var(--border);background:var(--panel)}'
       + '#tab-pipeline .lg-callouts{flex:1;min-width:280px;display:flex;flex-direction:column;gap:6px}'
-      + '#tab-pipeline .lg-co{font-size:12px;color:var(--text)}'
-      + '#tab-pipeline .lg-co-k{display:inline-block;min-width:88px;color:var(--accent);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-right:4px}'
       + '#tab-pipeline .reset-ico{color:#bfe7c8}'
       + '#tab-pipeline .pipe-table{width:100%;min-width:100%;font-size:12.5px;margin:6px 0 8px;border-collapse:collapse}'
       + '#tab-pipeline .pipe-table.fusion{font-size:12px}'
@@ -1028,10 +1062,6 @@
       + '#tab-pipeline .rank-badge{display:inline-block;padding:1px 7px;border-radius:99px;font-size:10.5px;font-weight:800;line-height:1.5;vertical-align:middle;font-variant-numeric:tabular-nums}'
       + '#tab-pipeline .gpd-btn{min-width:48px;text-align:center}'
       + '#tab-pipeline .tablewrap{overflow-x:auto;max-width:100%}'
-      // ---- legend sample-cell tweaks ----
-      + '#tab-pipeline .lg-legendrow{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11.5px;color:var(--text);margin:2px 0}'
-      + '#tab-pipeline .lg-legendrow span.k{color:var(--accent);font-weight:700}'
-      + '#tab-pipeline .lg-chip{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}'
       // ---- hover popover (appended to <body>, so NOT scoped under #tab-pipeline) ----
       + '.pl-pop{position:absolute;z-index:9999;max-width:420px;min-width:330px;background:#10131c;'
       + 'border:1px solid #39414f;border-radius:10px;box-shadow:0 10px 34px #000a,0 0 0 1px #0006;'

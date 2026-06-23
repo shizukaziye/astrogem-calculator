@@ -177,6 +177,13 @@
 '  #tab-grader .gr-weak .wk-slot{font-size:12.5px;color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
 '  #tab-grader .gr-weak .wk-dmg{font-size:12px;color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap}' +
 '  #tab-grader .gr-weak .wk-empty{font-size:12px;color:var(--dim);padding:6px 0}' +
+'  #tab-grader .gr-weak .wk-row[data-target]{cursor:pointer;border-radius:6px;transition:background .12s}' +
+'  #tab-grader .gr-weak .wk-row[data-target]:hover{background:rgba(255,255,255,.05)}' +
+'  #tab-grader .gr-gem .meta .wpc{font-variant-numeric:tabular-nums;font-weight:600}' +
+'  #tab-grader .gr-gem .meta .wpc.pos{color:#6fbf8a}' +
+'  #tab-grader .gr-gem .meta .wpc.neg{color:#d08a8a}' +
+'  #tab-grader .gr-gem.flash{animation:grFlash 1.4s ease-out}' +
+'  @keyframes grFlash{0%,35%{box-shadow:0 0 0 2px var(--accent),0 0 16px -2px var(--accent)}100%{box-shadow:0 0 0 0 rgba(0,0,0,0)}}' +
 '  #tab-grader .mbtn:disabled{opacity:.45;cursor:not-allowed}' +
 '  #tab-grader .gr-cache{display:inline-block;margin-left:10px;font-size:10px;font-weight:700;text-transform:none;letter-spacing:.02em;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 9px;vertical-align:middle}' +
 '  #tab-grader .gr-cache.fresh{color:var(--good)}' +
@@ -187,12 +194,12 @@
 '  <div class="ihdr"><span>Grader — score a finished gem</span><span class="tgl" onclick="window.__grToggleInputs()"><span id="gr-caret">&#9662;</span></span></div>' +
 '  <div id="gr-inputs-body">' +
 '    <div class="gr-modes">' +
-'      <button class="mbtn active" id="gr-mode-custom" type="button">Custom input</button>' +
-'      <button class="mbtn" id="gr-mode-pull" type="button">Pull from lostark.bible</button>' +
+'      <button class="mbtn active" id="gr-mode-pull" type="button">Pull from lostark.bible</button>' +
+'      <button class="mbtn" id="gr-mode-custom" type="button">Custom input</button>' +
 '    </div>' +
 
 // --- custom mode ---
-'    <div class="gr-modebody" id="gr-body-custom">' +
+'    <div class="gr-modebody" id="gr-body-custom" style="display:none">' +
 '      <div class="ig">' +
 '        <div class="fld"><label>Base cost</label><select id="gr-cost">' + opts([8, 9, 10], 10) + '</select></div>' +
 '        <div class="fld"><label>Gem type</label><select id="gr-type">' + opts([{ v: "order", t: "Order" }, { v: "chaos", t: "Chaos" }], "order") + '</select></div>' +
@@ -207,7 +214,7 @@
 '    </div>' +
 
 // --- pull mode ---
-'    <div class="gr-modebody" id="gr-body-pull" style="display:none">' +
+'    <div class="gr-modebody" id="gr-body-pull">' +
 '      <div class="ig">' +
 '        <div class="fld"><label>Region</label><select id="gr-region">' + opts(REGIONS, "NA") + '</select></div>' +
 '        <div class="fld" style="grid-column:span 2"><label>Character name</label><input id="gr-name" type="text" placeholder="e.g. Paroxysmal" autocomplete="off"></div>' +
@@ -307,21 +314,38 @@
     return esc(name) + ' <span class="mono">' + (lvl != null ? lvl : "?") + '</span>';
   }
 
+  // Willpower's signed share of this gem's displayed %dmg: relDamage with the gem's
+  // own willpower minus the same gem pinned at the 4.25 willpower baseline. Surfaces
+  // that willpower IS in the number — it's small (~0.078%/level), so easy to miss.
+  function willpowerContribution(cfg) {
+    var c = {}; for (var k in cfg) { if (cfg.hasOwnProperty(k)) c[k] = cfg[k]; }
+    c.willpowerLevel = 4.25;
+    return relDamage(cfg) - relDamage(c);
+  }
+  function signedPct(x) {
+    return (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(2) + "%";
+  }
+
   function gemCardHtml(cfg) {
     var v = validateConfig(cfg);
-    var g, rank, dmg, cls;
+    var g, rank, dmg, cls, wpc;
     // %dmg shown is damage ABOVE the cp baseline (relDamage); grade/rank unchanged.
-    if (v.valid) { g = grade(cfg); rank = gemRank(cfg); dmg = relDamage(cfg); cls = rankClass(rank); }
+    if (v.valid) { g = grade(cfg); rank = gemRank(cfg); dmg = relDamage(cfg); cls = rankClass(rank); wpc = willpowerContribution(cfg); }
     var rkHtml = v.valid
       ? rankBadge(rank) + '<div class="gd">' + g.toFixed(0) + '</div>'
       : '<div class="rk">?</div>';
     var dmgHtml = v.valid ? '<span class="dmg">' + dmg.toFixed(3) + '%</span>' : '<span class="bad">' + esc(v.error || "invalid") + '</span>';
+    var idAttr = (cfg._gidx != null) ? ' id="gr-gem-' + cfg._gidx + '"' : '';
+    var wpVal = (cfg.willpowerLevel != null ? cfg.willpowerLevel : "?");
+    var wpShare = v.valid
+      ? ' <span class="wpc ' + (wpc >= 0 ? "pos" : "neg") + '" title="Willpower’s share of this gem’s % damage">' + signedPct(wpc) + '</span>'
+      : '';
     return '' +
-'<div class="gr-gem">' +
+'<div class="gr-gem"' + idAttr + '>' +
 '  <div class="rkbox ' + (cls || "") + '">' + rkHtml + '</div>' +
 '  <div class="meta">' +
 '    <div class="top">c' + cfg.baseCost + ' ' + esc(cfg.gemType) + ' &middot; ' + dmgHtml + '</div>' +
-'    <div class="eff">WP ' + (cfg.willpowerLevel != null ? cfg.willpowerLevel : "?") +
+'    <div class="eff">WP ' + wpVal + wpShare +
        ' &middot; Order ' + (cfg.orderLevel != null ? cfg.orderLevel : "?") + '</div>' +
 '    <div class="eff">' + effLabel(cfg.effect1, cfg.effect1Level) + ' &nbsp;/&nbsp; ' + effLabel(cfg.effect2, cfg.effect2Level) + '</div>' +
 '  </div>' +
@@ -343,7 +367,8 @@
     } else {
       rows = list.map(function (e) {
         var slot = e.gem.slot || ("Core " + (e.gem.coreBase || "?"));
-        return '<div class="wk-row">' +
+        var tgt = (e.gem._gidx != null) ? ' data-target="gr-gem-' + e.gem._gidx + '"' : '';
+        return '<div class="wk-row"' + tgt + ' title="Jump to this gem">' +
           rankBadge(rankFromGrade(e.g)) +
           '<span class="wk-slot">' + esc(slot) + '</span>' +
           '<span class="wk-dmg">' + e.dmg.toFixed(3) + '%</span>' +
@@ -362,6 +387,8 @@
   function renderLoadout(data) {
     var out = $("gr-result");
     var gems = (data && data.gems) || [];
+    // tag each gem with a stable index so the Weakest-3 rows can jump to its card
+    gems.forEach(function (x, i) { x._gidx = i; });
     if (!gems.length) {
       out.innerHTML = '<div class="panel"><div class="gr-status err">No gems found for this character.</div></div>';
       return;
@@ -408,6 +435,21 @@
     });
 
     out.innerHTML = html;
+    // Weakest-3 rows scroll to + flash their gem card
+    Array.prototype.forEach.call(out.querySelectorAll(".wk-row[data-target]"), function (row) {
+      row.addEventListener("click", function () { focusGem(row.getAttribute("data-target")); });
+    });
+  }
+
+  // scroll a loadout gem card into view and flash it (restartable on repeat clicks)
+  function focusGem(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.remove("flash");
+    void el.offsetWidth;
+    el.classList.add("flash");
+    setTimeout(function () { el.classList.remove("flash"); }, 1400);
   }
 
   function setPullStatus(msg, kind) {
@@ -535,8 +577,9 @@
       renderLoadout(charData);
     };
 
-    // first paint
-    renderCustom();
+    // first paint: open in "Pull from lostark.bible" mode (the primary mode). Custom
+    // mode is fully wired above (effect lists built), one toggle-click away.
+    selectMode("pull");
   }
 
   if (document.readyState === "loading") {
