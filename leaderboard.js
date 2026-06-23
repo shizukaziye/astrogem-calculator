@@ -37,6 +37,10 @@
     var fn = (A && A.validateConfig) || window.validateConfig;
     return fn ? fn(cfg) : { valid: true };
   }
+  function relDamage(cfg) {
+    var fn = (A && A.relDamage) || window.relDamage;
+    return fn ? fn(cfg) : 0;
+  }
 
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
@@ -71,6 +75,17 @@
     return n ? sum / n : null;
   }
 
+  // Total damage % over a character's VALID gems — the SAME figure the Grader shows
+  // (sum of relDamage, ~10% for a strong loadout). Null when there are no valid gems.
+  function totalDmgOf(char) {
+    var gems = (char && char.gems) || [];
+    var sum = 0, n = 0;
+    for (var i = 0; i < gems.length; i++) {
+      if (validateConfig(gems[i]).valid) { sum += relDamage(gems[i]); n++; }
+    }
+    return n ? sum : null;
+  }
+
   var STYLE =
 '<style>' +
 '  #tab-leaderboard .lb-status{font-size:12px;color:var(--dim);margin:2px 0 12px;min-height:16px}' +
@@ -82,6 +97,7 @@
 '  #tab-leaderboard .lb-rank{font-variant-numeric:tabular-nums;color:var(--dim);font-weight:700;width:48px}' +
 '  #tab-leaderboard .lb-name{font-weight:700;color:var(--text);text-decoration:none;border-bottom:1px dotted transparent}' +
 '  #tab-leaderboard .lb-name:hover{color:var(--accent);border-bottom-color:var(--accent)}' +
+'  #tab-leaderboard .lb-dmg{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}' +
 '  #tab-leaderboard .lb-region{color:var(--dim);font-weight:600;font-size:11px;margin-left:6px}' +
 '  #tab-leaderboard .lb-grade{font-variant-numeric:tabular-nums;font-weight:700}' +
 '  #tab-leaderboard .lb-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-weight:800;line-height:1.4;font-variant-numeric:tabular-nums;margin-left:8px;font-size:12px}' +
@@ -128,11 +144,13 @@
       var avg = c._avg;
       var gradeTxt = avg == null ? "—" : avg.toFixed(1);
       var badge = avg == null ? "" : rankBadge(rankFromGrade(avg));
+      var dmgTxt = c._dmg == null ? "—" : c._dmg.toFixed(2) + "%";
       return '<tr data-i="' + i + '">' +
         '<td class="lb-rank">#' + (i + 1) + '</td>' +
         '<td><a class="lb-name" href="' + bibleUrl(c.region, c.name) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + esc(c.name || "—") + '</a>' +
           '<span class="lb-region">' + esc(c.region || "") + '</span></td>' +
         '<td><span class="lb-grade">' + gradeTxt + '</span>' + badge + '</td>' +
+        '<td class="lb-dmg">' + dmgTxt + '</td>' +
         '<td class="lb-age">' + esc(ageLabel(c.pulledAt)) + '</td>' +
         '</tr>';
     }).join("");
@@ -140,7 +158,7 @@
     var body = $("lb-body");
     body.innerHTML =
 '<table>' +
-'  <thead><tr><th>Rank</th><th>Character</th><th>Avg grade</th><th>Last pulled</th></tr></thead>' +
+'  <thead><tr><th>Rank</th><th>Character</th><th>Avg grade</th><th>Total dmg%</th><th>Last pulled</th></tr></thead>' +
 '  <tbody id="lb-rows">' + rows + '</tbody>' +
 '</table>' +
 '<div class="lb-hint">Click a character to open its loadout in the Grader.</div>';
@@ -187,7 +205,7 @@
         return;
       }
       // compute avg grade, sort descending (nulls last)
-      chars.forEach(function (c) { c._avg = avgGradeOf(c); });
+      chars.forEach(function (c) { c._avg = avgGradeOf(c); c._dmg = totalDmgOf(c); });
       chars.sort(function (a, b) {
         var av = a._avg == null ? -1 : a._avg;
         var bv = b._avg == null ? -1 : b._avg;
