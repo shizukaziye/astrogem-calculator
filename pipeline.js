@@ -50,7 +50,8 @@
   // %-damage threshold via window.gradeToScore(grade) — grades 50-85 land at
   // %-damage 0.60-1.18, inside the baked range, so the existing bilinear
   // interpolation over the baked (gpd, baseline) grid stays valid.
-  var GRADE_ROWS = [50, 60, 65, 70, 75, 80, 85];
+  // One row per rank C- … S+ (the grade is mid-band so rankFromGrade returns that rank).
+  var GRADE_ROWS = [52, 57, 62, 66, 70, 73, 77, 80, 83, 87, 92, 97];
 
   // Verdict gold-EV bands (from the deployed page).
   var V = { green: 18000, yellowHi: 10000, yellowMid: 5000, yellowLo: 1000 };
