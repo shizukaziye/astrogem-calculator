@@ -119,6 +119,11 @@
     return ' <span class="gr-cache' + (data.cached ? "" : " fresh") + '">' + txt + '</span>';
   }
 
+  // lostark.bible profile URL for a character (the loadout name links here).
+  function bibleUrl(region, name) {
+    return "https://lostark.bible/character/" + encodeURIComponent(region || "") + "/" + encodeURIComponent(name || "");
+  }
+
   // ---------------- markup ----------------
   function tabMarkup() {
     return '' +
@@ -160,6 +165,8 @@
 '  #tab-grader .gr-gem .meta .eff{color:var(--dim)}' +
 '  #tab-grader .gr-gem .meta .dmg{color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700}' +
 '  #tab-grader .gr-sum{display:flex;gap:20px;flex-wrap:wrap;align-items:center}' +
+'  #tab-grader h2 .bible-link{color:inherit;text-decoration:none;border-bottom:1px dotted var(--dim)}' +
+'  #tab-grader h2 .bible-link:hover{color:var(--accent);border-bottom-color:var(--accent)}' +
 '  #tab-grader .gr-sum .stat{display:flex;flex-direction:column}' +
 '  #tab-grader .gr-sum .stat .k{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}' +
 '  #tab-grader .gr-sum .stat .v{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}' +
@@ -404,10 +411,9 @@
 
     var html = '' +
 '<div class="panel">' +
-'  <h2>Loadout &mdash; ' + esc(data.name || "") + ' <span class="note" style="text-transform:none">(' + esc(data.region || "") + ')</span>' +
+'  <h2>Loadout &mdash; <a class="bible-link" href="' + bibleUrl(data.region, data.name) + '" target="_blank" rel="noopener">' + esc(data.name || "") + '</a> <span class="note" style="text-transform:none">(' + esc(data.region || "") + ')</span>' +
      cacheNoteHtml(data) + '</h2>' +
 '  <div class="gr-sum">' +
-'    <div class="stat"><span class="k">Gems</span><span class="v">' + gems.length + '</span></div>' +
 '    <div class="stat"><span class="k">Avg grade</span><span class="v ' + rankClass(avgRank) + '">' + avgGrade.toFixed(1) + '</span></div>' +
 '    <div class="stat"><span class="k">Avg rank</span><span class="v">' + rankBadge(avgRank) + '</span></div>' +
 '    <div class="stat"><span class="k">Total % dmg</span><span class="v" style="color:var(--accent)">' + sumDmg.toFixed(2) + '%</span></div>' +

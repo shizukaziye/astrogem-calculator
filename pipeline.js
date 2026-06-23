@@ -628,7 +628,6 @@
     // per-bucket rows
     var rowsHtml = '<table class="pt-tbl"><thead><tr>'
       + '<th>Pair</th><th>Cut-EV</th><th>Hit %</th><th>Exp. spend</th><th>Exp. score</th></tr></thead><tbody>';
-    var fodderRows = "";
     for (var i = 0; i < BUCKETS.length; i++) {
       var b = BUCKETS[i];
       var rec = bakedBucket(rarity, cost, b, baseline, gpd, roster);
@@ -641,29 +640,32 @@
         + '<td class="pt-num">' + fmtPct(pa) + '</td>'
         + '<td class="pt-num">' + (spend ? fmtGold(spend) : "—") + '</td>'
         + '<td class="pt-num">' + fmtNum(esc, 3) + '</td></tr>';
-      // fodder split (only meaningful when it lands below baseline; NRB carries the split)
-      var fl = rec ? rec.fLeg : null, fr = rec ? rec.fRelic : null, fa = rec ? rec.fAnc : null;
-      var hasFod = (fl != null) && (fl + (fr || 0) + (fa || 0) > 1e-6) && (pa == null || pa < 0.999);
-      if (hasFod) {
-        fodderRows += '<div class="pt-fod-row"><span class="pt-fod-lbl">' + BUCKET_LABEL[b] + '</span>'
-          + '<span class="pt-fod-bar">'
-          + (fl ? '<span class="pt-leg" style="flex:' + fl + '" title="Legendary"></span>' : '')
-          + (fr ? '<span class="pt-rel" style="flex:' + fr + '" title="Relic"></span>' : '')
-          + (fa ? '<span class="pt-anc" style="flex:' + fa + '" title="Ancient"></span>' : '')
-          + '</span>'
-          + '<span class="pt-fod-pct">'
-          + (fl >= 0.005 ? '<b class="pt-leg-t">' + Math.round(fl * 100) + '%L</b> ' : '')
-          + (fr >= 0.005 ? '<b class="pt-rel-t">' + Math.round(fr * 100) + '%R</b> ' : '')
-          + (fa >= 0.005 ? '<b class="pt-anc-t">' + Math.round(fa * 100) + '%A</b>' : '')
-          + '</span></div>';
-      }
     }
     rowsHtml += '</tbody></table>';
 
+    // Below-baseline → fodder value & how to fuse, scoped to THIS cell's cost (the
+    // fusion/fodder table for one cost): what a Leg/Relic/Anc fodder gem is worth, the
+    // recipe that consumes it, the fused-output EV, and the chance it clears baseline.
+    // (The raw L/R/A landing odds were dropped — the values + recipes are more useful.)
     var fodderBlock = "";
-    if (fodderRows) {
-      fodderBlock = '<div class="pt-sec"><div class="pt-sec-h">If it ends below baseline → fodder tier</div>'
-        + '<div class="pt-fod">' + fodderRows + '</div></div>';
+    if (typeof window.fusionValueForTier === "function" && typeof window.tierExpectedValue === "function") {
+      var tev = window.tierExpectedValue(cost, baseline, gpd);
+      var fuRecipe = { legendary: "3L", relic: "R+2L", ancient: "A+2L" };
+      var fuMix = { legendary: FUSE_3L, relic: FUSE_R2L, ancient: FUSE_A2L };
+      var fuName = { legendary: "Legendary", relic: "Relic", ancient: "Ancient" };
+      var fuCls = { legendary: "pt-leg-t", relic: "pt-rel-t", ancient: "pt-anc-t" };
+      var frows = "";
+      for (var ti = 0; ti < TIERS.length; ti++) {
+        var t = TIERS[ti];
+        frows += '<tr><td class="pt-pair"><b class="' + fuCls[t] + '">' + fuName[t] + '</b></td>'
+          + '<td class="pt-num">' + fmtGold(window.fusionValueForTier(t, cost, baseline, gpd)) + '</td>'
+          + '<td class="pt-num">' + fuRecipe[t] + '</td>'
+          + '<td class="pt-num">' + fmtGold(tev ? tev[t] : null) + '</td>'
+          + '<td class="pt-num">' + fmtPct(fusionHit(baseline, fuMix[t])) + '</td></tr>';
+      }
+      fodderBlock = '<div class="pt-sec"><div class="pt-sec-h">Below baseline → fodder value &amp; fusion (c' + cost + ')</div>'
+        + '<table class="pt-tbl"><thead><tr><th>Fodder</th><th>Value</th><th>Fuse</th><th>Output EV</th><th>Hit %</th></tr></thead><tbody>'
+        + frows + '</tbody></table></div>';
     }
 
     // fusion decision for the block (NRB only — RB gems are always cut)
@@ -963,17 +965,17 @@
       var g = GPD_LIST[i];
       gpdBtns += '<span class="mbtn gpd-btn ' + (g === GPD ? "active" : "") + '" data-gpd="' + g + '" onclick="window.__plSetGpd(' + g + ')">' + gpdName(g) + '</span>';
     }
+    // One compact row (gpd tiers + roster toggle), tucked above the viewport and
+    // revealed on hover (see #pl-inputs styles) so the table gets the vertical space.
     return '<div class="inputs" id="pl-inputs">'
-      + '<div class="ihdr"><span>Pipeline — gold per 1% damage</span>'
-      + '<span class="tgl" id="pl-caret" onclick="window.__plToggleInputs()">▾</span></div>'
-      + '<div id="pl-inbody">'
-      + '<div class="barrow" id="pl-gpd-row">' + (gpdBtns || '<span class="note">Loading tiers…</span>') + '</div>'
-      + '<div class="barrow">'
+      + '<div class="pl-bar">'
+      + '<span class="pl-gpd" id="pl-gpd-row">' + (gpdBtns || '<span class="note">Loading tiers…</span>') + '</span>'
+      + '<span class="pl-sep"></span>'
       + '<span class="mbtn ' + (ROSTER === "nrb" ? "active" : "") + '" id="pl-r-nrb" onclick="window.__plSetRoster(\'nrb\')">Non-Roster Bound</span>'
       + '<span class="mbtn ' + (ROSTER === "rb" ? "active" : "") + '" id="pl-r-rb" onclick="window.__plSetRoster(\'rb\')">Roster Bound</span>'
       + '</div>'
-      + '<p class="note" id="pl-mode-note">' + modeNote() + '</p>'
-      + '</div></div>';
+      + '<div class="pl-handle" aria-hidden="true">gpd / roster &#9662;</div>'
+      + '</div>';
   }
   function modeNote() {
     return "Pick a gold-per-1%-damage tier above to show its table. Each row is a baseline rank (C- … S+, grades "
@@ -1061,6 +1063,14 @@
       + '#tab-pipeline .dim{color:var(--dim);font-weight:400;font-size:10.5px}'
       + '#tab-pipeline .rank-badge{display:inline-block;padding:1px 7px;border-radius:99px;font-size:10.5px;font-weight:800;line-height:1.5;vertical-align:middle;font-variant-numeric:tabular-nums}'
       + '#tab-pipeline .gpd-btn{min-width:48px;text-align:center}'
+      // Top bar: tucked above (only a small handle peeks); slides down on hover so the table keeps the space.
+      + '#tab-pipeline #pl-inputs{height:22px;margin:0;padding:0;border:none;border-radius:0;background:none;backdrop-filter:none;z-index:30;overflow:visible}'
+      + '#tab-pipeline #pl-inputs .pl-bar{position:absolute;left:0;right:0;top:0;transform:translateY(-100%);transition:transform .18s ease;display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:10px 16px 10px 28px;background:rgba(13,16,23,.98);border:1px solid var(--border);border-top:none;border-radius:0 0 10px 10px;backdrop-filter:blur(6px)}'
+      + '#tab-pipeline #pl-inputs:hover .pl-bar{transform:translateY(0)}'
+      + '#tab-pipeline #pl-inputs .pl-gpd{display:inline-flex;flex-wrap:wrap;gap:7px}'
+      + '#tab-pipeline #pl-inputs .pl-sep{width:1px;align-self:stretch;background:var(--border);margin:2px 4px}'
+      + '#tab-pipeline #pl-inputs .pl-handle{display:inline-block;height:22px;line-height:21px;margin-left:28px;padding:0 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);background:rgba(13,16,23,.97);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;cursor:default;user-select:none}'
+      + '#tab-pipeline #pl-inputs:hover .pl-handle{color:var(--accent)}'
       + '#tab-pipeline .tablewrap{overflow-x:auto;max-width:100%}'
       // ---- hover popover (appended to <body>, so NOT scoped under #tab-pipeline) ----
       + '.pl-pop{position:absolute;z-index:9999;max-width:420px;min-width:330px;background:#10131c;'

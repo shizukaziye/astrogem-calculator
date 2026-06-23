@@ -80,7 +80,8 @@
 '  #tab-leaderboard tbody tr{cursor:pointer}' +
 '  #tab-leaderboard tbody tr:hover{background:var(--panel2)}' +
 '  #tab-leaderboard .lb-rank{font-variant-numeric:tabular-nums;color:var(--dim);font-weight:700;width:48px}' +
-'  #tab-leaderboard .lb-name{font-weight:700;color:var(--text)}' +
+'  #tab-leaderboard .lb-name{font-weight:700;color:var(--text);text-decoration:none;border-bottom:1px dotted transparent}' +
+'  #tab-leaderboard .lb-name:hover{color:var(--accent);border-bottom-color:var(--accent)}' +
 '  #tab-leaderboard .lb-region{color:var(--dim);font-weight:600;font-size:11px;margin-left:6px}' +
 '  #tab-leaderboard .lb-grade{font-variant-numeric:tabular-nums;font-weight:700}' +
 '  #tab-leaderboard .lb-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-weight:800;line-height:1.4;font-variant-numeric:tabular-nums;margin-left:8px;font-size:12px}' +
@@ -117,18 +118,21 @@
     if (body) body.innerHTML = '<div class="placeholder"><b>No characters yet</b>' + esc(msg) + '</div>';
   }
 
+  // lostark.bible profile URL for a character (the name links here).
+  function bibleUrl(region, name) {
+    return "https://lostark.bible/character/" + encodeURIComponent(region || "") + "/" + encodeURIComponent(name || "");
+  }
+
   function renderTable(chars) {
     var rows = chars.map(function (c, i) {
       var avg = c._avg;
       var gradeTxt = avg == null ? "—" : avg.toFixed(1);
       var badge = avg == null ? "" : rankBadge(rankFromGrade(avg));
-      var count = ((c.gems || []).length);
       return '<tr data-i="' + i + '">' +
         '<td class="lb-rank">#' + (i + 1) + '</td>' +
-        '<td><span class="lb-name">' + esc(c.name || "—") + '</span>' +
+        '<td><a class="lb-name" href="' + bibleUrl(c.region, c.name) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + esc(c.name || "—") + '</a>' +
           '<span class="lb-region">' + esc(c.region || "") + '</span></td>' +
         '<td><span class="lb-grade">' + gradeTxt + '</span>' + badge + '</td>' +
-        '<td class="num lb-count">' + count + '</td>' +
         '<td class="lb-age">' + esc(ageLabel(c.pulledAt)) + '</td>' +
         '</tr>';
     }).join("");
@@ -136,7 +140,7 @@
     var body = $("lb-body");
     body.innerHTML =
 '<table>' +
-'  <thead><tr><th>Rank</th><th>Character</th><th>Avg grade</th><th class="num">Gems</th><th>Last pulled</th></tr></thead>' +
+'  <thead><tr><th>Rank</th><th>Character</th><th>Avg grade</th><th>Last pulled</th></tr></thead>' +
 '  <tbody id="lb-rows">' + rows + '</tbody>' +
 '</table>' +
 '<div class="lb-hint">Click a character to open its loadout in the Grader.</div>';

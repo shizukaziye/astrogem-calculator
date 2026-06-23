@@ -103,33 +103,57 @@ function json(body, status) {
   });
 }
 
-// Pull the balanced `arkGridCores:[ ... ]` array literal out of the page HTML and
-// parse it. The data is a JS object literal (unquoted keys), not JSON, so we quote
-// the keys before JSON.parse. Returns the parsed array, or null.
+// Pull the astrogem cores out of the page. A page can carry several
+// `arkGridCores:[ ... ]` arrays — lostark.bible stores one per loadout
+// (classification "most_recent_raid" / "most_recent_chaos_dungeon"), and the chaos
+// loadout is frequently empty. We parse every array (each is a JS object literal with
+// unquoted keys, so we quote the keys before JSON.parse), then prefer the RAID
+// loadout's, falling back to whichever array actually has gems. Returns an array or null.
 function extractArkGridCores(html) {
   const marker = "arkGridCores:[";
-  const at = html.indexOf(marker);
-  if (at === -1) return null;
-  // Scan from the opening '[' keeping bracket depth so nested arrays don't fool us.
-  let start = at + "arkGridCores:".length;
-  let depth = 0, end = -1;
-  for (let k = start; k < html.length; k++) {
-    const c = html[k];
-    if (c === "[") depth++;
-    else if (c === "]") {
-      depth--;
-      if (depth === 0) { end = k + 1; break; }
+  const occ = [];
+  let from = 0;
+  while (true) {
+    const at = html.indexOf(marker, from);
+    if (at === -1) break;
+    // Scan from the opening '[' keeping bracket depth so nested arrays don't fool us.
+    const start = at + "arkGridCores:".length;
+    let depth = 0, end = -1;
+    for (let k = start; k < html.length; k++) {
+      const c = html[k];
+      if (c === "[") depth++;
+      else if (c === "]") { depth--; if (depth === 0) { end = k + 1; break; } }
     }
+    if (end === -1) break;
+    const literal = html.slice(start, end);
+    // Quote bare identifier keys: {id:..,base:..} -> {"id":..,"base":..}
+    const jsonish = literal.replace(/([{,])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:/g, '$1"$2":');
+    let parsed = null;
+    try { parsed = JSON.parse(jsonish); } catch (e) { parsed = null; }
+    if (parsed) occ.push({ at: at, cores: parsed });
+    from = end;
   }
-  if (end === -1) return null;
-  const literal = html.slice(start, end);
-  // Quote bare identifier keys: {id:..,base:..} -> {"id":..,"base":..}
-  const jsonish = literal.replace(/([{,])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:/g, '$1"$2":');
-  try {
-    return JSON.parse(jsonish);
-  } catch (e) {
-    return null;
+  if (!occ.length) return null;
+
+  function gemCount(cores) {
+    let n = 0;
+    if (Array.isArray(cores)) {
+      for (const core of cores) n += (core && Array.isArray(core.gems)) ? core.gems.length : 0;
+    }
+    return n;
   }
+
+  // Prefer the raid loadout: the first arkGridCores after the most_recent_raid
+  // classification, as long as it actually has gems.
+  const raidAt = html.indexOf('classification:"most_recent_raid"');
+  if (raidAt !== -1) {
+    const raid = occ.find(function (o) { return o.at > raidAt; });
+    if (raid && gemCount(raid.cores) > 0) return raid.cores;
+  }
+  // Fallback: the array with the most gems, so an empty chaos loadout never wins.
+  let best = occ[0];
+  for (const o of occ) { if (gemCount(o.cores) > gemCount(best.cores)) best = o; }
+  return best.cores;
 }
 
 // Map one raw gem (from arkGridCores) + its core to the Grader config shape.
