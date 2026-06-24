@@ -186,9 +186,6 @@
 '  #tab-grader .gr-weak .wk-empty{font-size:12px;color:var(--dim);padding:6px 0}' +
 '  #tab-grader .gr-weak .wk-row[data-target]{cursor:pointer;border-radius:6px;transition:background .12s}' +
 '  #tab-grader .gr-weak .wk-row[data-target]:hover{background:rgba(255,255,255,.05)}' +
-'  #tab-grader .gr-gem .meta .wpc{font-variant-numeric:tabular-nums;font-weight:600}' +
-'  #tab-grader .gr-gem .meta .wpc.pos{color:#6fbf8a}' +
-'  #tab-grader .gr-gem .meta .wpc.neg{color:#d08a8a}' +
 '  #tab-grader .gr-gem.flash{animation:grFlash 1.4s ease-out}' +
 '  @keyframes grFlash{0%,35%{box-shadow:0 0 0 2px var(--accent),0 0 16px -2px var(--accent)}100%{box-shadow:0 0 0 0 rgba(0,0,0,0)}}' +
 '  #tab-grader .mbtn:disabled{opacity:.45;cursor:not-allowed}' +
@@ -321,38 +318,22 @@
     return esc(name) + ' <span class="mono">' + (lvl != null ? lvl : "?") + '</span>';
   }
 
-  // Willpower's signed share of this gem's displayed %dmg: relDamage with the gem's
-  // own willpower minus the same gem pinned at the 4.25 willpower baseline. Surfaces
-  // that willpower IS in the number — it's small (~0.078%/level), so easy to miss.
-  function willpowerContribution(cfg) {
-    var c = {}; for (var k in cfg) { if (cfg.hasOwnProperty(k)) c[k] = cfg[k]; }
-    c.willpowerLevel = 4.25;
-    return relDamage(cfg) - relDamage(c);
-  }
-  function signedPct(x) {
-    return (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(2) + "%";
-  }
-
   function gemCardHtml(cfg) {
     var v = validateConfig(cfg);
-    var g, rank, dmg, cls, wpc;
+    var g, rank, dmg, cls;
     // %dmg shown is damage ABOVE the cp baseline (relDamage); grade/rank unchanged.
-    if (v.valid) { g = grade(cfg); rank = gemRank(cfg); dmg = relDamage(cfg); cls = rankClass(rank); wpc = willpowerContribution(cfg); }
+    if (v.valid) { g = grade(cfg); rank = gemRank(cfg); dmg = relDamage(cfg); cls = rankClass(rank); }
     var rkHtml = v.valid
       ? rankBadge(rank) + '<div class="gd">' + g.toFixed(0) + '</div>'
       : '<div class="rk">?</div>';
     var dmgHtml = v.valid ? '<span class="dmg">' + dmg.toFixed(3) + '%</span>' : '<span class="bad">' + esc(v.error || "invalid") + '</span>';
     var idAttr = (cfg._gidx != null) ? ' id="gr-gem-' + cfg._gidx + '"' : '';
-    var wpVal = (cfg.willpowerLevel != null ? cfg.willpowerLevel : "?");
-    var wpShare = v.valid
-      ? ' <span class="wpc ' + (wpc >= 0 ? "pos" : "neg") + '" title="Willpower’s share of this gem’s % damage">' + signedPct(wpc) + '</span>'
-      : '';
     return '' +
 '<div class="gr-gem"' + idAttr + '>' +
 '  <div class="rkbox ' + (cls || "") + '">' + rkHtml + '</div>' +
 '  <div class="meta">' +
 '    <div class="top">c' + cfg.baseCost + ' ' + esc(cfg.gemType) + ' &middot; ' + dmgHtml + '</div>' +
-'    <div class="eff">WP ' + wpVal + wpShare +
+'    <div class="eff">WP ' + (cfg.willpowerLevel != null ? cfg.willpowerLevel : "?") +
        ' &middot; Order ' + (cfg.orderLevel != null ? cfg.orderLevel : "?") + '</div>' +
 '    <div class="eff">' + effLabel(cfg.effect1, cfg.effect1Level) + ' &nbsp;/&nbsp; ' + effLabel(cfg.effect2, cfg.effect2Level) + '</div>' +
 '  </div>' +
