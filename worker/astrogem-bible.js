@@ -322,9 +322,12 @@ async function handleList(env) {
   if (!env || !env.CHARS) return json({ characters: [] }, 200);
   const idx = await kvGetJson(env, INDEX_KEY);
   const keys = Array.isArray(idx) ? idx : [];
+  // Read every character record CONCURRENTLY. Sequential awaits made a cold ?list=1
+  // ~5s for ~40 chars (one KV round-trip each); Promise.all collapses it to roughly a
+  // single read's latency. (Fine for hundreds of keys; batch if the roster ever explodes.)
+  const records = await Promise.all(keys.map(function (k) { return kvGetJson(env, k); }));
   const characters = [];
-  for (const k of keys) {
-    const c = await kvGetJson(env, k);
+  for (const c of records) {
     if (c && Array.isArray(c.gems)) {
       characters.push({ region: c.region, name: c.name, gems: c.gems, pulledAt: c.pulledAt });
     }
