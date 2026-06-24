@@ -96,7 +96,9 @@
   var COND_SCORE = /*__COND_SCORE__*/ null;
 
   var DATA = null;          // baked data/pipeline.json (lazy-fetched)
-  var ROSTER = "nrb";       // 'nrb' | 'rb'
+  var ROSTER = "nrb";       // 'nrb' | 'rb' (Global only; KR has no roster-bound gems)
+  var REGION = "global";    // 'global' | 'kr'
+  var KR_FLOOR = { 8: 20000, 9: 30000, 10: 40000 };  // KR: tradable-epic floor sale value by cost
   var GPD = null;           // currently-selected gpd (set after data loads)
   var GPD_LIST = [];        // gpds present in DATA.cells, ascending
 
@@ -256,7 +258,16 @@
       var rr = RARITIES[r2]; U_nrb[rr] = {};
       for (var c2 = 0; c2 < COSTS.length; c2++) U_nrb[rr][COSTS[c2]] = OV.nrb[rr][COSTS[c2]];
     }
-    function E(rar, cost) { return 0.5 * OV.rb[rar][cost] + 0.5 * U_nrb[rar][cost]; }
+    function E(rar, cost) {
+      if (REGION === "kr") {
+        // KR has no roster-bound gems; 50% of fusion outputs are TRADABLE instead. A
+        // tradable EPIC has a floor sale value (KR_FLOOR by cost); tradable UC/rare = a
+        // normal gem. So fusing toward epics gains that floor as a safety net.
+        var trad = (rar === "epic") ? Math.max(U_nrb[rar][cost], KR_FLOOR[cost]) : U_nrb[rar][cost];
+        return 0.5 * trad + 0.5 * U_nrb[rar][cost];
+      }
+      return 0.5 * OV.rb[rar][cost] + 0.5 * U_nrb[rar][cost];
+    }
     var fuseA = null, bestCost = 8;
     for (var iter = 0; iter < 200; iter++) {
       var fA = { uncommon: {}, rare: {}, epic: {} };
@@ -628,6 +639,7 @@
     // per-bucket rows
     var rowsHtml = '<table class="pt-tbl"><thead><tr>'
       + '<th>Pair</th><th>Cut-EV</th><th>Hit %</th><th>Exp. spend</th><th>Exp. score</th></tr></thead><tbody>';
+    var avgAcc = 0, avgW = 0;
     for (var i = 0; i < BUCKETS.length; i++) {
       var b = BUCKETS[i];
       var rec = bakedBucket(rarity, cost, b, baseline, gpd, roster);
@@ -635,6 +647,7 @@
       var pa = rec ? rec.pAbove : null;
       var spend = rec ? rec.expSpend : null;
       var esc = rec ? rec.expScore : null;
+      if (cut != null) { avgAcc += BW[b] * cut; avgW += BW[b]; }
       rowsHtml += '<tr><td class="pt-pair"><b>' + BUCKET_LABEL[b] + '</b> <span class="pt-dim">' + BUCKET_DESC[b] + '</span></td>'
         + '<td class="pt-num">' + fmtGold(cut) + '</td>'
         + '<td class="pt-num">' + fmtPct(pa) + '</td>'
@@ -642,6 +655,8 @@
         + '<td class="pt-num">' + fmtNum(esc, 3) + '</td></tr>';
     }
     rowsHtml += '</tbody></table>';
+    // Weighted-average cell value: (1·2D + 2·Op + 2·Sub + 1·No) / 6.
+    rowsHtml += '<div class="pt-avg">Average value <span class="pt-dim">(1·2D + 2·Op + 2·Sub + 1·No)/6</span>: <b>' + fmtGold(avgW ? avgAcc / avgW : null) + '</b></div>';
 
     // Below-baseline → fodder value & how to fuse, scoped to THIS cell's cost (the
     // fusion/fodder table for one cost): what a Leg/Relic/Anc fodder gem is worth, the
@@ -967,14 +982,24 @@
     }
     // One compact row (gpd tiers + roster toggle), tucked above the viewport and
     // revealed on hover (see #pl-inputs styles) so the table gets the vertical space.
+    // Region toggle (Global / KR) + gpd tiers; the NRB/RB toggle is Global-only (KR has
+    // no roster-bound gems). One compact row, tucked above the viewport, hover to reveal.
+    var rosterToggle = (REGION === "global")
+      ? '<span class="pl-sep"></span>'
+        + '<span class="mbtn ' + (ROSTER === "nrb" ? "active" : "") + '" id="pl-r-nrb" onclick="window.__plSetRoster(\'nrb\')">Non-Roster Bound</span>'
+        + '<span class="mbtn ' + (ROSTER === "rb" ? "active" : "") + '" id="pl-r-rb" onclick="window.__plSetRoster(\'rb\')">Roster Bound</span>'
+      : '';
     return '<div class="inputs" id="pl-inputs">'
       + '<div class="pl-bar">'
-      + '<span class="pl-gpd" id="pl-gpd-row">' + (gpdBtns || '<span class="note">Loading tiers…</span>') + '</span>'
+      + '<span class="pl-region">'
+      + '<span class="mbtn ' + (REGION === "global" ? "active" : "") + '" id="pl-rg-global" onclick="window.__plSetRegion(\'global\')">Global</span>'
+      + '<span class="mbtn ' + (REGION === "kr" ? "active" : "") + '" id="pl-rg-kr" onclick="window.__plSetRegion(\'kr\')">KR</span>'
+      + '</span>'
       + '<span class="pl-sep"></span>'
-      + '<span class="mbtn ' + (ROSTER === "nrb" ? "active" : "") + '" id="pl-r-nrb" onclick="window.__plSetRoster(\'nrb\')">Non-Roster Bound</span>'
-      + '<span class="mbtn ' + (ROSTER === "rb" ? "active" : "") + '" id="pl-r-rb" onclick="window.__plSetRoster(\'rb\')">Roster Bound</span>'
+      + '<span class="pl-gpd" id="pl-gpd-row">' + (gpdBtns || '<span class="note">Loading tiers…</span>') + '</span>'
+      + rosterToggle
       + '</div>'
-      + '<div class="pl-handle" aria-hidden="true">gpd / roster &#9662;</div>'
+      + '<div class="pl-handle" aria-hidden="true">region / gpd &#9662;</div>'
       + '</div>';
   }
   function modeNote() {
@@ -1074,6 +1099,7 @@
       + '#tab-pipeline #pl-inputs:hover .pl-handle{color:var(--accent);border-color:var(--accent)}'
       + '#tab-pipeline #pl-inputs .pl-gpd{display:inline-flex;flex-wrap:wrap;gap:7px}'
       + '#tab-pipeline #pl-inputs .pl-sep{width:1px;align-self:stretch;background:var(--border);margin:2px 4px}'
+      + '#tab-pipeline #pl-inputs .pl-region{display:inline-flex;flex-wrap:wrap;gap:7px}'
       + '#tab-pipeline .tablewrap{overflow-x:auto;max-width:100%}'
       // ---- hover popover (appended to <body>, so NOT scoped under #tab-pipeline) ----
       + '.pl-pop{position:absolute;z-index:9999;max-width:420px;min-width:330px;background:#10131c;'
@@ -1086,6 +1112,7 @@
       + '.pl-pop .pt-tbl th:first-child{text-align:left}'
       + '.pl-pop .pt-tbl td{padding:3px 4px;border-bottom:1px solid #1c2230;font-variant-numeric:tabular-nums}'
       + '.pl-pop .pt-tbl tr:last-child td{border-bottom:none}'
+      + '.pl-pop .pt-avg{margin:6px 0 2px;font-size:12px;font-variant-numeric:tabular-nums}'
       + '.pl-pop .pt-num{text-align:right;font-weight:700}'
       + '.pl-pop .pt-pair{font-size:11px}.pl-pop .pt-pair b{color:#cdd6e8}'
       + '.pl-pop .pt-dim{color:#7e889c;font-weight:400;font-size:10px}'
@@ -1257,6 +1284,12 @@
     var note = document.getElementById("pl-mode-note");
     if (note) note.textContent = modeNote();
     renderBody();
+  };
+  window.__plSetRegion = function (rg) {
+    REGION = (rg === "kr") ? "kr" : "global";
+    if (REGION === "kr") ROSTER = "nrb";   // KR has no roster-bound gems
+    refreshInputs();   // rebuild the bar (region/roster buttons, RB hidden in KR)
+    renderBody();      // recompute the grid with the region's fusion economics
   };
   window.__plToggleInputs = function () {
     var body = document.getElementById("pl-inbody");
