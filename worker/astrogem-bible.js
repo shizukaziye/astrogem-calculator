@@ -224,14 +224,62 @@ async function indexAdd(env, key) {
   }
 }
 
-// Fetch a lostark.bible character page and parse it into the stored gem shape.
-// Returns { ok:true, data } on success, or { ok:false, status, body } describing
-// the error so the caller can decide whether to return it or skip it (list mode).
+// --- KR (lopec.kr) support --------------------------------------------------
+// lopec.kr is a Next.js app whose RSC payload carries clean gem objects:
+//   {icon:"…/use_13_2NN.png", requiredWillpower, orderChaosPoint, effects:[{name,level}]}
+// icon 202/203/204 = order c8/c9/c10, 205/206/207 = chaos c8/c9/c10; requiredWillpower
+// IS the willpower cost, so willpowerLevel = baseCost − requiredWillpower.
+const KR_EFFECT = {
+  "추가 피해": "Additional Damage",
+  "공격력": "Attack Power",
+  "보스 피해": "Boss Damage",
+  "아군 공격 강화": "Ally Attack Enh.",
+  "아군 피해 강화": "Ally Damage Enh.",
+  "낙인력": "Brand Power"
+};
+const KR_SLOT = { order: ["Order Sun", "Order Moon", "Order Star"], chaos: ["Chaos Sun", "Chaos Moon", "Chaos Star"] };
+
+function parseLopecGems(html) {
+  const u = html.replace(/\\"/g, '"'); // unescape the RSC JSON strings
+  const gemRe = /use_13_(\d+)\.png","requiredWillpower":(\d+),"orderChaosPoint":(\d+),"effects":\[(.*?)\]\}/g;
+  const effRe = /\{"name":"([^"]*)","level":(\d+)/g;
+  const gems = [], warnings = [], counts = { order: 0, chaos: 0 };
+  let m;
+  while ((m = gemRe.exec(u)) !== null) {
+    const icon = parseInt(m[1], 10), rel = icon - 202;
+    if (rel < 0 || rel > 5) { warnings.push("unexpected gem icon " + icon); continue; }
+    const baseCost = 8 + (rel % 3);
+    const gemType = rel < 3 ? "order" : "chaos";
+    const effs = [];
+    let e;
+    while ((e = effRe.exec(m[4])) !== null) {
+      const en = KR_EFFECT[e[1]];
+      if (!en) warnings.push("unknown KR effect '" + e[1] + "'");
+      effs.push({ name: en || ("Effect:" + e[1]), level: parseInt(e[2], 10) });
+    }
+    const e1 = effs[0] || {}, e2 = effs[1] || {};
+    const slot = KR_SLOT[gemType][Math.floor(counts[gemType] / 4)] || (gemType + " gem");
+    counts[gemType]++;
+    gems.push({
+      slot: slot, coreBase: null,
+      baseCost: baseCost, gemType: gemType,
+      willpowerLevel: baseCost - parseInt(m[2], 10),
+      orderLevel: parseInt(m[3], 10),
+      effect1: e1.name, effect1Level: e1.level,
+      effect2: e2.name, effect2Level: e2.level
+    });
+  }
+  return { gems: gems, warnings: warnings };
+}
+
+// Fetch a character page (lostark.bible, or lopec.kr when region is KR) and parse it
+// into the stored gem shape. Returns { ok:true, data } or { ok:false, status, body }.
 async function fetchCharacterData(region, name) {
-  // lostark.bible character page: /character/<REGION>/<Name>
-  const url =
-    "https://lostark.bible/character/" +
-    encodeURIComponent(region) + "/" + encodeURIComponent(name);
+  const isKR = String(region).toUpperCase() === "KR";
+  const url = isKR
+    ? "https://lopec.kr/character/specPoint/" + encodeURIComponent(name)
+    : "https://lostark.bible/character/" + encodeURIComponent(region) + "/" + encodeURIComponent(name);
+  const site = isKR ? "lopec.kr" : "lostark.bible";
 
   let resp;
   try {
@@ -239,7 +287,7 @@ async function fetchCharacterData(region, name) {
       headers: {
         "User-Agent": BROWSER_UA,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9"
+        "Accept-Language": isKR ? "ko-KR,ko;q=0.9" : "en-US,en;q=0.9"
       },
       // Follow SvelteKit redirects (region casing etc.).
       redirect: "follow"
@@ -249,38 +297,49 @@ async function fetchCharacterData(region, name) {
   }
 
   if (resp.status === 404) {
-    return { ok: false, status: 404, body: { error: "Character not found on lostark.bible.", region: region, name: name, url: url, upstreamStatus: 404 } };
+    return { ok: false, status: 404, body: { error: "Character not found on " + site + ".", region: region, name: name, url: url, upstreamStatus: 404 } };
   }
   if (!resp.ok) {
-    return { ok: false, status: 502, body: { error: "lostark.bible returned HTTP " + resp.status + ".", region: region, name: name, url: url, upstreamStatus: resp.status } };
+    return { ok: false, status: 502, body: { error: site + " returned HTTP " + resp.status + ".", region: region, name: name, url: url, upstreamStatus: resp.status } };
   }
 
   const html = await resp.text();
-  const cores = extractArkGridCores(html);
-  if (!cores) {
-    return { ok: false, status: 422, body: {
-      error: "Could not find arkGridCores data on the page (the character may have no Ark Grid set, or the site layout changed).",
-      region: region, name: name, url: url
-    } };
-  }
 
-  const gems = [];
-  const warnings = [];
-  for (const core of cores) {
-    const rawGems = Array.isArray(core.gems) ? core.gems : [];
-    for (const rg of rawGems) {
-      const m = mapGem(rg, core);
-      gems.push(m.gem);
-      for (const w of m.warnings) warnings.push(w);
+  let gems, warnings, coreCount;
+  if (isKR) {
+    const parsed = parseLopecGems(html);
+    gems = parsed.gems; warnings = parsed.warnings; coreCount = 6;
+    if (!gems.length) {
+      return { ok: false, status: 422, body: {
+        error: "Could not find Ark Grid gems on the lopec.kr page (no astrogems set, or the site layout changed).",
+        region: region, name: name, url: url
+      } };
+    }
+  } else {
+    const cores = extractArkGridCores(html);
+    if (!cores) {
+      return { ok: false, status: 422, body: {
+        error: "Could not find arkGridCores data on the page (the character may have no Ark Grid set, or the site layout changed).",
+        region: region, name: name, url: url
+      } };
+    }
+    gems = []; warnings = []; coreCount = cores.length;
+    for (const core of cores) {
+      const rawGems = Array.isArray(core.gems) ? core.gems : [];
+      for (const rg of rawGems) {
+        const m = mapGem(rg, core);
+        gems.push(m.gem);
+        for (const w of m.warnings) warnings.push(w);
+      }
     }
   }
 
   return { ok: true, data: {
     region: region,
     name: name,
-    source: "lostark.bible",
+    source: site,
     url: url,
-    coreCount: cores.length,
+    coreCount: coreCount,
     gemCount: gems.length,
     gems: gems,
     warnings: warnings
