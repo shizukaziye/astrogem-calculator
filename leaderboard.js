@@ -136,7 +136,9 @@
 
   // lostark.bible profile URL for a character (the name links here).
   function bibleUrl(region, name) {
-    if (String(region).toUpperCase() === "KR") return "https://lopec.kr/character/specPoint/" + encodeURIComponent(name || "");
+    var r = String(region).toUpperCase();
+    if (r === "KR") return "https://lopec.kr/character/specPoint/" + encodeURIComponent(name || "");
+    if (r === "EU") return "https://lostark.bible/character/EUC/" + encodeURIComponent(name || "");
     return "https://lostark.bible/character/" + encodeURIComponent(region || "") + "/" + encodeURIComponent(name || "");
   }
 

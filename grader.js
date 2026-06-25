@@ -61,7 +61,7 @@
     return (P[bc] || []).slice();
   }
 
-  var REGIONS = ["NA", "EUC", "EUW", "SA", "KR"];
+  var REGIONS = ["NA", "EU", "KR"];
 
   var lastLoadout = null; // cache of the most recent pulled loadout (for re-render)
 
@@ -121,7 +121,9 @@
 
   // lostark.bible profile URL for a character (the loadout name links here).
   function bibleUrl(region, name) {
-    if (String(region).toUpperCase() === "KR") return "https://lopec.kr/character/specPoint/" + encodeURIComponent(name || "");
+    var r = String(region).toUpperCase();
+    if (r === "KR") return "https://lopec.kr/character/specPoint/" + encodeURIComponent(name || "");
+    if (r === "EU") return "https://lostark.bible/character/EUC/" + encodeURIComponent(name || "");
     return "https://lostark.bible/character/" + encodeURIComponent(region || "") + "/" + encodeURIComponent(name || "");
   }
 

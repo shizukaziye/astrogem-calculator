@@ -276,9 +276,11 @@ function parseLopecGems(html) {
 // into the stored gem shape. Returns { ok:true, data } or { ok:false, status, body }.
 async function fetchCharacterData(region, name) {
   const isKR = String(region).toUpperCase() === "KR";
+  // lostark.bible uses EUC/EUW; map our single "EU" option to EU Central.
+  const bibleRegion = String(region).toUpperCase() === "EU" ? "EUC" : region;
   const url = isKR
     ? "https://lopec.kr/character/specPoint/" + encodeURIComponent(name)
-    : "https://lostark.bible/character/" + encodeURIComponent(region) + "/" + encodeURIComponent(name);
+    : "https://lostark.bible/character/" + encodeURIComponent(bibleRegion) + "/" + encodeURIComponent(name);
   const site = isKR ? "lopec.kr" : "lostark.bible";
 
   let resp;
