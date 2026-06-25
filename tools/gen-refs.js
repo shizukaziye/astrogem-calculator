@@ -55,6 +55,40 @@ var scoreCases = [];
   }
 })();
 
+// ----- SUPPORT scoring axis over a spread of configs (parallel to score) -----
+var supportCases = [];
+(function () {
+  var configs = [
+    // the PERFECT support gem (defines the grade-bounds max ≈ 0.836 -> grade 100)
+    { baseCost: 10, gemType: "order", willpowerLevel: 5, orderLevel: 5, effect1: "Ally Attack Enh.", effect1Level: 5, effect2: "Brand Power", effect2Level: 5 },
+    // the WEAK support gem: two DPS effects, low order/willpower -> grade ~0
+    { baseCost: 10, gemType: "order", willpowerLevel: 1, orderLevel: 1, effect1: "Boss Damage", effect1Level: 1, effect2: "Additional Damage", effect2Level: 1 },
+    // best support pairings on the other two costs
+    { baseCost: 8, gemType: "order", willpowerLevel: 5, orderLevel: 5, effect1: "Brand Power", effect1Level: 5, effect2: "Ally Damage Enh.", effect2Level: 5 },
+    { baseCost: 9, gemType: "order", willpowerLevel: 5, orderLevel: 5, effect1: "Ally Attack Enh.", effect1Level: 5, effect2: "Ally Damage Enh.", effect2Level: 5 },
+    // mixed support/DPS effects, mid levels (exercise dead-effect -> 0)
+    { baseCost: 9, gemType: "order", willpowerLevel: 4, orderLevel: 3, effect1: "Ally Attack Enh.", effect1Level: 4, effect2: "Boss Damage", effect2Level: 1 },
+    { baseCost: 10, gemType: "order", willpowerLevel: 2, orderLevel: 1, effect1: "Brand Power", effect1Level: 3, effect2: "Ally Attack Enh.", effect2Level: 5 },
+    { baseCost: 8, gemType: "order", willpowerLevel: 3, orderLevel: 4, effect1: "Brand Power", effect1Level: 5, effect2: "Ally Damage Enh.", effect2Level: 2 },
+    // pure DPS gem scored on the support axis (all effects dead)
+    { baseCost: 8, gemType: "order", willpowerLevel: 5, orderLevel: 5, effect1: "Additional Damage", effect1Level: 5, effect2: "Attack Power", effect2Level: 5 }
+  ];
+  for (var i = 0; i < configs.length; i++) {
+    var c = configs[i];
+    supportCases.push({
+      config: c,
+      supportScore: round6(A.supportScore(c)),
+      supportRelValue: round6(A.supportRelValue(c)),
+      supportGrade: round6(A.supportGrade(c)),
+      supportRank: A.supportRank(c)
+    });
+  }
+})();
+var supportBounds = (function () {
+  var b = A.supportGradeBounds();
+  return { min: round6(b.min), max: round6(b.max), baseline: round6(A.supportBaseline(10)) };
+})();
+
 // ----- willpowerCost over a grid -----
 var willpowerCostCases = [];
 [8, 9, 10].forEach(function (bc) {
@@ -147,10 +181,13 @@ var refs = {
     generated: new Date().toISOString(),
     note: "Captured references for the deterministic core. Regenerate with `node tools/gen-refs.js`. Scoring is REAL % damage (D = 100*ln(multiplier)); supersedes the abstract-weight model and the removed SCORE_PER_PERCENT_DAMAGE=30.96.",
     SCORING: A.SCORING,
+    SUPPORT_SCORING: A.SUPPORT_SCORING,
     COSTS: A.COSTS,
     floatTolerance: 1e-6
   },
   score: scoreCases,
+  support: supportCases,
+  supportBounds: supportBounds,
   willpowerCost: willpowerCostCases,
   classifyTier: classifyTierCases,
   outputLevelSumDist: outputLevelSumDistCases,
@@ -164,6 +201,7 @@ var outPath = path.join(__dirname, "..", "refs.json");
 fs.writeFileSync(outPath, JSON.stringify(refs, null, 2) + "\n");
 console.log("Wrote " + outPath);
 console.log("  score cases:            " + scoreCases.length);
+console.log("  support cases:          " + supportCases.length);
 console.log("  willpowerCost cases:    " + willpowerCostCases.length);
 console.log("  classifyTier cases:     " + classifyTierCases.length);
 console.log("  fusionOutputDist cases: " + fusionDistCases.length);

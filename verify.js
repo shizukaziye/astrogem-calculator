@@ -48,6 +48,21 @@ refs.score.forEach(function (cse, i) {
   check("score[" + i + "].total", r6(bd.totalScore), cse.breakdown.totalScore);
 });
 
+// ---- support (SUPPORT scoring axis) ----
+(refs.support || []).forEach(function (cse, i) {
+  var c = cse.config;
+  check("support[" + i + "].supportScore", r6(A.supportScore(c)), cse.supportScore);
+  check("support[" + i + "].supportRelValue", r6(A.supportRelValue(c)), cse.supportRelValue);
+  check("support[" + i + "].supportGrade", r6(A.supportGrade(c)), cse.supportGrade);
+  check("support[" + i + "].supportRank", A.supportRank(c), cse.supportRank, true);
+});
+if (refs.supportBounds) {
+  var sb = A.supportGradeBounds();
+  check("supportBounds.min", r6(sb.min), refs.supportBounds.min);
+  check("supportBounds.max", r6(sb.max), refs.supportBounds.max);
+  check("supportBounds.baseline", r6(A.supportBaseline(10)), refs.supportBounds.baseline);
+}
+
 // ---- willpowerCost ----
 refs.willpowerCost.forEach(function (cse, i) {
   check("willpowerCost[" + i + "].cost", A.willpowerCost(cse.baseCost, cse.wpLevel), cse.cost, true);

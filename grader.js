@@ -50,6 +50,68 @@
     var fn = (A && A.relDamage) || window.relDamage;
     return fn ? fn(cfg) : damagePercent(cfg);
   }
+  // ---- SUPPORT scoring handles (parallel to grade / gemRank / relDamage above).
+  // The model attaches these to window.Astrogem; fall back to the DPS axis only if the
+  // model is too old to expose the support axis (keeps the toggle from throwing).
+  function supportGrade(cfg) {
+    var fn = (A && A.supportGrade) || window.supportGrade;
+    return fn ? fn(cfg) : grade(cfg);
+  }
+  function supportRank(cfg) {
+    var fn = (A && A.supportRank) || window.supportRank;
+    return fn ? fn(cfg) : gemRank(cfg);
+  }
+  // Support value ABOVE the neutral-support baseline (parallel to relDamage; may be negative).
+  function supportRelValue(cfg) {
+    var fn = (A && A.supportRelValue) || window.supportRelValue;
+    return fn ? fn(cfg) : relDamage(cfg);
+  }
+  // Is the SUPPORT axis actually available? (Drives whether the toggle is shown at all.)
+  function supportAxisAvailable() {
+    return !!((A && A.supportGrade) || window.supportGrade);
+  }
+
+  // ---- DPS / Support grading mode for the WHOLE pulled loadout. DPS is the default and
+  // behaves EXACTLY as before; Support regrades every gem on the support axis. Custom
+  // mode is unaffected (it always grades DPS). The mode is mode-aware accessors below;
+  // every loadout-rendering helper calls gGrade/gRank/gRel instead of grade/gemRank/relDamage.
+  var grMode = "dps"; // "dps" | "support"
+  function isSupport() { return grMode === "support"; }
+  function gGrade(cfg) { return isSupport() ? supportGrade(cfg) : grade(cfg); }
+  function gRank(cfg) { return isSupport() ? supportRank(cfg) : gemRank(cfg); }
+  function gRel(cfg) { return isSupport() ? supportRelValue(cfg) : relDamage(cfg); }
+
+  // Support classes that CAN play support (gate for the support-default auto-detect).
+  var SUPPORT_CLASSES = { Bard: 1, Paladin: 1, Artist: 1, Valkyrie: 1 };
+  var SUPPORT_EFFECTS = { "Ally Attack Enh.": 1, "Brand Power": 1, "Ally Damage Enh.": 1 };
+  var DPS_EFFECTS = { "Attack Power": 1, "Additional Damage": 1, "Boss Damage": 1 };
+
+  // A loadout is "support-dominant" if, summed across every gem, the levels on support
+  // effects CLEARLY outweigh the DPS-effect levels (>= 2x). A real support runs almost no
+  // DPS gems (observed ~3.6-3.9x), while a hybrid / DPS-built valkyrie sits near parity
+  // (~1.3x), so a 2x gate separates them and keeps mixed builds defaulting to DPS.
+  function supportDominant(gems) {
+    var sup = 0, dps = 0;
+    (gems || []).forEach(function (x) {
+      [["effect1", "effect1Level"], ["effect2", "effect2Level"]].forEach(function (p) {
+        var name = x[p[0]], lv = x[p[1]] || 0;
+        if (SUPPORT_EFFECTS[name]) sup += lv;
+        else if (DPS_EFFECTS[name]) dps += lv;
+      });
+    });
+    return sup > 0 && sup >= dps * 2;
+  }
+
+  // The DEFAULT grading mode for a freshly-pulled loadout: Support iff a support class
+  // AND a support-dominant gem set (and the support axis exists); otherwise DPS.
+  function defaultModeFor(data) {
+    if (!supportAxisAvailable()) return "dps";
+    var cls = data && data.class;
+    var gems = (data && data.gems) || [];
+    if (cls && SUPPORT_CLASSES[cls] && supportDominant(gems)) return "support";
+    return "dps";
+  }
+
   function validateConfig(cfg) {
     var fn = (A && A.validateConfig) || window.validateConfig;
     return fn ? fn(cfg) : { valid: true };
@@ -291,6 +353,17 @@
 '  #tab-grader .gr-pullctl .fld select,#tab-grader .gr-pullctl .fld input{width:100%}' +
 '  #tab-grader .gr-pullbtns{display:flex;gap:10px;flex-wrap:wrap;align-items:center}' +
 '  @media(max-width:520px){#tab-grader .gr-pullctl .fld-name{flex:1 1 160px;width:auto}}' +
+// DPS / Support grading toggle (two pills) — sits above the loadout, near the header.
+'  #tab-grader .gr-axis{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}' +
+'  #tab-grader .gr-axis .lab{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);font-weight:700}' +
+'  #tab-grader .gr-axis .gr-axispills{display:inline-flex;gap:0;border:1px solid var(--border);border-radius:99px;overflow:hidden;background:var(--panel2)}' +
+'  #tab-grader .gr-axis .gr-axispill{background:none;border:none;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:700;color:var(--dim);padding:6px 18px;line-height:1.3;transition:background .12s,color .12s}' +
+'  #tab-grader .gr-axis .gr-axispill:not(:last-child){border-right:1px solid var(--border)}' +
+'  #tab-grader .gr-axis .gr-axispill:hover:not(.active){color:var(--text)}' +
+'  #tab-grader .gr-axis .gr-axispill.active{background:var(--accent);color:#fff}' +
+'  #tab-grader .gr-axis .gr-axisnote{font-size:11px;color:var(--dim)}' +
+// support-mode replacement for the (DPS-only) cut/fuse infographic.
+'  #tab-grader .gr-plan-note{margin-top:18px;padding:14px 16px;border:1px dashed var(--border);border-radius:10px;background:var(--panel2);font-size:12.5px;color:var(--dim)}' +
 // big lostark.bible-style profile header on the loadout panel.
 '  #tab-grader .gr-prof{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:0 0 4px}' +
 '  #tab-grader .gr-prof .gr-star{align-self:center}' +
@@ -573,13 +646,40 @@
 
   // ---------------- pull mode ----------------
 
+  // DPS / Support grading toggle, shown above the loadout header. Only rendered when the
+  // support axis exists. The active pill reflects grMode; clicking the other flips it and
+  // re-renders the cached loadout live (auto-detect default already applied on pull).
+  function axisToggleHtml() {
+    if (!supportAxisAvailable()) return "";
+    function pill(mode, label) {
+      return '<button type="button" class="gr-axispill' + (grMode === mode ? " active" : "") +
+        '" data-axis="' + mode + '">' + label + '</button>';
+    }
+    var note = isSupport()
+      ? "Grading party-damage value (support)"
+      : "Grading personal damage (DPS)";
+    return '<div class="gr-axis">' +
+      '<span class="lab">Grade as</span>' +
+      '<span class="gr-axispills">' + pill("dps", "DPS") + pill("support", "Support") + '</span>' +
+      '<span class="gr-axisnote">' + note + '</span>' +
+      '</div>';
+  }
+
+  // Flip the grading mode and re-render the cached loadout in place (live).
+  function setGrMode(mode) {
+    mode = (mode === "support") ? "support" : "dps";
+    if (mode === grMode) return;
+    grMode = mode;
+    if (lastLoadout) renderLoadout(lastLoadout);
+  }
+
   // Compact single-row gem card: rank/grade badge + cost + order/willpower + the two
   // abbreviated effects. %dmg shown is damage ABOVE the cp baseline (relDamage);
   // grade/rank are unchanged. Keeps id="gr-gem-N" so Weakest-3 can jump to + flash it.
   function gemCardHtml(cfg) {
     var v = validateConfig(cfg);
     var g, rank, dmg, cls;
-    if (v.valid) { g = grade(cfg); rank = gemRank(cfg); dmg = relDamage(cfg); cls = rankClass(rank); }
+    if (v.valid) { g = gGrade(cfg); rank = gRank(cfg); dmg = gRel(cfg); cls = rankClass(rank); }
     var rkHtml = v.valid
       ? rankBadge(rank) + '<div class="gd">' + g.toFixed(0) + '</div>'
       : '<div class="rk">?</div>';
@@ -606,7 +706,7 @@
     var list = gems.filter(function (x) {
       return x.gemType === gemType && validateConfig(x).valid;
     }).map(function (x) {
-      return { gem: x, g: grade(x), dmg: relDamage(x) };
+      return { gem: x, g: gGrade(x), dmg: gRel(x) };
     }).sort(function (a, b) { return a.g - b.g; }).slice(0, 3);
 
     var rows;
@@ -640,7 +740,7 @@
 
   // One core column: header (core name + its % dmg) + its gems as compact rows.
   function coreColHtml(slot, list) {
-    var cdmg = 0; list.forEach(function (x) { if (validateConfig(x).valid) cdmg += relDamage(x); });
+    var cdmg = 0; list.forEach(function (x) { if (validateConfig(x).valid) cdmg += gRel(x); });
     return '<div class="gr-corecol">' +
       '<div class="ch"><span class="cn">' + esc(coreShortName(slot)) + '</span>' +
       '<span class="cd">' + cdmg.toFixed(2) + '%</span></div>' +
@@ -655,7 +755,7 @@
     var tot = 0, n = 0;
     var cols = slots.map(function (key) {
       var list = groups[key];
-      list.forEach(function (x) { if (validateConfig(x).valid) tot += relDamage(x); });
+      list.forEach(function (x) { if (validateConfig(x).valid) tot += gRel(x); });
       n += list.length;
       return coreColHtml(key, list);
     }).join("");
@@ -921,13 +1021,16 @@
     }
     syncSourceUI(data.region);
 
-    // overall summary over the VALID gems. %dmg is damage ABOVE the cp baseline
-    // (relDamage); grade/rank are unchanged.
+    // overall summary over the VALID gems. In DPS mode %dmg is damage ABOVE the cp
+    // baseline (relDamage) and grade/rank are the DPS axis; in Support mode every figure
+    // switches to the support axis (party-damage value above a neutral support gem).
+    var sup = isSupport();
     var valid = gems.filter(function (x) { return validateConfig(x).valid; });
     var sumGrade = 0, sumDmg = 0;
-    valid.forEach(function (x) { sumGrade += grade(x); sumDmg += relDamage(x); });
+    valid.forEach(function (x) { sumGrade += gGrade(x); sumDmg += gRel(x); });
     var avgGrade = valid.length ? sumGrade / valid.length : 0;
     var avgRank = rankFromGrade(avgGrade);
+    var totalLabel = sup ? "Total % party dmg" : "Total % dmg";
 
     // Big lostark.bible-style profile header: class icon + large bold name, with region
     // / class / item level as secondary chips. KR (data.class == null) -> item level only.
@@ -936,6 +1039,7 @@
     if (data.itemLevel != null) metaChips += '<span class="gr-chip">ilvl <b>' + esc(Number(data.itemLevel).toLocaleString()) + '</b></span>';
 
     var html = '' +
+axisToggleHtml() +
 '<div class="panel">' +
 '  <div class="gr-prof">' +
 '    <button type="button" class="gr-star" id="gr-fav-star"></button>' +
@@ -949,7 +1053,7 @@
 '  <div class="gr-sum">' +
 '    <div class="stat"><span class="k">Avg grade</span><span class="v ' + rankClass(avgRank) + '">' + avgGrade.toFixed(1) + '</span></div>' +
 '    <div class="stat"><span class="k">Avg rank</span><span class="v">' + rankBadge(avgRank) + '</span></div>' +
-'    <div class="stat"><span class="k">Total % dmg</span><span class="v" style="color:var(--accent)">' + sumDmg.toFixed(2) + '%</span></div>' +
+'    <div class="stat"><span class="k">' + totalLabel + '</span><span class="v" style="color:var(--accent)">' + sumDmg.toFixed(2) + '%</span></div>' +
 '  </div>';
     if (data.warnings && data.warnings.length) {
       html += '<div class="gr-warn">' + data.warnings.length + ' parser warning(s): ' + esc(data.warnings.slice(0, 4).join("; ")) + (data.warnings.length > 4 ? "…" : "") + '</div>';
@@ -964,7 +1068,13 @@
     // gems, nudgeable ±1 rank with ◀▶. Numbers come from window.pipelineAdvice; the
     // section paints a "loading…" placeholder first and fills once pipelineReady fires
     // (so it works even if Pipeline was never opened).
-    html += planSectionHtml(blanketBaseline(gems));
+    // Support mode: the cut/fuse plan is DPS cut-EV math, so it's hidden entirely (and
+    // window.pipelineAdvice is NOT called) — a short note stands in its place instead.
+    if (sup) {
+      html += '<div class="gr-plan-note">Cut / fuse planning is DPS-only for now.</div>';
+    } else {
+      html += planSectionHtml(blanketBaseline(gems));
+    }
 
     // Gems by core, laid out as two sections (ORDER then CHAOS). Each section is a
     // 3-column grid: one column per core (Sun / Moon / Star), each column listing that
@@ -973,6 +1083,13 @@
     html += gemsByCoreHtml(gems);
 
     out.innerHTML = html;
+
+    // DPS / Support toggle: flip the grading axis and re-render live. (Bound here since
+    // the toggle markup is re-emitted on every loadout render.)
+    Array.prototype.forEach.call(out.querySelectorAll(".gr-axispill"), function (btn) {
+      btn.addEventListener("click", function () { setGrMode(btn.getAttribute("data-axis")); });
+    });
+
     // Weakest-3 rows scroll to + flash their gem card
     Array.prototype.forEach.call(out.querySelectorAll(".wk-row[data-target]"), function (row) {
       row.addEventListener("click", function () { focusGem(row.getAttribute("data-target")); });
@@ -1001,8 +1118,9 @@
     }
 
     // Ensure pipeline data is loaded, then (re)fill the action-plan cards. Marks a
-    // global ready flag so re-renders/gpd changes can compute synchronously.
-    if (typeof window.pipelineReady === "function") {
+    // global ready flag so re-renders/gpd changes can compute synchronously. Skipped in
+    // support mode — the cut/fuse infographic isn't shown there (DPS-only).
+    if (!sup && typeof window.pipelineReady === "function") {
       window.pipelineReady(function () {
         window.__grPipelineReady = true;
         refreshPlanCards();
@@ -1116,6 +1234,7 @@
         return;
       }
       lastLoadout = r.data;
+      grMode = defaultModeFor(r.data); // auto-default DPS/Support for this fresh loadout
       setPullStatus("Graded " + ((r.data.gems || []).length) + " gems.", "");
       if (refreshBtn) refreshBtn.style.display = "";
       renderLoadout(r.data);
@@ -1213,6 +1332,7 @@
       }
       if (charData.name && $("gr-name")) $("gr-name").value = charData.name;
       lastLoadout = charData;
+      grMode = defaultModeFor(charData); // auto-default DPS/Support for this loadout
       // Listed characters are cached records; reflect that unless told otherwise.
       if (charData.cached == null && charData.pulledAt != null) charData.cached = true;
       var refreshBtn = $("gr-pull-refresh");

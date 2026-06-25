@@ -326,6 +326,115 @@
   }
   function gemRank(config) { return rankFromGrade(grade(config)); }
 
+  // ==================== SUPPORT SCORING AXIS ====================
+  // A parallel score for SUPPORT gems, mirroring the DPS scoring structure exactly
+  // but swapping in support coefficients. The DPS scoring above is UNCHANGED; these
+  // are purely additive functions. Values are on a PARTY-DAMAGE scale with the ×3
+  // (3 DPS in the party) ALREADY baked into the coefficients below.
+  //
+  // Mapping to the DPS structure:
+  //   * Effect per-level values (additive, like the DPS D-values):
+  //       Ally Attack Enh.  0.0596   (party attack buff)
+  //       Brand Power       0.0434   (brand amp)
+  //       Ally Damage Enh.  0.0195   (party damage buff)
+  //     The DPS effects (Attack Power / Additional Damage / Boss Damage) -> 0.
+  //   * Order/Chaos point: 0.0747 per orderLevel point (replaces DPS's 0.159872).
+  //   * Willpower: exactly (2/3) × the DPS willpower contribution — same
+  //     willpowerScore mechanic, same willpowerCost = baseCost − wpLevel, same 4.25
+  //     neutral, just scaled by 2/3.
+  var SUPPORT_SCORING = {
+    orderPerPoint: 0.0747,                 // support order: flat per point
+    willpowerFactor: 2 / 3,                // support willpower = (2/3) × DPS willpower
+    allyAttackEnh: 0.0596,
+    brandPower: 0.0434,
+    allyDamageEnh: 0.0195,
+    // DPS-only effects contribute nothing to support:
+    attackPower: 0,
+    additionalDamage: 0,
+    bossDamage: 0
+  };
+
+  // Support willpower contribution = (2/3) × the DPS willpowerScore (reuses the same
+  // willpowerCost = baseCost − wpLevel and the same 4.25 neutral).
+  function supportWillpowerScore(wpCost) {
+    return SUPPORT_SCORING.willpowerFactor * willpowerScore(wpCost);
+  }
+
+  // Support per-effect value (parallel to effectScore, support coefficients).
+  function supportEffectScore(effectType, level) {
+    switch (effectType) {
+      case "Ally Attack Enh.": return level * SUPPORT_SCORING.allyAttackEnh;
+      case "Brand Power": return level * SUPPORT_SCORING.brandPower;
+      case "Ally Damage Enh.": return level * SUPPORT_SCORING.allyDamageEnh;
+      // Attack Power / Additional Damage / Boss Damage (and anything else) -> 0
+      default: return 0;
+    }
+  }
+
+  // Support order is FLAT per point (parallel to orderScore).
+  function supportOrderScore(orderLevel) {
+    return orderLevel * SUPPORT_SCORING.orderPerPoint;
+  }
+
+  // Total SUPPORT score = supportWillpower + 0.0747·orderLevel + supportEff(e1) +
+  // supportEff(e2). Mirrors score(config) line-for-line with support coefficients.
+  function supportScore(config) {
+    var wpc = willpowerCost(config.baseCost, config.willpowerLevel);
+    return supportWillpowerScore(wpc)
+      + supportEffectScore(config.effect1, config.effect1Level)
+      + supportEffectScore(config.effect2, config.effect2Level)
+      + supportOrderScore(config.orderLevel);
+  }
+
+  // Support baseline = supportScore of the neutral gem (willpower cost 4.25, order
+  // 4.25, dead/DPS effects). Mirrors cpBaseline: one fixed neutral for every base
+  // cost. baseCost kept in the signature for parity with cpBaseline.
+  function supportBaseline(baseCost) {
+    return supportWillpowerScore(4.25) + supportOrderScore(4.25);
+  }
+
+  // supportRelValue(config): support value ABOVE the neutral baseline (parallel to
+  // relDamage). This × gpd × (already-baked ×3) = gold, using the SAME gpd tiers as
+  // DPS. May be negative for a sub-baseline gem.
+  function supportRelValue(config) {
+    return supportScore(config) - supportBaseline(config.baseCost);
+  }
+
+  // Min-max bounds for the SUPPORT grade, over SUPPORT gems only (parallel to
+  // gradeBounds). min = worst support gem, max = the perfect support gem (10-cost
+  // Ally Attack Enh Lv5 + Brand Power Lv5, order 5, willpower 5 ≈ 0.836).
+  var _supportGradeBounds = null;
+  function supportGradeBounds() {
+    if (_supportGradeBounds) return _supportGradeBounds;
+    var min = Infinity, max = -Infinity, costs = [8, 9, 10];
+    for (var ci = 0; ci < costs.length; ci++) {
+      var cost = costs[ci], pool = EFFECT_POOLS[cost];
+      for (var i = 0; i < pool.length; i++)
+        for (var j = i + 1; j < pool.length; j++)
+          for (var wp = 1; wp <= 5; wp++)
+            for (var o = 1; o <= 5; o++)
+              for (var a = 1; a <= 5; a++)
+                for (var b = 1; b <= 5; b++) {
+                  var s = supportScore({ baseCost: cost, willpowerLevel: wp, orderLevel: o,
+                    effect1: pool[i], effect1Level: a, effect2: pool[j], effect2Level: b });
+                  if (s < min) min = s;
+                  if (s > max) max = s;
+                }
+    }
+    _supportGradeBounds = { min: min, max: max };
+    return _supportGradeBounds;
+  }
+
+  // 0-100 SUPPORT grade for a gem (rounded to 1 decimal). Mirrors grade().
+  function supportGrade(config) {
+    var b = supportGradeBounds();
+    var g = 100 * (supportScore(config) - b.min) / (b.max - b.min);
+    return Math.round(Math.max(0, Math.min(100, g)) * 10) / 10;
+  }
+
+  // Letter rank from the SUPPORT grade — reuses the SAME RANK_CUTS as DPS.
+  function supportRank(config) { return rankFromGrade(supportGrade(config)); }
+
   // Grade-tier colors (owner's percentile palette): F/D gray, C green, B blue,
   // A purple, S- orange, S pink, S+ white. rank = "S+"|"S"|"S-"|"A+"|"A"|… .
   var RANK_COLORS = {
@@ -797,6 +906,17 @@
     gemRank: gemRank,
     rankFromGrade: rankFromGrade,
     RANK_CUTS: RANK_CUTS,
+    // ---- SUPPORT scoring axis (parallel to the DPS scoring above) ----
+    SUPPORT_SCORING: SUPPORT_SCORING,
+    supportWillpowerScore: supportWillpowerScore,
+    supportEffectScore: supportEffectScore,
+    supportOrderScore: supportOrderScore,
+    supportScore: supportScore,
+    supportBaseline: supportBaseline,
+    supportRelValue: supportRelValue,
+    supportGrade: supportGrade,
+    supportRank: supportRank,
+    supportGradeBounds: supportGradeBounds,
     rankColor: rankColor,
     gradeColor: gradeColor,
     scoreBreakdown: scoreBreakdown,

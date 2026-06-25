@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-06-23T10:14:43.432Z",
+    "generated": "2026-06-25T19:32:28.819Z",
     "note": "Captured references for the deterministic core. Regenerate with `node tools/gen-refs.js`. Scoring is REAL % damage (D = 100*ln(multiplier)); supersedes the abstract-weight model and the removed SCORE_PER_PERCENT_DAMAGE=30.96.",
     "SCORING": {
       "willpowerPerLevel": 0.0781186855277456,
@@ -31,6 +31,16 @@
           "perPoint": 0.0016
         }
       }
+    },
+    "SUPPORT_SCORING": {
+      "orderPerPoint": 0.0747,
+      "willpowerFactor": 0.6666666666666666,
+      "allyAttackEnh": 0.0596,
+      "brandPower": 0.0434,
+      "allyDamageEnh": 0.0195,
+      "attackPower": 0,
+      "additionalDamage": 0,
+      "bossDamage": 0
     },
     "COSTS": {
       "processBase": 900,
@@ -257,6 +267,141 @@
       }
     }
   ],
+  "support": [
+    {
+      "config": {
+        "baseCost": 10,
+        "gemType": "order",
+        "willpowerLevel": 5,
+        "orderLevel": 5,
+        "effect1": "Ally Attack Enh.",
+        "effect1Level": 5,
+        "effect2": "Brand Power",
+        "effect2Level": 5
+      },
+      "supportScore": 0.836421,
+      "supportRelValue": 0.531966,
+      "supportGrade": 100,
+      "supportRank": "S+"
+    },
+    {
+      "config": {
+        "baseCost": 10,
+        "gemType": "order",
+        "willpowerLevel": 1,
+        "orderLevel": 1,
+        "effect1": "Boss Damage",
+        "effect1Level": 1,
+        "effect2": "Additional Damage",
+        "effect2Level": 1
+      },
+      "supportScore": -0.185696,
+      "supportRelValue": -0.490151,
+      "supportGrade": 0,
+      "supportRank": "F-"
+    },
+    {
+      "config": {
+        "baseCost": 8,
+        "gemType": "order",
+        "willpowerLevel": 5,
+        "orderLevel": 5,
+        "effect1": "Brand Power",
+        "effect1Level": 5,
+        "effect2": "Ally Damage Enh.",
+        "effect2Level": 5
+      },
+      "supportScore": 0.740079,
+      "supportRelValue": 0.435624,
+      "supportGrade": 90.6,
+      "supportRank": "S"
+    },
+    {
+      "config": {
+        "baseCost": 9,
+        "gemType": "order",
+        "willpowerLevel": 5,
+        "orderLevel": 5,
+        "effect1": "Ally Attack Enh.",
+        "effect1Level": 5,
+        "effect2": "Ally Damage Enh.",
+        "effect2Level": 5
+      },
+      "supportScore": 0.769,
+      "supportRelValue": 0.464545,
+      "supportGrade": 93.4,
+      "supportRank": "S"
+    },
+    {
+      "config": {
+        "baseCost": 9,
+        "gemType": "order",
+        "willpowerLevel": 4,
+        "orderLevel": 3,
+        "effect1": "Ally Attack Enh.",
+        "effect1Level": 4,
+        "effect2": "Boss Damage",
+        "effect2Level": 1
+      },
+      "supportScore": 0.410421,
+      "supportRelValue": 0.105966,
+      "supportGrade": 58.3,
+      "supportRank": "C"
+    },
+    {
+      "config": {
+        "baseCost": 10,
+        "gemType": "order",
+        "willpowerLevel": 2,
+        "orderLevel": 1,
+        "effect1": "Brand Power",
+        "effect1Level": 3,
+        "effect2": "Ally Attack Enh.",
+        "effect2Level": 5
+      },
+      "supportScore": 0.294584,
+      "supportRelValue": -0.009872,
+      "supportGrade": 47,
+      "supportRank": "D+"
+    },
+    {
+      "config": {
+        "baseCost": 8,
+        "gemType": "order",
+        "willpowerLevel": 3,
+        "orderLevel": 4,
+        "effect1": "Brand Power",
+        "effect1Level": 5,
+        "effect2": "Ally Damage Enh.",
+        "effect2Level": 2
+      },
+      "supportScore": 0.502721,
+      "supportRelValue": 0.198266,
+      "supportGrade": 67.4,
+      "supportRank": "B-"
+    },
+    {
+      "config": {
+        "baseCost": 8,
+        "gemType": "order",
+        "willpowerLevel": 5,
+        "orderLevel": 5,
+        "effect1": "Additional Damage",
+        "effect1Level": 5,
+        "effect2": "Attack Power",
+        "effect2Level": 5
+      },
+      "supportScore": 0.425579,
+      "supportRelValue": 0.121124,
+      "supportGrade": 59.8,
+      "supportRank": "C"
+    }
+  ],
+  "supportBounds": {
+    "min": -0.185696,
+    "max": 0.836421,
+    "baseline": 0.304455
+  },
   "willpowerCost": [
     {
       "baseCost": 8,

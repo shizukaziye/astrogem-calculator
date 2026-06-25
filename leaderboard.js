@@ -41,9 +41,27 @@
     var fn = (A && A.relDamage) || window.relDamage;
     return fn ? fn(cfg) : 0;
   }
+  // ---- support-axis accessors (mirror the DPS ones above) ----
+  function supportGrade(cfg) {
+    var fn = (A && A.supportGrade) || window.supportGrade;
+    return fn ? fn(cfg) : 0;
+  }
+  function supportRelValue(cfg) {
+    var fn = (A && A.supportRelValue) || window.supportRelValue;
+    return fn ? fn(cfg) : 0;
+  }
 
   var Favs = (typeof window !== "undefined" && window.Favorites) || null;
   var allChars = [];   // the full ranked list (each tagged with _rank = overall #)
+  var rawChars = [];   // every character as fetched (unfiltered, unsorted by mode)
+  var mode = "dps";    // "dps" | "support" — which leaderboard is shown
+  var page = 1;        // 1-based current page of the main (paginated) table
+  var PAGE_SIZE = 100; // max rows per page of the All-characters table
+
+  // The four SUPPORT classes — Support mode keeps ALL characters of these classes
+  // (even DPS-built ones), filtered by c.class, never by build.
+  var SUPPORT_CLASSES = { "Bard": 1, "Paladin": 1, "Artist": 1, "Valkyrie": 1 };
+  function isSupportClass(c) { return !!(c && c.class && SUPPORT_CLASSES[c.class]); }
 
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
@@ -136,6 +154,28 @@
     return n ? sum : null;
   }
 
+  // SUPPORT analogue of avgGradeOf: mean of supportGrade over a character's VALID
+  // gems. Null when no valid gems (sorts to the bottom / shows "—").
+  function avgSupportGradeOf(char) {
+    var gems = (char && char.gems) || [];
+    var sum = 0, n = 0;
+    for (var i = 0; i < gems.length; i++) {
+      if (validateConfig(gems[i]).valid) { sum += supportGrade(gems[i]); n++; }
+    }
+    return n ? sum / n : null;
+  }
+
+  // SUPPORT analogue of totalDmgOf: Σ supportRelValue over a character's VALID gems
+  // (the "Party dmg%" column). Null when no valid gems.
+  function totalPartyDmgOf(char) {
+    var gems = (char && char.gems) || [];
+    var sum = 0, n = 0;
+    for (var i = 0; i < gems.length; i++) {
+      if (validateConfig(gems[i]).valid) { sum += supportRelValue(gems[i]); n++; }
+    }
+    return n ? sum : null;
+  }
+
   var STYLE =
 '<style>' +
 '  #tab-leaderboard .lb-status{font-size:12px;color:var(--dim);margin:2px 0 12px;min-height:16px}' +
@@ -174,6 +214,17 @@
 '  #tab-leaderboard .lb-favsec h3 .ct{color:var(--dim);font-weight:600;letter-spacing:.02em;font-size:11px;text-transform:none}' +
 '  #tab-leaderboard .lb-favsec table{border:1px solid var(--border);border-radius:10px;overflow:hidden}' +
 '  #tab-leaderboard .lb-mainhdr{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin:0 0 8px;font-weight:700}' +
+// ---- DPS / Support pill toggle ----
+'  #tab-leaderboard .lb-modes{display:inline-flex;gap:0;border:1px solid var(--border);border-radius:99px;overflow:hidden}' +
+'  #tab-leaderboard .lb-modebtn{background:none;border:none;cursor:pointer;color:var(--dim);font-family:inherit;font-weight:700;font-size:12px;padding:5px 16px;line-height:1.4;transition:background .12s,color .12s}' +
+'  #tab-leaderboard .lb-modebtn:hover{color:var(--text)}' +
+'  #tab-leaderboard .lb-modebtn.on{background:var(--accent);color:#0c0e12}' +
+// ---- pagination controls (shown only when >PAGE_SIZE characters) ----
+'  #tab-leaderboard .lb-pager{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap;color:var(--dim);font-size:12px}' +
+'  #tab-leaderboard .lb-pager .lb-pagebtn{background:var(--panel2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-weight:700;font-size:12px;padding:5px 12px;cursor:pointer}' +
+'  #tab-leaderboard .lb-pager .lb-pagebtn:disabled{opacity:.4;cursor:default}' +
+'  #tab-leaderboard .lb-pager .lb-pageinfo{font-variant-numeric:tabular-nums}' +
+'  #tab-leaderboard .lb-pager .lb-jump{width:56px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:12px;padding:5px 6px;text-align:center}' +
 '</style>';
 
   function shell() {
@@ -181,6 +232,10 @@
 '<div class="panel">' +
 '  <h2>Leaderboard</h2>' +
 '  <div class="lb-actions">' +
+'    <div class="lb-modes" role="group" aria-label="Leaderboard type">' +
+'      <button class="lb-modebtn on" id="lb-mode-dps" type="button" aria-pressed="true">DPS</button>' +
+'      <button class="lb-modebtn" id="lb-mode-support" type="button" aria-pressed="false">Support</button>' +
+'    </div>' +
 '    <button class="mbtn" id="lb-refresh" type="button">Refresh</button>' +
 '    <span class="lb-status" id="lb-status"></span>' +
 '  </div>' +
@@ -189,6 +244,8 @@
 '<details class="method">' +
 '  <summary>How the leaderboard ranks characters</summary>' +
 '  <p>Every character pulled in the Grader is cached server-side (a Cloudflare Worker + KV). This tab lists them all and ranks each by its <b>average grade</b> — the mean of every equipped gem’s 0–100 grade (the same grade the Grader shows). Click a row to open that loadout in the Grader.</p>' +
+'  <p>The <b>DPS</b> / <b>Support</b> toggle switches the scoring axis. DPS ranks all characters by average DPS grade (Total dmg%). Support keeps only the four support classes — Bard, Paladin, Artist, Valkyrie (every one of them, even DPS-built) — and ranks them by average <b>support</b> grade, with a Party dmg% column.</p>' +
+'  <p>At most 100 characters show per page; use Prev / Next or the jump box to page through the rest. Favorites are listed in full above the table.</p>' +
 '  <p class="note">The list reflects whatever characters have been pulled so far; pull a new one in the Grader and it appears here after a refresh.</p>' +
 '</details>';
   }
@@ -227,12 +284,15 @@
 
   // One <tr> for a character. `i` is its index in allChars; `rankNum` is the overall
   // rank to show (#) — for the Favorites table this is the character's ORIGINAL rank,
-  // so a favorite that's #3 overall still reads "#3".
+  // so a favorite that's #3 overall still reads "#3". The grade + dmg figures follow
+  // the active mode (DPS: _avg / _dmg ; Support: _savg / _pdmg).
   function charRow(c, i, rankNum) {
-    var avg = c._avg;
+    var support = mode === "support";
+    var avg = support ? c._savg : c._avg;
+    var dmg = support ? c._pdmg : c._dmg;
     var gradeTxt = avg == null ? "—" : avg.toFixed(1);
     var badge = avg == null ? "" : rankBadge(rankFromGrade(avg));
-    var dmgTxt = c._dmg == null ? "—" : c._dmg.toFixed(2) + "%";
+    var dmgTxt = dmg == null ? "—" : dmg.toFixed(2) + "%";
     return '<tr data-i="' + i + '">' +
       starCell(c, i) +
       '<td class="lb-rank">#' + rankNum + '</td>' +
@@ -264,9 +324,10 @@
   }
 
   function headRow() {
+    var dmgHdr = mode === "support" ? "Party dmg%" : "Total dmg%";
     return '<thead><tr>' +
       (Favs ? '<th class="lb-star" aria-label="Favorite"></th>' : '') +
-      '<th>Rank</th><th>iLvl</th><th>Character</th><th>Avg grade</th><th>Total dmg%</th><th>Last pulled</th>' +
+      '<th>Rank</th><th>iLvl</th><th>Character</th><th>Avg grade</th><th>' + dmgHdr + '</th><th>Last pulled</th>' +
       '</tr></thead>';
   }
 
@@ -279,7 +340,7 @@
     var n = 0;
     for (var i = 0; i < allChars.length; i++) {
       var c = allChars[i];
-      if (Favs.has(c.region, c.name)) { rows += charRow(c, i, c._rank); n++; }
+      if (Favs.has(c.region, c.name)) { rows += charRow(c, c._idx, c._rank); n++; }
     }
     if (!n) return ''; // no favorites -> hide the whole section
     return '<div class="lb-favsec" id="lb-favsec">' +
@@ -288,10 +349,41 @@
       '</div>';
   }
 
+  // Total number of pages for the current list (>=1).
+  function pageCount() {
+    return Math.max(1, Math.ceil(allChars.length / PAGE_SIZE));
+  }
+
+  // Clamp `page` into [1, pageCount()] (used after a re-filter shrinks the list).
+  function clampPage() {
+    var pc = pageCount();
+    if (page < 1) page = 1;
+    if (page > pc) page = pc;
+  }
+
+  // Pagination controls — only rendered when there are MORE than one page
+  // (i.e. >PAGE_SIZE characters). Prev / Next + a jump-to-page input.
+  function pagerHtml() {
+    if (allChars.length <= PAGE_SIZE) return '';
+    var pc = pageCount();
+    var first = (page - 1) * PAGE_SIZE + 1;
+    var last = Math.min(page * PAGE_SIZE, allChars.length);
+    return '<div class="lb-pager">' +
+      '<button type="button" class="lb-pagebtn" id="lb-prev"' + (page <= 1 ? ' disabled' : '') + '>&larr; Prev</button>' +
+      '<button type="button" class="lb-pagebtn" id="lb-next"' + (page >= pc ? ' disabled' : '') + '>Next &rarr;</button>' +
+      '<span class="lb-pageinfo">Page ' + page + ' of ' + pc + ' &middot; #' + first + '–#' + last + '</span>' +
+      '<span>Jump to <input type="number" class="lb-jump" id="lb-jump" min="1" max="' + pc + '" value="' + page + '"></span>' +
+      '</div>';
+  }
+
   function mainTableHtml() {
-    var rows = allChars.map(function (c, i) { return charRow(c, i, c._rank); }).join("");
+    clampPage();
+    var start = (page - 1) * PAGE_SIZE;
+    var slice = allChars.slice(start, start + PAGE_SIZE);
+    var rows = slice.map(function (c) { return charRow(c, c._idx, c._rank); }).join("");
     return (Favs ? '<div class="lb-mainhdr">All characters</div>' : '') +
       '<table>' + colGroup() + headRow() + '<tbody id="lb-rows">' + rows + '</tbody></table>' +
+      pagerHtml() +
       '<div class="lb-hint">Click a character to open its loadout in the Grader' +
       (Favs ? '; tap the ★ to save it.' : '.') + '</div>';
   }
@@ -322,12 +414,48 @@
     });
   }
 
-  // Full render: Favorites section (if any) above the main table. Called on load and
-  // on every Favorites change (so stars and the Favorites view stay current).
+  // Sort comparator: by the active mode's avg grade, descending, nulls last.
+  function byActiveGradeDesc(a, b) {
+    var av = (mode === "support" ? a._savg : a._avg);
+    var bv = (mode === "support" ? b._savg : b._avg);
+    av = av == null ? -Infinity : av;
+    bv = bv == null ? -Infinity : bv;
+    return bv - av;
+  }
+
+  // Build the ranked list FROM rawChars for the active mode, then paint.
+  //   DPS:     ALL characters, ranked by avg grade desc (Total dmg% column).
+  //   Support: ONLY the four support CLASSES (by c.class, not build) — kept in full,
+  //            ranked by avg supportGrade desc (Party dmg% column).
+  // Tags each kept char with _rank (overall #, 1..N within this mode's list) and
+  // _idx (its index in allChars, for the delegated click/star handlers).
+  function rebuild() {
+    var list = (mode === "support")
+      ? rawChars.filter(isSupportClass)
+      : rawChars.slice();
+    list.sort(byActiveGradeDesc);
+    for (var i = 0; i < list.length; i++) { list[i]._rank = i + 1; list[i]._idx = i; }
+    allChars = list;
+    clampPage();
+    repaint();
+  }
+
+  // Full render entry point: stash the fetched list, reset to page 1, build for the
+  // active mode. Called on load (DPS by default) and after a fresh fetch.
   function renderTable(chars) {
-    allChars = chars;
-    // tag each char with its overall rank (1..N) in the already-sorted list
-    for (var i = 0; i < allChars.length; i++) allChars[i]._rank = i + 1;
+    rawChars = chars;
+    // pre-compute both axes' per-character figures once (used by sort + columns).
+    rawChars.forEach(function (c) {
+      c._avg = avgGradeOf(c); c._dmg = totalDmgOf(c);
+      c._savg = avgSupportGradeOf(c); c._pdmg = totalPartyDmgOf(c);
+    });
+    page = 1;
+    rebuild();
+  }
+
+  function gotoPage(p) {
+    page = p;
+    clampPage();
     repaint();
   }
 
@@ -337,6 +465,18 @@
     body.innerHTML = favSectionHtml() + mainTableHtml();
     wireTbody($("lb-fav-rows"));
     wireTbody($("lb-rows"));
+    // Pager (present only when paginated).
+    var prev = $("lb-prev"), next = $("lb-next"), jump = $("lb-jump");
+    if (prev) prev.addEventListener("click", function () { gotoPage(page - 1); });
+    if (next) next.addEventListener("click", function () { gotoPage(page + 1); });
+    if (jump) {
+      var go = function () {
+        var v = parseInt(jump.value, 10);
+        if (!isNaN(v)) gotoPage(v); else jump.value = page;
+      };
+      jump.addEventListener("change", go);
+      jump.addEventListener("keydown", function (e) { if (e.key === "Enter") go(); });
+    }
   }
 
   var loadedOnce = false;
@@ -364,13 +504,8 @@
         renderEmpty("No characters stored yet — pull one in the Grader.");
         return;
       }
-      // compute avg grade, sort descending (nulls last)
-      chars.forEach(function (c) { c._avg = avgGradeOf(c); c._dmg = totalDmgOf(c); });
-      chars.sort(function (a, b) {
-        var av = a._avg == null ? -1 : a._avg;
-        var bv = b._avg == null ? -1 : b._avg;
-        return bv - av;
-      });
+      // The "N characters stored" line counts EVERY stored character (unfiltered);
+      // renderTable computes both axes' figures and ranks for the active mode.
       setStatus(chars.length + " character" + (chars.length === 1 ? "" : "s") + " stored.", "");
       renderTable(chars);
     }).catch(function (e) {
@@ -385,6 +520,20 @@
     if (!el) return;
     el.innerHTML = shell();
     $("lb-refresh").addEventListener("click", load);
+
+    // DPS / Support toggle: re-filter, re-rank, and reset to page 1. The Favorites
+    // section follows the mode too (it reads from the rebuilt allChars).
+    function setMode(m) {
+      if (m === mode) return;
+      mode = m;
+      var dpsBtn = $("lb-mode-dps"), supBtn = $("lb-mode-support");
+      if (dpsBtn) { dpsBtn.classList.toggle("on", m === "dps"); dpsBtn.setAttribute("aria-pressed", m === "dps" ? "true" : "false"); }
+      if (supBtn) { supBtn.classList.toggle("on", m === "support"); supBtn.setAttribute("aria-pressed", m === "support" ? "true" : "false"); }
+      page = 1;
+      if (rawChars.length) rebuild();
+    }
+    $("lb-mode-dps").addEventListener("click", function () { setMode("dps"); });
+    $("lb-mode-support").addEventListener("click", function () { setMode("support"); });
 
     // Re-render when favorites change anywhere (this tab or the Grader). Only repaint
     // if we've actually loaded the list (otherwise there's nothing to show yet).

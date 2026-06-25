@@ -226,6 +226,110 @@ def gem_rank(config):
     return rank_from_grade(grade(config))
 
 
+# ==================== SUPPORT SCORING AXIS ====================
+# Parallel score for SUPPORT gems, mirroring astrogem.js's SUPPORT axis exactly.
+# The DPS scoring above is UNCHANGED; these are purely additive. Party-damage scale
+# with the x3 (3 DPS in the party) ALREADY baked into the coefficients.
+#   Effect per-level: Ally Attack Enh. 0.0596, Brand Power 0.0434, Ally Damage Enh.
+#     0.0195; DPS effects (Attack Power / Additional Damage / Boss Damage) -> 0.
+#   Order: 0.0747 per orderLevel point (replaces DPS's 0.159872).
+#   Willpower: exactly (2/3) x the DPS willpower contribution (same willpower_score
+#     mechanic, same willpowerCost = baseCost - wpLevel, same 4.25 neutral).
+SUPPORT_SCORING = {
+    "orderPerPoint": 0.0747,
+    "willpowerFactor": 2 / 3,
+    "allyAttackEnh": 0.0596,
+    "brandPower": 0.0434,
+    "allyDamageEnh": 0.0195,
+    "attackPower": 0,
+    "additionalDamage": 0,
+    "bossDamage": 0,
+}
+
+
+def support_willpower_score(wp_cost):
+    # (2/3) x the DPS willpower_score (same willpowerCost, same 4.25 neutral).
+    return SUPPORT_SCORING["willpowerFactor"] * willpower_score(wp_cost)
+
+
+def support_effect_score(effect_type, level):
+    if effect_type == "Ally Attack Enh.":
+        return level * SUPPORT_SCORING["allyAttackEnh"]
+    if effect_type == "Brand Power":
+        return level * SUPPORT_SCORING["brandPower"]
+    if effect_type == "Ally Damage Enh.":
+        return level * SUPPORT_SCORING["allyDamageEnh"]
+    return 0.0
+
+
+def support_order_score(order_level):
+    # Flat per point (parallel to order_score).
+    return order_level * SUPPORT_SCORING["orderPerPoint"]
+
+
+def support_score(config):
+    wpc = willpower_cost(config["baseCost"], config["willpowerLevel"])
+    return (
+        support_willpower_score(wpc)
+        + support_effect_score(config["effect1"], config["effect1Level"])
+        + support_effect_score(config["effect2"], config["effect2Level"])
+        + support_order_score(config["orderLevel"])
+    )
+
+
+def support_baseline(base_cost):
+    # Neutral gem: willpower cost 4.25, order 4.25, dead/DPS effects. One fixed
+    # neutral for every base cost (mirrors cp_baseline / cpBaseline).
+    return support_willpower_score(4.25) + support_order_score(4.25)
+
+
+def support_rel_value(config):
+    # Support value above the neutral baseline (parallel to relDamage).
+    return support_score(config) - support_baseline(config["baseCost"])
+
+
+_SUPPORT_GRADE_BOUNDS = None
+
+
+def support_grade_bounds():
+    # Min-max over SUPPORT gems only. max = perfect support gem (10-cost Ally Attack
+    # Enh Lv5 + Brand Power Lv5, order 5, willpower 5 ~ 0.836). Mirrors grade_bounds.
+    global _SUPPORT_GRADE_BOUNDS
+    if _SUPPORT_GRADE_BOUNDS is not None:
+        return _SUPPORT_GRADE_BOUNDS
+    lo, hi = float("inf"), float("-inf")
+    for cost in (8, 9, 10):
+        pool = EFFECT_POOLS[cost]
+        for i in range(len(pool)):
+            for j in range(i + 1, len(pool)):
+                for wp in range(1, 6):
+                    for o in range(1, 6):
+                        for a in range(1, 6):
+                            for b in range(1, 6):
+                                s = support_score({
+                                    "baseCost": cost, "willpowerLevel": wp, "orderLevel": o,
+                                    "effect1": pool[i], "effect1Level": a,
+                                    "effect2": pool[j], "effect2Level": b,
+                                })
+                                if s < lo:
+                                    lo = s
+                                if s > hi:
+                                    hi = s
+    _SUPPORT_GRADE_BOUNDS = {"min": lo, "max": hi}
+    return _SUPPORT_GRADE_BOUNDS
+
+
+def support_grade(config):
+    b = support_grade_bounds()
+    g = 100 * (support_score(config) - b["min"]) / (b["max"] - b["min"])
+    return round(max(0.0, min(100.0, g)) * 10) / 10
+
+
+def support_rank(config):
+    # Reuses the SAME RANK_CUTS as DPS.
+    return rank_from_grade(support_grade(config))
+
+
 def score_breakdown(config):
     wpc = willpower_cost(config["baseCost"], config["willpowerLevel"])
     wp_s = willpower_score(wpc)

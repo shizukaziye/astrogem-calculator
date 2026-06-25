@@ -75,6 +75,19 @@ for i, cse in enumerate(refs["score"]):
     check("score[%d].orderScore" % i, r6(bd["orderScore"]), cse["breakdown"]["orderScore"])
     check("score[%d].total" % i, r6(bd["totalScore"]), cse["breakdown"]["totalScore"])
 
+# ---- support (SUPPORT scoring axis) ----
+for i, cse in enumerate(refs.get("support", [])):
+    c = cse["config"]
+    check("support[%d].supportScore" % i, r6(A.support_score(c)), cse["supportScore"])
+    check("support[%d].supportRelValue" % i, r6(A.support_rel_value(c)), cse["supportRelValue"])
+    check("support[%d].supportGrade" % i, r6(A.support_grade(c)), cse["supportGrade"])
+    check("support[%d].supportRank" % i, A.support_rank(c), cse["supportRank"], exact=True)
+if refs.get("supportBounds"):
+    sb = A.support_grade_bounds()
+    check("supportBounds.min", r6(sb["min"]), refs["supportBounds"]["min"])
+    check("supportBounds.max", r6(sb["max"]), refs["supportBounds"]["max"])
+    check("supportBounds.baseline", r6(A.support_baseline(10)), refs["supportBounds"]["baseline"])
+
 # ---- willpowerCost ----
 for i, cse in enumerate(refs["willpowerCost"]):
     check("willpowerCost[%d].cost" % i, A.willpower_cost(cse["baseCost"], cse["wpLevel"]), cse["cost"], exact=True)
