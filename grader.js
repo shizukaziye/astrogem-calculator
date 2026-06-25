@@ -410,6 +410,8 @@
 '  #tab-grader table.gr-ptab .rar{font-weight:700;color:var(--text);white-space:nowrap}' +
 '  #tab-grader table.gr-ptab .rar .c{color:var(--dim);font-weight:600;font-variant-numeric:tabular-nums}' +
 '  #tab-grader table.gr-ptab .ov{font-variant-numeric:tabular-nums;color:var(--dim)}' +
+'  #tab-grader table.gr-ptab th.bh,#tab-grader table.gr-ptab td.bktd{text-align:center}' +
+'  #tab-grader table.gr-ptab td.fusetd{text-align:left}' +
 '  #tab-grader .vpill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:800;line-height:1.4;white-space:nowrap}' +
 '  #tab-grader .vpill .rcp{font-weight:600;opacity:.85;font-variant-numeric:tabular-nums}' +
 '  #tab-grader .vp-reset{background:#1f6b3e;color:#d6ffe6}' +
@@ -721,21 +723,19 @@
     return '<span class="vpill ' + meta.cls + '">' + inner + '</span>';
   }
 
-  // The "What to do" cell for ONE (rarity × cost) plan entry. Three shapes:
-  //   block fuse (per-BLOCK) -> a single fuse pill with the recipe (no arrow);
-  //   all 4 buckets agree     -> one verdict pill;
-  //   buckets differ          -> a 4-up grid (2D / Op / Sub / No), each its own pill.
-  function planActionCell(e) {
-    if (e.blockFuse) return verdictPill(e);             // whole block fuses
-    if (e.allAgree) return verdictPill(e);              // collapse to one label
-    var cells = "";
-    for (var i = 0; i < e.buckets.length; i++) {
-      var b = e.buckets[i];
-      var meta = VERDICT_META[b.verdict] || VERDICT_META["dismantle"];
-      cells += '<span class="bkt"><span class="bk">' + esc(b.label) + '</span>'
-        + '<span class="vpill ' + meta.cls + '">' + (VERDICT_SHORT[b.verdict] || meta.label) + '</span></span>';
-    }
-    return '<div class="bktgrid">' + cells + '</div>';
+  // The action cells for ONE (rarity × cost) plan entry. Fuse is the EXCEPTION: a single
+  // pill (+ recipe) spanning the four bucket columns. Otherwise ALWAYS the four per-
+  // effect-pair cells (2D / Op / Sub / No), one verdict pill each — they live in real
+  // table columns so they line up across every row.
+  function bucketCell(b) {
+    var meta = VERDICT_META[b.verdict] || VERDICT_META["dismantle"];
+    var short = VERDICT_SHORT[b.verdict] || meta.label;
+    return '<td class="bktd" title="' + esc(b.label + ': ' + short + ' · ' + fmtGoldShort(b.cut)) + '">'
+      + '<span class="vpill ' + meta.cls + '">' + short + '</span></td>';
+  }
+  function planActionCells(e) {
+    if (e.blockFuse) return '<td class="fusetd" colspan="4">' + verdictPill(e) + '</td>';
+    return e.buckets.map(bucketCell).join("");
   }
 
   // The single blanket-baseline recommendation table: 9 rows (rarity × cost), each with
@@ -743,13 +743,13 @@
   function planTableHtml(adv) {
     if (!adv) return '<div class="gr-plan-card"><div class="empty">Pipeline data unavailable.</div></div>';
     var rows = '<table class="gr-ptab"><thead><tr>'
-      + '<th>Gem</th><th>What to do <span class="th-sub">(per effect pair: 2D / Op / Sub / No)</span></th>'
+      + '<th>Gem</th><th class="bh">2D</th><th class="bh">Op</th><th class="bh">Sub</th><th class="bh">No</th>'
       + '<th class="r">Open value</th></tr></thead><tbody>';
     for (var i = 0; i < adv.plan.length; i++) {
       var e = adv.plan[i];
       rows += '<tr>'
         + '<td><span class="rar">' + esc(RAR_LABEL[e.rarity] || e.rarity) + ' <span class="c">' + e.cost + '-cost</span></span></td>'
-        + '<td>' + planActionCell(e) + '</td>'
+        + planActionCells(e)
         + '<td class="r ov">' + fmtGoldShort(e.openValue) + '</td>'
         + '</tr>';
     }
