@@ -198,9 +198,9 @@
 '  #tab-leaderboard .lb-rank{font-variant-numeric:tabular-nums;color:var(--dim);font-weight:700;width:48px}' +
 '  #tab-leaderboard .lb-name{font-weight:700;color:var(--text);text-decoration:none;border-bottom:1px dotted transparent}' +
 '  #tab-leaderboard .lb-name:hover{color:var(--accent);border-bottom-color:var(--accent)}' +
-'  #tab-leaderboard .lb-dmg{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}' +
+'  #tab-leaderboard .lb-dmg{color:var(--axis,var(--accent));font-weight:700;font-variant-numeric:tabular-nums}' +
 '  #tab-leaderboard .lb-region{color:var(--dim);font-weight:600;font-size:11px;margin-left:6px;flex:0 0 auto}' +
-'  #tab-leaderboard .lb-grade{font-variant-numeric:tabular-nums;font-weight:700;color:var(--accent)}' +
+'  #tab-leaderboard .lb-grade{font-variant-numeric:tabular-nums;font-weight:700;color:var(--axis,var(--accent))}' +
 '  #tab-leaderboard img.lb-class-icon{width:20px;height:20px;vertical-align:middle;margin-right:7px;object-fit:contain;opacity:.9;flex:0 0 auto;filter:brightness(0) invert(.82)}' +
 // MOBILE: the fixed columns (≈442px) overflow a phone, squeezing the flexible Character
 // column to ~0 so the NAME vanishes. Hide "Last pulled" + shrink the rest so the name fits.
@@ -232,17 +232,16 @@
 '  #tab-leaderboard .lb-favsec h3 .st{font-size:15px}' +
 '  #tab-leaderboard .lb-favsec h3 .ct{color:var(--dim);font-weight:600;letter-spacing:.02em;font-size:11px;text-transform:none}' +
 '  #tab-leaderboard .lb-favsec table{border:1px solid var(--border);border-radius:10px;overflow:hidden}' +
-'  #tab-leaderboard .lb-mainhdr{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin:0 0 8px;font-weight:700}' +
+'  #tab-leaderboard .lb-mainhdr{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--axis,var(--accent));margin:0 0 8px;font-weight:700}' +
 // ---- DPS / Support pill toggle ----
 '  #tab-leaderboard .lb-modes{display:inline-flex;gap:0;border:1px solid var(--border);border-radius:99px;overflow:hidden}' +
 '  #tab-leaderboard .lb-modebtn{background:none;border:none;cursor:pointer;color:var(--dim);font-family:inherit;font-weight:700;font-size:12px;padding:5px 16px;line-height:1.4;transition:background .12s,color .12s}' +
 '  #tab-leaderboard .lb-modebtn:hover{color:var(--text)}' +
-'  #tab-leaderboard .lb-modebtn.on{background:var(--accent);color:#0c0e12}' +
-'  #tab-leaderboard #lb-mode-dps.on{background:#d9534f;color:#fff}' +
-// DPS = red theme, Support = blue: mode-scoped --accent recolors avg grade, dmg, etc.
-// Rank badges use fixed rankColor hex, so they are untouched.
-'  #tab-leaderboard.axis-dps{--accent:#d9534f}' +
-'  #tab-leaderboard.axis-support{--accent:#66c7ff}' +
+'  #tab-leaderboard .lb-modebtn.on{background:var(--axis);color:#0c0e12}' +
+// DPS = GOLD, Support = GREEN: a mode-scoped --axis on avg grade, dmg, the header + the
+// toggle. Generic blue --accent stays for the rest; rank badges keep their rankColor.
+'  #tab-leaderboard.axis-dps{--axis:#e3b13a}' +
+'  #tab-leaderboard.axis-support{--axis:#46c074}' +
 '  #tab-leaderboard .lb-regs{display:inline-flex;gap:0;border:1px solid var(--border);border-radius:99px;overflow:hidden}' +
 '  #tab-leaderboard .lb-regbtn{background:none;border:none;cursor:pointer;color:var(--dim);font-family:inherit;font-weight:700;font-size:12px;padding:5px 13px;line-height:1.4;transition:background .12s,color .12s}' +
 '  #tab-leaderboard .lb-regbtn + .lb-regbtn{border-left:1px solid var(--border)}' +
@@ -300,7 +299,7 @@
   function bibleUrl(region, name) {
     var r = String(region).toUpperCase();
     if (r === "KR") return "https://lopec.kr/character/specPoint/" + encodeURIComponent(name || "");
-    if (r === "EU") return "https://lostark.bible/character/EUC/" + encodeURIComponent(name || "");
+    if (r === "EU") return "https://lostark.bible/character/CE/" + encodeURIComponent(name || "");
     return "https://lostark.bible/character/" + encodeURIComponent(region || "") + "/" + encodeURIComponent(name || "");
   }
 

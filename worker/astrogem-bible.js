@@ -317,8 +317,8 @@ function parseMeta(html, isKR) {
 // into the stored gem shape. Returns { ok:true, data } or { ok:false, status, body }.
 async function fetchCharacterData(region, name) {
   const isKR = String(region).toUpperCase() === "KR";
-  // lostark.bible uses EUC/EUW; map our single "EU" option to EU Central.
-  const bibleRegion = String(region).toUpperCase() === "EU" ? "EUC" : region;
+  // lostark.bible uses "CE" for EU Central; map our single "EU" option to it.
+  const bibleRegion = String(region).toUpperCase() === "EU" ? "CE" : region;
   const url = isKR
     ? "https://lopec.kr/character/specPoint/" + encodeURIComponent(name)
     : "https://lostark.bible/character/" + encodeURIComponent(bibleRegion) + "/" + encodeURIComponent(name);

@@ -324,7 +324,7 @@
   function bibleUrl(region, name) {
     var r = String(region).toUpperCase();
     if (r === "KR") return "https://lopec.kr/character/specPoint/" + encodeURIComponent(name || "");
-    if (r === "EU") return "https://lostark.bible/character/EUC/" + encodeURIComponent(name || "");
+    if (r === "EU") return "https://lostark.bible/character/CE/" + encodeURIComponent(name || "");
     return "https://lostark.bible/character/" + encodeURIComponent(region || "") + "/" + encodeURIComponent(name || "");
   }
 
@@ -350,12 +350,11 @@
 '  #tab-grader .gr-status{font-size:12px;color:var(--dim);margin-top:8px;min-height:16px}' +
 '  #tab-grader .gr-status.working{color:var(--accent)}' +
 '  #tab-grader .gr-status.err{color:var(--bad)}' +
-// DPS = red theme, Support = blue. A mode-scoped --accent override recolors ALL the
-// accent (blue) text in the grader — avg grade, totals, per-gem dmg, order/chaos +
-// grading text, hovers — to red in DPS. Rank BADGES use fixed rankColor hex, so they
-// are untouched (B stays blue, etc.).
-'  #tab-grader.axis-dps{--accent:#d9534f}' +
-'  #tab-grader.axis-support{--accent:#66c7ff}' +
+// DPS = GOLD, Support = GREEN — a mode-scoped --axis var applied ONLY to the key figures
+// (avg grade, totals, per-gem dmg, order/chaos + grading text, the toggle). Everything
+// else keeps the generic blue --accent; rank badges use fixed rankColor (untouched).
+'  #tab-grader.axis-dps{--axis:#e3b13a}' +
+'  #tab-grader.axis-support{--axis:#46c074}' +
 // pull mode: saved-character chips sit at the TOP (right under the mode toggle); the
 // region + name controls go on ONE short row below — no dead space, no side column.
 '  #tab-grader .gr-pullgrid{display:grid;grid-template-columns:auto 1fr;gap:14px 32px;align-items:start}' +
@@ -376,8 +375,7 @@
 '  #tab-grader .gr-axis .gr-axispill{background:none;border:none;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:700;color:var(--dim);padding:6px 18px;line-height:1.3;transition:background .12s,color .12s}' +
 '  #tab-grader .gr-axis .gr-axispill:not(:last-child){border-right:1px solid var(--border)}' +
 '  #tab-grader .gr-axis .gr-axispill:hover:not(.active){color:var(--text)}' +
-'  #tab-grader .gr-axis .gr-axispill.active{background:var(--accent);color:#fff}' +
-'  #tab-grader .gr-axis .gr-axispill-dps.active{background:#d9534f}' +
+'  #tab-grader .gr-axis .gr-axispill.active{background:var(--axis);color:#fff}' +
 '  #tab-grader .gr-axis .gr-axisnote{font-size:11px;color:var(--dim)}' +
 // support-mode replacement for the (DPS-only) cut/fuse infographic.
 '  #tab-grader .gr-plan-note{margin-top:18px;padding:14px 16px;border:1px dashed var(--border);border-radius:10px;background:var(--panel2);font-size:12.5px;color:var(--dim)}' +
@@ -398,7 +396,7 @@
 '  #tab-grader .gr-badge .gd{font-size:13px;color:var(--dim)}' +
 '  #tab-grader .gr-badge .gd b{color:var(--text);font-size:18px;font-variant-numeric:tabular-nums}' +
 '  #tab-grader .gr-dmg{font-size:13px;color:var(--dim)}' +
-'  #tab-grader .gr-dmg b{font-size:20px;color:var(--accent);font-variant-numeric:tabular-nums}' +
+'  #tab-grader .gr-dmg b{font-size:20px;color:var(--axis,var(--accent));font-variant-numeric:tabular-nums}' +
 '  #tab-grader .gr-bar{height:8px;border-radius:4px;background:var(--border);overflow:hidden;margin-top:10px}' +
 '  #tab-grader .gr-bar > i{display:block;height:100%;width:0;transition:width .2s}' +
 '  #tab-grader .gr-s .rk,#tab-grader .gr-s{color:var(--good)}' +
@@ -414,14 +412,14 @@
 //      column: Sun / Moon / Star), each column listing its 4 gems as compact rows. ----
 '  #tab-grader .gr-section{margin-top:18px}' +
 '  #tab-grader .gr-section > .sh{display:flex;align-items:baseline;gap:10px;margin:0 0 10px}' +
-'  #tab-grader .gr-section > .sh .st{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--accent)}' +
+'  #tab-grader .gr-section > .sh .st{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--axis,var(--accent))}' +
 '  #tab-grader .gr-section > .sh .ssub{font-size:11.5px;color:var(--dim);font-variant-numeric:tabular-nums}' +
 '  #tab-grader .gr-cores{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}' +
 '  @media(max-width:820px){#tab-grader .gr-cores{grid-template-columns:1fr}}' +
 '  #tab-grader .gr-corecol{border:1px solid var(--border);border-radius:10px;background:var(--panel2);overflow:hidden;display:flex;flex-direction:column}' +
 '  #tab-grader .gr-corecol > .ch{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:8px 11px;border-bottom:1px solid var(--border);background:var(--panel)}' +
 '  #tab-grader .gr-corecol > .ch .cn{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--text)}' +
-'  #tab-grader .gr-corecol > .ch .cd{font-size:10.5px;color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700}' +
+'  #tab-grader .gr-corecol > .ch .cd{font-size:10.5px;color:var(--axis,var(--accent));font-variant-numeric:tabular-nums;font-weight:700}' +
 '  #tab-grader .gr-gem{display:grid;grid-template-columns:38px 1fr;gap:10px;align-items:center;padding:7px 11px;border-bottom:1px solid var(--border)}' +
 '  #tab-grader .gr-corecol .gr-gem:last-child{border-bottom:none}' +
 '  #tab-grader .gr-gem .rkbox{text-align:center;line-height:1}' +
@@ -429,7 +427,7 @@
 '  #tab-grader .gr-gem .rkbox .rk{font-size:18px;font-weight:800;line-height:1}' +
 '  #tab-grader .gr-gem .meta{font-size:11.5px;line-height:1.4;min-width:0}' +
 '  #tab-grader .gr-gem .meta .top{font-weight:700;color:var(--text);display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}' +
-'  #tab-grader .gr-gem .meta .top .dmg{color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700;margin-left:auto}' +
+'  #tab-grader .gr-gem .meta .top .dmg{color:var(--axis,var(--accent));font-variant-numeric:tabular-nums;font-weight:700;margin-left:auto}' +
 '  #tab-grader .gr-gem .meta .sub{color:var(--dim);font-variant-numeric:tabular-nums}' +
 '  #tab-grader .gr-gem .meta .eff{color:var(--dim);overflow:hidden;text-overflow:ellipsis}' +
 '  #tab-grader .gr-gem .meta .eff b{color:var(--text);font-weight:600}' +
@@ -452,7 +450,7 @@
 '  #tab-grader .gr-weak .wk-row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}' +
 '  #tab-grader .gr-weak .wk-row:last-child{border-bottom:none}' +
 '  #tab-grader .gr-weak .wk-slot{font-size:12.5px;color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-'  #tab-grader .gr-weak .wk-dmg{font-size:12px;color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap}' +
+'  #tab-grader .gr-weak .wk-dmg{font-size:12px;color:var(--axis,var(--accent));font-variant-numeric:tabular-nums;font-weight:700;white-space:nowrap}' +
 '  #tab-grader .gr-weak .wk-empty{font-size:12px;color:var(--dim);padding:6px 0}' +
 '  #tab-grader .gr-weak .wk-row[data-target]{cursor:pointer;border-radius:6px;transition:background .12s}' +
 '  #tab-grader .gr-weak .wk-row[data-target]:hover{background:rgba(255,255,255,.05)}' +
@@ -1074,9 +1072,9 @@ axisToggleHtml() +
 '    </div>' +
 '  </div>' +
 '  <div class="gr-sum">' +
-'    <div class="stat"><span class="k">Avg grade</span><span class="v" style="color:var(--accent)">' + avgGrade.toFixed(1) + '</span></div>' +
+'    <div class="stat"><span class="k">Avg grade</span><span class="v" style="color:var(--axis,var(--accent))">' + avgGrade.toFixed(1) + '</span></div>' +
 '    <div class="stat"><span class="k">Avg rank</span><span class="v">' + rankBadge(avgRank) + '</span></div>' +
-'    <div class="stat"><span class="k">' + totalLabel + '</span><span class="v" style="color:var(--accent)">' + sumDmg.toFixed(2) + '%</span></div>' +
+'    <div class="stat"><span class="k">' + totalLabel + '</span><span class="v" style="color:var(--axis,var(--accent))">' + sumDmg.toFixed(2) + '%</span></div>' +
 '  </div>';
     if (data.warnings && data.warnings.length) {
       html += '<div class="gr-warn">' + data.warnings.length + ' parser warning(s): ' + esc(data.warnings.slice(0, 4).join("; ")) + (data.warnings.length > 4 ? "…" : "") + '</div>';
