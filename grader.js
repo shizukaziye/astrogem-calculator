@@ -101,6 +101,9 @@
   var GPD_TIERS = [500000, 1000000, 1500000, 2500000, 3500000, 5000000, 7500000, 10000000];
   var GPD_DEFAULT = 1500000;
   var grGpd = GPD_DEFAULT;           // currently-selected gpd for the infographic
+  // Manual ±rank nudge applied to the ONE blanket baseline via the ◀ ▶ arrows. Reset to
+  // 0 on every fresh loadout render; clamped so the final baseline index stays in range.
+  var grBaseShift = 0;
 
   function gpdLabel(g) {
     if (g >= 1000000) { var m = (g / 1000000).toFixed(1).replace(/\.0$/, ""); return m + "M"; }
@@ -150,6 +153,44 @@
       srcGrade: src, srcRank: rankFromGrade(src),
       baseGrade: baseGrade, baseRank: rankFromGrade(baseGrade),
       count: graded.length
+    };
+  }
+
+  // GRADE_ROWS index of an anchor grade (exact match, else nearest by value).
+  function gradeRowIdx(g) {
+    var i = GRADE_ROWS.indexOf(g);
+    if (i !== -1) return i;
+    var best = 0, bd = Infinity;
+    for (var k = 0; k < GRADE_ROWS.length; k++) {
+      var d = Math.abs(GRADE_ROWS[k] - g);
+      if (d < bd) { bd = d; best = k; }
+    }
+    return best;
+  }
+
+  // ONE blanket baseline for the whole loadout (NOT per Order/Chaos). Take the 3rd-lowest
+  // -grade gem of EACH type (typeBaseline.srcGrade), keep the STRONGER (higher-grade) of
+  // the two, bump it one rank up — then apply the manual ◀▶ shift (grBaseShift), clamped
+  // to GRADE_ROWS. Returns null only if the loadout has no valid gems at all.
+  //   { srcGrade, srcRank, srcType, baseIdx, baseGrade, baseRank,
+  //     shift, atMin, atMax, order, chaos }
+  function blanketBaseline(gems) {
+    var bo = typeBaseline(gems, "order");
+    var bc = typeBaseline(gems, "chaos");
+    if (!bo && !bc) return null;
+    // stronger SOURCE gem across the two types (ties -> order, arbitrary but stable)
+    var src, srcType;
+    if (bo && (!bc || bo.srcGrade >= bc.srcGrade)) { src = bo.srcGrade; srcType = "order"; }
+    else { src = bc.srcGrade; srcType = "chaos"; }
+    var bumped = bumpedBaselineGrade(src);               // one rank above the stronger source
+    var idx = gradeRowIdx(bumped);
+    var shifted = Math.max(0, Math.min(GRADE_ROWS.length - 1, idx + grBaseShift));
+    var baseGrade = GRADE_ROWS[shifted];
+    return {
+      srcGrade: src, srcRank: rankFromGrade(src), srcType: srcType,
+      baseIdx: shifted, baseGrade: baseGrade, baseRank: rankFromGrade(baseGrade),
+      shift: grBaseShift, atMin: shifted <= 0, atMax: shifted >= GRADE_ROWS.length - 1,
+      order: bo, chaos: bc
     };
   }
 
@@ -237,12 +278,15 @@
 '  #tab-grader .gr-status{font-size:12px;color:var(--dim);margin-top:8px;min-height:16px}' +
 '  #tab-grader .gr-status.working{color:var(--accent)}' +
 '  #tab-grader .gr-status.err{color:var(--bad)}' +
-// pull-mode top row: inputs on the LEFT, saved-character chips filling the RIGHT space.
-'  #tab-grader .gr-pullrow{display:grid;grid-template-columns:minmax(320px,auto) 1fr;gap:18px 24px;align-items:start}' +
-'  @media(max-width:760px){#tab-grader .gr-pullrow{grid-template-columns:1fr}}' +
-'  #tab-grader .gr-pullrow .gr-pullleft{min-width:0}' +
-'  #tab-grader .gr-pullrow .gr-pullright{min-width:0;border-left:1px solid var(--border);padding-left:24px}' +
-'  @media(max-width:760px){#tab-grader .gr-pullrow .gr-pullright{border-left:none;padding-left:0;border-top:1px solid var(--border);padding-top:14px}}' +
+// pull mode: saved-character chips sit at the TOP (right under the mode toggle); the
+// region + name controls go on ONE short row below — no dead space, no side column.
+'  #tab-grader .gr-savedtop{margin:0 0 12px;padding:0 0 12px;border-bottom:1px solid var(--border)}' +
+'  #tab-grader .gr-pullctl{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}' +
+'  #tab-grader .gr-pullctl .fld{margin:0}' +
+'  #tab-grader .gr-pullctl .fld-region{flex:0 0 auto;width:118px}' +
+'  #tab-grader .gr-pullctl .fld-name{flex:0 0 auto;width:240px}' +
+'  #tab-grader .gr-pullctl .fld select,#tab-grader .gr-pullctl .fld input{width:100%}' +
+'  @media(max-width:520px){#tab-grader .gr-pullctl .fld-name{flex:1 1 160px;width:auto}}' +
 // big lostark.bible-style profile header on the loadout panel.
 '  #tab-grader .gr-prof{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:0 0 4px}' +
 '  #tab-grader .gr-prof .gr-star{align-self:center}' +
@@ -372,6 +416,23 @@
 '  #tab-grader .gr-boxes .none{color:var(--dim);font-style:italic}' +
 '  #tab-grader .gr-plan-legend{margin-top:12px;font-size:11px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap;align-items:center}' +
 '  #tab-grader .gr-plan-legend .vpill{font-size:10px;padding:1px 8px}' +
+// ---- single blanket baseline header + ◀▶ nudge ----
+'  #tab-grader .gr-baseline{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:10px 0 2px}' +
+'  #tab-grader .gr-baseline .lab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700}' +
+'  #tab-grader .gr-baseline .gr-base-rk{font-size:18px;padding:3px 12px}' +
+'  #tab-grader .gr-baseline .gr-base-from{font-size:11.5px;color:var(--dim)}' +
+'  #tab-grader .gr-baseline .gr-base-from .dim{color:var(--text);font-weight:600}' +
+'  #tab-grader .gr-baseline .gr-base-shift{color:var(--high);font-weight:700}' +
+'  #tab-grader .gr-basearrow{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:8px;width:30px;height:28px;cursor:pointer;font-size:12px;line-height:1;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;transition:border-color .12s,color .12s,background .12s}' +
+'  #tab-grader .gr-basearrow:hover:not(:disabled){border-color:var(--accent);color:var(--accent);background:var(--panel)}' +
+'  #tab-grader .gr-basearrow:disabled{opacity:.35;cursor:not-allowed}' +
+// per-effect-pair (2D/Op/Sub/No) action cells, shown only where the 4 buckets disagree
+'  #tab-grader table.gr-ptab .th-sub{font-weight:600;text-transform:none;letter-spacing:0;color:var(--dim);opacity:.8}' +
+'  #tab-grader .bktgrid{display:grid;grid-template-columns:repeat(4,auto);gap:5px 10px;justify-content:start}' +
+'  @media(max-width:560px){#tab-grader .bktgrid{grid-template-columns:repeat(2,auto)}}' +
+'  #tab-grader .bktgrid .bkt{display:inline-flex;align-items:center;gap:5px}' +
+'  #tab-grader .bktgrid .bkt .bk{font-size:9.5px;font-weight:800;color:var(--dim);width:24px;text-align:right;flex:0 0 auto}' +
+'  #tab-grader .bktgrid .vpill{font-size:10px;padding:1px 8px}' +
 '</style>' +
 
 // ---- INPUT panel ----
@@ -398,23 +459,17 @@
 '      <div class="note">Willpower cost = base cost &minus; willpower level (lower is better). Effect 1 and Effect 2 must differ; the dropdowns are filtered to this cost’s pool.</div>' +
 '    </div>' +
 
-// --- pull mode (inputs left · saved-character chips fill the right) ---
+// --- pull mode (saved chips at TOP · region + name on ONE short row below) ---
 '    <div class="gr-modebody" id="gr-body-pull">' +
-'      <div class="gr-pullrow">' +
-'        <div class="gr-pullleft">' +
-'          <div class="ig">' +
-'            <div class="fld"><label>Region</label><select id="gr-region">' + opts(REGIONS, "NA") + '</select></div>' +
-'            <div class="fld" style="grid-column:span 2"><label>Character name</label><input id="gr-name" type="text" placeholder="e.g. Paroxysmal" autocomplete="off"></div>' +
-'          </div>' +
-'          <div class="barrow">' +
-'            <button class="primary" id="gr-pull-go" type="button">Grade loadout</button>' +
-'            <button class="mbtn" id="gr-pull-refresh" type="button" style="display:none">Re-pull</button>' +
-'            <span class="gr-status" id="gr-pull-status"></span>' +
-'          </div>' +
-'          <div class="note" id="gr-pull-note"></div>' +
-'        </div>' +
-'        <div class="gr-pullright"><div class="gr-favs" id="gr-favs"></div></div>' +
+'      <div class="gr-savedtop"><div class="gr-favs" id="gr-favs"></div></div>' +
+'      <div class="gr-pullctl">' +
+'        <div class="fld fld-region"><label>Region</label><select id="gr-region">' + opts(REGIONS, "NA") + '</select></div>' +
+'        <div class="fld fld-name"><label>Character name</label><input id="gr-name" type="text" placeholder="e.g. Paroxysmal" autocomplete="off"></div>' +
+'        <button class="primary" id="gr-pull-go" type="button">Grade loadout</button>' +
+'        <button class="mbtn" id="gr-pull-refresh" type="button" style="display:none">Re-pull</button>' +
 '      </div>' +
+'      <div class="barrow" style="margin-top:8px"><span class="gr-status" id="gr-pull-status"></span></div>' +
+'      <div class="note" id="gr-pull-note"></div>' +
 '    </div>' +
 '  </div>' +
 '</div>' +
@@ -623,13 +678,15 @@
   // for the ORDER and CHAOS baselines at the selected gpd. Recomputes on gpd change.
 
   var RAR_LABEL = { uncommon: "Uncommon", rare: "Rare", epic: "Epic" };
-  // verdict -> {cls, label}. Recipe/steer (fuse) is appended separately.
+  // verdict -> {cls, label}. "throw" is now "dismantle". Fuse recipe is appended separately.
   var VERDICT_META = {
     "fuse": { cls: "vp-fuse", label: "Fuse" },
     "cut & reset": { cls: "vp-reset", label: "Cut & reset" },
     "cut": { cls: "vp-cut", label: "Cut" },
-    "throw": { cls: "vp-throw", label: "Throw" }
+    "dismantle": { cls: "vp-throw", label: "Dismantle" }
   };
+  // Compact bucket-cell variant (just the verb — used in the 4-up per-bucket layout).
+  var VERDICT_SHORT = { "cut & reset": "Cut+reset", "cut": "Cut", "dismantle": "Dismantle", "fuse": "Fuse" };
 
   function fmtGoldShort(g) {
     if (g == null || !isFinite(g)) return "—";
@@ -639,43 +696,48 @@
     return String(g);
   }
 
+  // Full verdict pill for a block roll-up (fuse appends its recipe "+ 2× N-cost Uncommon").
   function verdictPill(entry) {
-    var meta = VERDICT_META[entry.verdict] || VERDICT_META["throw"];
+    var meta = VERDICT_META[entry.verdict] || VERDICT_META["dismantle"];
     var inner = meta.label;
     if (entry.verdict === "fuse") {
       // UNOPENED fusion: you ADD 2 Uncommons to the gem you have (no arrow, no
       // Legendary/Relic/Ancient — those are the finished-gem tiers, a different thing).
-      // addCost = the cost of the 2 Uncommons you add (UC holds its own cost; a Rare
-      // steers its 2 added Uncommons toward addCost).
       var add = (entry.addCost != null) ? entry.addCost : entry.cost;
       inner += ' <span class="rcp">+ 2&times; ' + esc(add) + '-cost Uncommon</span>';
     }
     return '<span class="vpill ' + meta.cls + '">' + inner + '</span>';
   }
 
-  // One side's card (ORDER or CHAOS) for advice `adv` (null => no gems of this type).
-  function planCardHtml(title, base, adv) {
-    var head = '<div class="hd"><span class="t">' + esc(title) + '</span>';
-    if (base) {
-      head += '<span class="bl">baseline <b>' + esc(base.baseRank) + '</b> '
-        + '<span style="opacity:.75">(from your 3rd-lowest ' + esc(base.srcRank) + ' gem)</span></span>';
+  // The "What to do" cell for ONE (rarity × cost) plan entry. Three shapes:
+  //   block fuse (per-BLOCK) -> a single fuse pill with the recipe (no arrow);
+  //   all 4 buckets agree     -> one verdict pill;
+  //   buckets differ          -> a 4-up grid (2D / Op / Sub / No), each its own pill.
+  function planActionCell(e) {
+    if (e.blockFuse) return verdictPill(e);             // whole block fuses
+    if (e.allAgree) return verdictPill(e);              // collapse to one label
+    var cells = "";
+    for (var i = 0; i < e.buckets.length; i++) {
+      var b = e.buckets[i];
+      var meta = VERDICT_META[b.verdict] || VERDICT_META["dismantle"];
+      cells += '<span class="bkt"><span class="bk">' + esc(b.label) + '</span>'
+        + '<span class="vpill ' + meta.cls + '">' + (VERDICT_SHORT[b.verdict] || meta.label) + '</span></span>';
     }
-    head += '</div>';
+    return '<div class="bktgrid">' + cells + '</div>';
+  }
 
-    if (!base) {
-      return '<div class="gr-plan-card">' + head + '<div class="empty">No ' + esc(title.toLowerCase()) + ' gems in this loadout.</div></div>';
-    }
-    if (!adv) {
-      return '<div class="gr-plan-card">' + head + '<div class="empty">Pipeline data unavailable.</div></div>';
-    }
-
+  // The single blanket-baseline recommendation table: 9 rows (rarity × cost), each with
+  // the per-bucket action plan + the open value. `adv` from window.pipelineAdvice.
+  function planTableHtml(adv) {
+    if (!adv) return '<div class="gr-plan-card"><div class="empty">Pipeline data unavailable.</div></div>';
     var rows = '<table class="gr-ptab"><thead><tr>'
-      + '<th>Gem</th><th>What to do</th><th class="r">Open value</th></tr></thead><tbody>';
+      + '<th>Gem</th><th>What to do <span class="th-sub">(per effect pair: 2D / Op / Sub / No)</span></th>'
+      + '<th class="r">Open value</th></tr></thead><tbody>';
     for (var i = 0; i < adv.plan.length; i++) {
       var e = adv.plan[i];
       rows += '<tr>'
         + '<td><span class="rar">' + esc(RAR_LABEL[e.rarity] || e.rarity) + ' <span class="c">' + e.cost + '-cost</span></span></td>'
-        + '<td>' + verdictPill(e) + '</td>'
+        + '<td>' + planActionCell(e) + '</td>'
         + '<td class="r ov">' + fmtGoldShort(e.openValue) + '</td>'
         + '</tr>';
     }
@@ -690,12 +752,31 @@
     }
     boxesHtml += '</div>';
 
-    return '<div class="gr-plan-card">' + head + rows + boxesHtml + '</div>';
+    return '<div class="gr-plan-card">' + rows + boxesHtml + '</div>';
   }
 
-  // The whole infographic (title + gpd selector + two baseline cards + legend).
-  // `bases` = { order, chaos } from typeBaseline(); pipeline data must be ready.
-  function planSectionHtml(bases) {
+  // Baseline header: the ONE baseline rank, what it came from, and the ◀ ▶ nudge arrows.
+  function baselineHeadHtml(base) {
+    if (!base) return '';
+    var src = base.srcType === "chaos" ? "Chaos" : "Order";
+    var left = '<button type="button" class="gr-basearrow" id="gr-base-dn"' + (base.atMin ? ' disabled' : '')
+      + ' title="Lower the baseline one rank" aria-label="Lower baseline">&#9664;</button>';
+    var right = '<button type="button" class="gr-basearrow" id="gr-base-up"' + (base.atMax ? ' disabled' : '')
+      + ' title="Raise the baseline one rank" aria-label="Raise baseline">&#9654;</button>';
+    var shiftNote = base.shift ? ' <span class="gr-base-shift">(' + (base.shift > 0 ? '+' : '') + base.shift + ' rank)</span>' : '';
+    return '<div class="gr-baseline">'
+      + '<span class="lab">Baseline</span>'
+      + left
+      + rankBadge(base.baseRank, "gr-base-rk")
+      + right
+      + '<span class="gr-base-from">one rank above your stronger 3rd-lowest gem '
+      + '<span class="dim">(' + src + ' ' + esc(base.srcRank) + ')</span>' + shiftNote + '</span>'
+      + '</div>';
+  }
+
+  // The whole infographic (title + gpd selector + single baseline + one plan table + legend).
+  // `base` = blanketBaseline(gems); pipeline data must be ready.
+  function planSectionHtml(base) {
     var gpdBtns = "";
     for (var i = 0; i < GPD_TIERS.length; i++) {
       var g = GPD_TIERS[i];
@@ -708,55 +789,52 @@
     // tab's toggle, so the infographic matches the character on screen.
     var rgn = planRegion(lastLoadout && lastLoadout.region);
     var ready = (typeof window.pipelineAdvice === "function") && !!window.__grPipelineReady;
-    var ordAdv = (ready && bases.order) ? window.pipelineAdvice(bases.order.baseGrade, grGpd, rgn) : null;
-    var chaAdv = (ready && bases.chaos) ? window.pipelineAdvice(bases.chaos.baseGrade, grGpd, rgn) : null;
+    var adv = (ready && base) ? window.pipelineAdvice(base.baseGrade, grGpd, rgn) : null;
 
     var body;
-    if (!ready) {
-      body = '<div class="placeholder" id="gr-plan-cards" style="margin-top:10px"><b>Loading pipeline economics…</b>Computing what to cut, fuse, reset, or throw.</div>';
+    if (!base) {
+      body = '<div class="gr-plan-card" id="gr-plan-cards"><div class="empty">No gems in this loadout.</div></div>';
+    } else if (!ready) {
+      body = '<div class="placeholder" id="gr-plan-cards" style="margin-top:10px"><b>Loading pipeline economics…</b>Computing what to cut, fuse, reset, or dismantle.</div>';
     } else {
-      body = '<div class="gr-plan-grid" id="gr-plan-cards">'
-        + planCardHtml("Order", bases.order, ordAdv)
-        + planCardHtml("Chaos", bases.chaos, chaAdv)
-        + '</div>';
+      body = '<div id="gr-plan-cards">' + planTableHtml(adv) + '</div>';
     }
 
     var legend = '<div class="gr-plan-legend">'
-      + '<span class="vpill vp-reset">Cut &amp; reset</span><span>open value ≥ 20k — cut, and reset if it lands low</span>'
-      + '<span class="vpill vp-cut">Cut</span><span>open value &gt; 0</span>'
-      + '<span class="vpill vp-fuse">Fuse</span><span>a rarity upgrade beats cutting</span>'
-      + '<span class="vpill vp-throw">Throw</span><span>not worth cutting</span>'
+      + '<span class="vpill vp-reset">Cut &amp; reset</span><span>cut-EV ≥ 20k — cut, and reset if it lands low</span>'
+      + '<span class="vpill vp-cut">Cut</span><span>cut-EV &gt; 0</span>'
+      + '<span class="vpill vp-fuse">Fuse</span><span>a rarity upgrade beats cutting (whole gem)</span>'
+      + '<span class="vpill vp-throw">Dismantle</span><span>not worth cutting</span>'
       + '</div>';
 
     var econLabel = (rgn === "kr") ? "KR economy" : "NRB";
     return '<div class="gr-plan">'
       + '<h2>What to do with your astrogems '
-      + '<span class="pl-sub">' + econLabel + ' · per-rarity action plan at your loadout’s baselines</span></h2>'
+      + '<span class="pl-sub">' + econLabel + ' · per-effect-pair action plan at your loadout’s baseline</span></h2>'
+      + '<div class="gr-baseline-host" id="gr-baseline-host">' + baselineHeadHtml(base) + '</div>'
       + '<div class="gr-gpd"><span class="lab">Gold per 1% damage</span>' + gpdBtns + '</div>'
       + body
       + legend
       + '</div>';
   }
 
-  // Recompute just the two cards (gpd change / pipeline-ready) without re-rendering
-  // the whole loadout. Reads the cached loadout for the current baselines.
+  // Recompute just the plan table + baseline header (gpd change / arrow nudge /
+  // pipeline-ready) without re-rendering the whole loadout. Reads the cached loadout.
   function refreshPlanCards() {
     var host = document.getElementById("gr-plan-cards");
     if (!host) return;
     var gems = (lastLoadout && lastLoadout.gems) || [];
-    var bases = { order: typeBaseline(gems, "order"), chaos: typeBaseline(gems, "chaos") };
+    var base = blanketBaseline(gems);
+    var headHost = document.getElementById("gr-baseline-host");
+    if (headHost) headHost.innerHTML = baselineHeadHtml(base);
     var ready = (typeof window.pipelineAdvice === "function") && !!window.__grPipelineReady;
-    if (!ready) return;   // still loading; the ready-callback re-renders the section
+    if (!ready || !base) return;   // still loading / no gems; ready-callback re-renders
     var rgn = planRegion(lastLoadout && lastLoadout.region);  // KR vs global plan
-    var ordAdv = bases.order ? window.pipelineAdvice(bases.order.baseGrade, grGpd, rgn) : null;
-    var chaAdv = bases.chaos ? window.pipelineAdvice(bases.chaos.baseGrade, grGpd, rgn) : null;
-    var html = planCardHtml("Order", bases.order, ordAdv) + planCardHtml("Chaos", bases.chaos, chaAdv);
-    // host may be the placeholder (a non-grid div) before data arrived; normalize.
-    if (!host.classList.contains("gr-plan-grid")) {
-      host.className = "gr-plan-grid";
-      host.removeAttribute("style");
-    }
-    host.innerHTML = html;
+    var adv = window.pipelineAdvice(base.baseGrade, grGpd, rgn);
+    // host may be the placeholder (with inline style) before data arrived; normalize.
+    host.removeAttribute("style");
+    host.className = "";
+    host.innerHTML = planTableHtml(adv);
   }
 
   // gpd selector handler (wired via inline onclick in planSectionHtml).
@@ -767,9 +845,23 @@
     refreshPlanCards();
   };
 
+  // ◀ ▶ baseline nudge: shift the blanket baseline ±1 rank (clamped to GRADE_ROWS) and
+  // re-render the plan live. Wired via event delegation in renderLoadout.
+  window.__grNudgeBaseline = function (delta) {
+    var gems = (lastLoadout && lastLoadout.gems) || [];
+    var base = blanketBaseline(gems);
+    if (!base) return;
+    // clamp the *resulting* index, then store the shift that produced it
+    var want = base.baseIdx + delta;
+    var clamped = Math.max(0, Math.min(GRADE_ROWS.length - 1, want));
+    grBaseShift += (clamped - base.baseIdx);
+    refreshPlanCards();
+  };
+
   function renderLoadout(data) {
     var out = $("gr-result");
     var gems = (data && data.gems) || [];
+    grBaseShift = 0;   // fresh loadout: drop any manual ◀▶ baseline nudge from the last one
     // tag each gem with a stable index so the Weakest-3 rows can jump to its card
     gems.forEach(function (x, i) { x._gidx = i; });
     if (!gems.length) {
@@ -823,12 +915,12 @@
     // upgrade priorities: weakest 3 Order + weakest 3 Chaos, side by side, at the top
     html += weakestSectionHtml(gems);
 
-    // "what to do with your astrogems": per-rarity action plan + boxes at the
-    // ORDER/CHAOS baselines (3rd-lowest gem, bumped one rank up). Numbers come from
-    // window.pipelineAdvice; the section paints a "loading…" placeholder first and
-    // fills once pipelineReady fires (so it works even if Pipeline was never opened).
-    var bases = { order: typeBaseline(gems, "order"), chaos: typeBaseline(gems, "chaos") };
-    html += planSectionHtml(bases);
+    // "what to do with your astrogems": ONE blanket-baseline action plan (per effect
+    // pair) + boxes. Baseline = one rank above the stronger of the two types' 3rd-lowest
+    // gems, nudgeable ±1 rank with ◀▶. Numbers come from window.pipelineAdvice; the
+    // section paints a "loading…" placeholder first and fills once pipelineReady fires
+    // (so it works even if Pipeline was never opened).
+    html += planSectionHtml(blanketBaseline(gems));
 
     // Gems by core, laid out as two sections (ORDER then CHAOS). Each section is a
     // 3-column grid: one column per core (Sun / Moon / Star), each column listing that
@@ -842,21 +934,23 @@
       row.addEventListener("click", function () { focusGem(row.getAttribute("data-target")); });
     });
 
+    // Baseline ◀ ▶ arrows: delegated on `out` so they survive the baseline-host re-render
+    // that refreshPlanCards does on each nudge. (Bound once per loadout render.)
+    out.addEventListener("click", function (e) {
+      var t = e.target.closest ? e.target.closest(".gr-basearrow") : null;
+      if (!t || t.disabled) return;
+      window.__grNudgeBaseline(t.id === "gr-base-up" ? +1 : -1);
+    });
+
     // Favorite star: toggles this loadout's character (region+name from lastLoadout).
     var star = $("gr-fav-star");
     if (star && Favs) {
       var favRegion = data.region, favName = data.name;
       paintStar(star, favRegion, favName);
       star.addEventListener("click", function () {
-        var note = $("gr-fav-note");
-        // Block the 13th add: if we'd be ADDING and the store is full, warn instead.
-        if (!Favs.has(favRegion, favName) && Favs.isFull()) {
-          if (note) { note.textContent = "max 12 favorites"; note.style.display = ""; }
-          return;
-        }
-        Favs.toggle(favRegion, favName);          // persists + notifies (re-renders fav row)
+        // Favorites are unlimited — just toggle (persists + notifies, re-renders fav row).
+        Favs.toggle(favRegion, favName);
         paintStar(star, favRegion, favName);
-        if (note) { note.textContent = ""; note.style.display = "none"; }
       });
     } else if (star) {
       star.style.display = "none"; // Favorites store unavailable

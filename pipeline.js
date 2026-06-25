@@ -1377,7 +1377,16 @@
   //     plan: [ {                          // 9 entries (rarity × cost)
   //       rarity, cost,
   //       openValue,                       // gev() open value, gold (NRB)
-  //       verdict: "fuse"|"cut & reset"|"cut"|"throw",
+  //       verdict: "fuse"|"cut & reset"|"cut"|"dismantle",  // BLOCK roll-up (fuse, else
+  //                                        //   the dominant per-bucket verdict by weight)
+  //       blockFuse,                       // true => the whole block fuses (per-BLOCK)
+  //       allAgree,                        // true => all 4 buckets share one verdict
+  //       buckets: [ {                     // per effect-pair: 2D / Op / Sub / No
+  //         key, label,                    // "2_damage" / "2D", …
+  //         cut,                           // this bucket's cut-EV, gold (NRB) | null
+  //         verdict                        // "cut & reset"|"cut"|"dismantle" (or "fuse"
+  //                                        //   when blockFuse — the whole block fuses)
+  //       }, … ],                          // 4 entries, in 2D/Op/Sub/No order
   //       recipe,                          // unopened-fusion recipe (fuse only, else null):
   //                                        //   "3× 9-cost Uncommon" | "8-cost Rare + 2× 9-cost Uncommon"
   //       addCost                          // cost of the 2 Uncommons you ADD (fuse only, else null)
@@ -1413,16 +1422,42 @@
     try {
       var fd = fuseDecisions(bl, gpd, roster);
 
+      // Per-BUCKET cut-EV -> verdict, mirroring the pipeline tab's verdict() bands:
+      //   cut-EV >= RESET_THRESHOLD -> "cut & reset"; > 0 -> "cut"; else "dismantle".
+      function bucketVerdict(cut) {
+        if (cut == null) return "dismantle";
+        if (cut >= CONST.RESET_THRESHOLD) return "cut & reset";
+        if (cut > 0) return "cut";
+        return "dismantle";
+      }
+
       var plan = [];
       for (var ri = 0; ri < RARITIES.length; ri++) {
         for (var ci = 0; ci < COSTS.length; ci++) {
           var rarity = RARITIES[ri], cost = COSTS[ci];
-          var ov = gev(rarity, cost, bl, gpd, roster);
-          var doFuse = (rarity === "uncommon") ? !!fd.uc[cost]
+          var ov = gev(rarity, cost, bl, gpd, roster);   // 1:2:2:1-weighted open value
+          var blockFuse = (rarity === "uncommon") ? !!fd.uc[cost]
             : (rarity === "rare") ? !!fd.rare[cost]
               : false;   // epic never fuses pre-cut
+
+          // Per effect-pair bucket verdicts (2D / Op / Sub / No), reusing the SAME baked
+          // cut-EVs + bands as the pipeline tab's gemCell. When the block fuses (per-BLOCK
+          // decision) every bucket carries "fuse" — the whole gem is fused before cutting.
+          var buckets = [], byVerdict = {}, agreeRef = null, allAgree = true;
+          for (var bi = 0; bi < BUCKETS.length; bi++) {
+            var bk = BUCKETS[bi];
+            var rec = bakedBucket(rarity, cost, bk, bl, gpd, roster);
+            var cut = rec ? rec.cut : null;
+            var bv = blockFuse ? "fuse" : bucketVerdict(cut);
+            buckets.push({ key: bk, label: BUCKET_LABEL[bk], cut: cut, verdict: bv });
+            byVerdict[bv] = (byVerdict[bv] || 0) + 1;
+            if (agreeRef == null) agreeRef = bv; else if (bv !== agreeRef) allAgree = false;
+          }
+
+          // Block roll-up verdict (back-compat + the "all agree" collapsed label): fuse
+          // wins outright; otherwise the dominant per-bucket verdict by 1:2:2:1 weight.
           var verdict, recipe = null, addCost = null;
-          if (doFuse) {
+          if (blockFuse) {
             verdict = "fuse";
             // addCost = the cost of the 2 Uncommons you ADD. A UC fuse holds its own
             // cost; a Rare fuse steers its 2 added Uncommons toward fd.rareUcCost.
@@ -1430,16 +1465,20 @@
             recipe = (rarity === "uncommon")
               ? ("3× " + cost + "-cost Uncommon")
               : (cost + "-cost Rare + 2× " + addCost + "-cost Uncommon");
-          } else if (ov >= CONST.RESET_THRESHOLD) {
-            verdict = "cut & reset";
-          } else if (ov > 0) {
-            verdict = "cut";
+          } else if (allAgree) {
+            verdict = agreeRef;   // every bucket shares one verdict -> use it
           } else {
-            verdict = "throw";
+            var order = ["cut & reset", "cut", "dismantle"], bestN = -1;
+            verdict = "dismantle";
+            for (var vi = 0; vi < order.length; vi++) {
+              var n = byVerdict[order[vi]] || 0;
+              if (n > bestN) { bestN = n; verdict = order[vi]; }
+            }
           }
           plan.push({
             rarity: rarity, cost: cost,
-            openValue: ov, verdict: verdict, recipe: recipe, addCost: addCost
+            openValue: ov, verdict: verdict, blockFuse: blockFuse, allAgree: allAgree,
+            buckets: buckets, recipe: recipe, addCost: addCost
           });
         }
       }
