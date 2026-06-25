@@ -324,12 +324,13 @@
 '  #tab-grader .gr-cache{display:inline-block;margin-left:10px;font-size:10px;font-weight:700;text-transform:none;letter-spacing:.02em;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 9px;vertical-align:middle}' +
 '  #tab-grader .gr-cache.fresh{color:var(--good)}' +
 // ---- saved-characters quick-pick (pull mode, right-side column) ----
-'  #tab-grader .gr-favs{display:flex;align-items:flex-start;gap:7px;flex-wrap:wrap;margin:0}' +
-'  #tab-grader .gr-favs .lab{display:block;width:100%;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700;margin:0 0 4px}' +
-'  #tab-grader .gr-favs .gr-favbtn{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:4px 11px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;color:var(--text);line-height:1.3}' +
-'  #tab-grader .gr-favs .gr-favbtn:hover{border-color:var(--accent);color:var(--accent)}' +
-'  #tab-grader .gr-favs .gr-favbtn .rg{font-size:9.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:0 5px;line-height:1.6}' +
-'  #tab-grader .gr-favs .gr-favbtn .st{color:var(--high)}' +
+'  #tab-grader .gr-favs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0}' +
+'  #tab-grader .gr-favs .lab{display:block;width:100%;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);font-weight:700;margin:0 0 7px}' +
+'  #tab-grader .gr-favs .lab .lab-star{color:var(--high);margin-right:3px}' +
+'  #tab-grader .gr-favs .gr-favbtn{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:5px 13px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--text);line-height:1.3;transition:border-color .12s,background .12s,color .12s}' +
+'  #tab-grader .gr-favs .gr-favbtn:hover{border-color:var(--accent);background:var(--panel);color:var(--accent)}' +
+'  #tab-grader .gr-favs .gr-favbtn .rg{font-size:9.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;transition:color .12s,opacity .12s}' +
+'  #tab-grader .gr-favs .gr-favbtn:hover .rg{color:var(--accent);opacity:.6}' +
 '  #tab-grader .gr-favs .gr-favempty{font-size:11px;color:var(--dim);font-style:italic}' +
 // ---- star toggle on the loadout header ----
 '  #tab-grader .gr-star{background:none;border:none;cursor:pointer;font-size:24px;line-height:1;padding:0 2px;color:var(--none);font-family:inherit;vertical-align:middle;transition:color .12s,transform .08s}' +
@@ -917,11 +918,11 @@
       host.innerHTML = '<span class="gr-favempty">No saved characters yet — grade one and tap its ★.</span>';
       return;
     }
-    var html = '<span class="lab">Saved</span>';
+    var html = '<span class="lab"><span class="lab-star">&#9733;</span>Saved</span>';
     html += favs.map(function (f, i) {
       return '<button type="button" class="gr-favbtn" data-fi="' + i + '" title="Load ' +
         esc(f.name) + ' (' + esc(f.region) + ')">' +
-        '<span class="st">&#9733;</span>' + esc(f.name) +
+        esc(f.name) +
         '<span class="rg">' + esc(f.region) + '</span></button>';
     }).join("");
     host.innerHTML = html;
