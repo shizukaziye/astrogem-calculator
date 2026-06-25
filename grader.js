@@ -280,12 +280,16 @@
 '  #tab-grader .gr-status.err{color:var(--bad)}' +
 // pull mode: saved-character chips sit at the TOP (right under the mode toggle); the
 // region + name controls go on ONE short row below — no dead space, no side column.
-'  #tab-grader .gr-savedtop{margin:0 0 12px;padding:0 0 12px;border-bottom:1px solid var(--border)}' +
-'  #tab-grader .gr-pullctl{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}' +
+'  #tab-grader .gr-pullgrid{display:grid;grid-template-columns:auto 1fr;gap:14px 32px;align-items:start}' +
+'  @media(max-width:560px){#tab-grader .gr-pullgrid{grid-template-columns:1fr}}' +
+'  #tab-grader .gr-pullleft{min-width:0}' +
+'  #tab-grader .gr-pullright{min-width:0}' +
+'  #tab-grader .gr-pullctl{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin:0 0 10px}' +
 '  #tab-grader .gr-pullctl .fld{margin:0}' +
-'  #tab-grader .gr-pullctl .fld-region{flex:0 0 auto;width:118px}' +
-'  #tab-grader .gr-pullctl .fld-name{flex:0 0 auto;width:240px}' +
+'  #tab-grader .gr-pullctl .fld-region{flex:0 0 auto;width:84px}' +
+'  #tab-grader .gr-pullctl .fld-name{flex:0 0 auto;width:200px}' +
 '  #tab-grader .gr-pullctl .fld select,#tab-grader .gr-pullctl .fld input{width:100%}' +
+'  #tab-grader .gr-pullbtns{display:flex;gap:10px;flex-wrap:wrap;align-items:center}' +
 '  @media(max-width:520px){#tab-grader .gr-pullctl .fld-name{flex:1 1 160px;width:auto}}' +
 // big lostark.bible-style profile header on the loadout panel.
 '  #tab-grader .gr-prof{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:0 0 4px}' +
@@ -368,14 +372,16 @@
 '  #tab-grader .gr-cache{display:inline-block;margin-left:10px;font-size:10px;font-weight:700;text-transform:none;letter-spacing:.02em;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 9px;vertical-align:middle}' +
 '  #tab-grader .gr-cache.fresh{color:var(--good)}' +
 // ---- saved-characters quick-pick (pull mode, right-side column) ----
-'  #tab-grader .gr-favs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0}' +
-'  #tab-grader .gr-favs .lab{display:block;width:100%;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);font-weight:700;margin:0 0 7px}' +
+'  #tab-grader .gr-favs{margin:0}' +
+'  #tab-grader .gr-favs .lab{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);font-weight:700;margin:0 0 8px}' +
 '  #tab-grader .gr-favs .lab .lab-star{color:var(--high);margin-right:3px}' +
-'  #tab-grader .gr-favs .gr-favbtn{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:5px 13px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--text);line-height:1.3;transition:border-color .12s,background .12s,color .12s}' +
+'  #tab-grader .gr-favs .gr-favlist{display:flex;flex-direction:column;gap:5px}' +
+'  #tab-grader .gr-favs .gr-favbtn{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--text);line-height:1.3;transition:border-color .12s,background .12s,color .12s}' +
 '  #tab-grader .gr-favs .gr-favbtn:hover{border-color:var(--accent);background:var(--panel);color:var(--accent)}' +
-'  #tab-grader .gr-favs .gr-favbtn .rg{font-size:9.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;transition:color .12s,opacity .12s}' +
+'  #tab-grader .gr-favs .gr-favbtn .nm{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+'  #tab-grader .gr-favs .gr-favbtn .rg{font-size:9.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;flex:0 0 auto;transition:color .12s,opacity .12s}' +
 '  #tab-grader .gr-favs .gr-favbtn:hover .rg{color:var(--accent);opacity:.6}' +
-'  #tab-grader .gr-favs .gr-favempty{font-size:11px;color:var(--dim);font-style:italic}' +
+'  #tab-grader .gr-favs .gr-favempty{display:block;font-size:11px;color:var(--dim);font-style:italic;margin-top:2px}' +
 // ---- star toggle on the loadout header ----
 '  #tab-grader .gr-star{background:none;border:none;cursor:pointer;font-size:24px;line-height:1;padding:0 2px;color:var(--none);font-family:inherit;vertical-align:middle;transition:color .12s,transform .08s}' +
 '  #tab-grader .gr-star:hover{transform:scale(1.12)}' +
@@ -459,17 +465,23 @@
 '      <div class="note">Willpower cost = base cost &minus; willpower level (lower is better). Effect 1 and Effect 2 must differ; the dropdowns are filtered to this cost’s pool.</div>' +
 '    </div>' +
 
-// --- pull mode (saved chips at TOP · region + name on ONE short row below) ---
+// --- pull mode: compact controls LEFT, saved characters as a vertical list RIGHT ---
 '    <div class="gr-modebody" id="gr-body-pull">' +
-'      <div class="gr-savedtop"><div class="gr-favs" id="gr-favs"></div></div>' +
-'      <div class="gr-pullctl">' +
-'        <div class="fld fld-region"><label>Region</label><select id="gr-region">' + opts(REGIONS, "NA") + '</select></div>' +
-'        <div class="fld fld-name"><label>Character name</label><input id="gr-name" type="text" placeholder="e.g. Paroxysmal" autocomplete="off"></div>' +
-'        <button class="primary" id="gr-pull-go" type="button">Grade loadout</button>' +
-'        <button class="mbtn" id="gr-pull-refresh" type="button" style="display:none">Re-pull</button>' +
+'      <div class="gr-pullgrid">' +
+'        <div class="gr-pullleft">' +
+'          <div class="gr-pullctl">' +
+'            <div class="fld fld-region"><label>Region</label><select id="gr-region">' + opts(REGIONS, "NA") + '</select></div>' +
+'            <div class="fld fld-name"><label>Character name</label><input id="gr-name" type="text" placeholder="e.g. Paroxysmal" autocomplete="off"></div>' +
+'          </div>' +
+'          <div class="gr-pullbtns">' +
+'            <button class="primary" id="gr-pull-go" type="button">Grade loadout</button>' +
+'            <button class="mbtn" id="gr-pull-refresh" type="button" style="display:none">Re-pull</button>' +
+'          </div>' +
+'          <div class="barrow" style="margin-top:8px"><span class="gr-status" id="gr-pull-status"></span></div>' +
+'          <div class="note" id="gr-pull-note"></div>' +
+'        </div>' +
+'        <div class="gr-pullright"><div class="gr-favs" id="gr-favs"></div></div>' +
 '      </div>' +
-'      <div class="barrow" style="margin-top:8px"><span class="gr-status" id="gr-pull-status"></span></div>' +
-'      <div class="note" id="gr-pull-note"></div>' +
 '    </div>' +
 '  </div>' +
 '</div>' +
@@ -1008,17 +1020,17 @@
     var host = $("gr-favs");
     if (!host) return; // only present in pull mode markup
     var favs = Favs ? Favs.list() : [];
+    var lab = '<span class="lab"><span class="lab-star">&#9733;</span>Saved</span>';
     if (!favs.length) {
-      host.innerHTML = '<span class="gr-favempty">No saved characters yet — grade one and tap its ★.</span>';
+      host.innerHTML = lab + '<span class="gr-favempty">No saved characters yet — grade one and tap its ★.</span>';
       return;
     }
-    var html = '<span class="lab"><span class="lab-star">&#9733;</span>Saved</span>';
-    html += favs.map(function (f, i) {
+    var html = lab + '<div class="gr-favlist">' + favs.map(function (f, i) {
       return '<button type="button" class="gr-favbtn" data-fi="' + i + '" title="Load ' +
         esc(f.name) + ' (' + esc(f.region) + ')">' +
-        esc(f.name) +
+        '<span class="nm">' + esc(f.name) + '</span>' +
         '<span class="rg">' + esc(f.region) + '</span></button>';
-    }).join("");
+    }).join("") + '</div>';
     host.innerHTML = html;
     Array.prototype.forEach.call(host.querySelectorAll(".gr-favbtn"), function (btn) {
       btn.addEventListener("click", function () {
