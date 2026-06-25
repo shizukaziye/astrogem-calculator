@@ -133,7 +133,7 @@ function extractArkGridCores(html) {
     if (parsed) occ.push({ at: at, cores: parsed });
     from = end;
   }
-  if (!occ.length) return null;
+  if (!occ.length) return { raid: null, chaos: null };
 
   function gemCount(cores) {
     let n = 0;
@@ -143,17 +143,22 @@ function extractArkGridCores(html) {
     return n;
   }
 
-  // Prefer the raid loadout: the first arkGridCores after the most_recent_raid
-  // classification, as long as it actually has gems.
-  const raidAt = html.indexOf('classification:"most_recent_raid"');
-  if (raidAt !== -1) {
-    const raid = occ.find(function (o) { return o.at > raidAt; });
-    if (raid && gemCount(raid.cores) > 0) return raid.cores;
+  // The first arkGridCores right after a given loadout classification, if it has gems.
+  function afterClass(cls) {
+    const at = html.indexOf('classification:"' + cls + '"');
+    if (at === -1) return null;
+    const o = occ.find(function (x) { return x.at > at; });
+    return (o && gemCount(o.cores) > 0) ? o.cores : null;
   }
-  // Fallback: the array with the most gems, so an empty chaos loadout never wins.
-  let best = occ[0];
-  for (const o of occ) { if (gemCount(o.cores) > gemCount(best.cores)) best = o; }
-  return best.cores;
+  let raid = afterClass("most_recent_raid");
+  const chaos = afterClass("most_recent_chaos_dungeon");
+  // Raid fallback: the array with the most gems, so a non-standard layout still grades.
+  if (!raid) {
+    let best = occ[0];
+    for (const o of occ) { if (gemCount(o.cores) > gemCount(best.cores)) best = o; }
+    raid = (gemCount(best.cores) > 0) ? best.cores : null;
+  }
+  return { raid: raid, chaos: chaos };
 }
 
 // Map one raw gem (from arkGridCores) + its core to the Grader config shape.
@@ -191,6 +196,20 @@ function mapGem(rawGem, core) {
     },
     warnings: warnings
   };
+}
+
+// Map a whole arkGridCores array (one preset) to the Grader gem-config list.
+function coresToGems(cores) {
+  const gems = [], warnings = [];
+  for (const core of cores) {
+    const rawGems = Array.isArray(core.gems) ? core.gems : [];
+    for (const rg of rawGems) {
+      const m = mapGem(rg, core);
+      gems.push(m.gem);
+      for (const w of m.warnings) warnings.push(w);
+    }
+  }
+  return { gems: gems, warnings: warnings };
 }
 
 // ---- KV cache config + helpers ----
@@ -348,7 +367,7 @@ async function fetchCharacterData(region, name) {
 
   const html = await resp.text();
 
-  let gems, warnings, coreCount;
+  let gems, warnings, coreCount, chaosGems = null;
   if (isKR) {
     const parsed = parseLopecGems(html);
     gems = parsed.gems; warnings = parsed.warnings; coreCount = 6;
@@ -359,22 +378,17 @@ async function fetchCharacterData(region, name) {
       } };
     }
   } else {
-    const cores = extractArkGridCores(html);
-    if (!cores) {
+    const presets = extractArkGridCores(html);
+    if (!presets.raid) {
       return { ok: false, status: 422, body: {
         error: "Could not find arkGridCores data on the page (the character may have no Ark Grid set, or the site layout changed).",
         region: region, name: name, url: url
       } };
     }
-    gems = []; warnings = []; coreCount = cores.length;
-    for (const core of cores) {
-      const rawGems = Array.isArray(core.gems) ? core.gems : [];
-      for (const rg of rawGems) {
-        const m = mapGem(rg, core);
-        gems.push(m.gem);
-        for (const w of m.warnings) warnings.push(w);
-      }
-    }
+    const raidRes = coresToGems(presets.raid);
+    gems = raidRes.gems; warnings = raidRes.warnings; coreCount = presets.raid.length;
+    // Chaos-dungeon preset (a separate Ark Grid loadout), if the character has one.
+    if (presets.chaos) chaosGems = coresToGems(presets.chaos).gems;
   }
 
   const meta = parseMeta(html, isKR);
@@ -392,6 +406,7 @@ async function fetchCharacterData(region, name) {
     coreCount: coreCount,
     gemCount: gems.length,
     gems: gems,
+    chaosGems: chaosGems,
     warnings: warnings
   } };
 }

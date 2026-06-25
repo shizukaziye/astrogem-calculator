@@ -76,6 +76,7 @@
   // mode is unaffected (it always grades DPS). The mode is mode-aware accessors below;
   // every loadout-rendering helper calls gGrade/gRank/gRel instead of grade/gemRank/relDamage.
   var grMode = "dps"; // "dps" | "support"
+  var grPreset = "raid"; // "raid" | "chaos" — which Ark Grid loadout is being graded
   function isSupport() { return grMode === "support"; }
   // Apply the DPS(red)/Support(blue) theme by toggling a mode class on #tab-grader,
   // which flips the scoped --accent (see CSS). Rank badges keep their rankColor.
@@ -120,6 +121,14 @@
     var gems = (data && data.gems) || [];
     if (cls && SUPPORT_CLASSES[cls] && supportDominant(gems)) return "support";
     return "dps";
+  }
+
+  // Which loadout's gems to grade: the chaos-dungeon preset when toggled on (and present),
+  // otherwise the raid preset. data.chaosGems only exists when the character has a distinct
+  // chaos-dungeon Ark Grid loadout (the worker returns both presets).
+  function activeGems(data) {
+    if (grPreset === "chaos" && data && data.chaosGems && data.chaosGems.length) return data.chaosGems;
+    return (data && data.gems) || [];
   }
 
   function validateConfig(cfg) {
@@ -693,6 +702,33 @@
     if (lastLoadout) renderLoadout(lastLoadout);
   }
 
+  // Raid / Chaos-dungeon preset toggle, shown above the loadout header next to the axis
+  // toggle. Only rendered when the character has a distinct chaos preset (data.chaosGems).
+  // The active pill reflects grPreset; clicking the other regrades that preset's gems.
+  function presetToggleHtml(data) {
+    if (!(data && data.chaosGems && data.chaosGems.length)) return "";
+    function pill(p, label) {
+      return '<button type="button" class="gr-axispill gr-presetpill' + (grPreset === p ? " active" : "") +
+        '" data-preset="' + p + '">' + label + '</button>';
+    }
+    var note = (grPreset === "chaos") ? "Grading the chaos-dungeon preset" : "Grading the raid preset";
+    return '<div class="gr-axis gr-presetrow">' +
+      '<span class="lab">Preset</span>' +
+      '<span class="gr-axispills">' + pill("raid", "Raid") + pill("chaos", "Chaos") + '</span>' +
+      '<span class="gr-axisnote">' + note + '</span>' +
+      '</div>';
+  }
+
+  // Flip the graded preset (raid <-> chaos), re-auto-detect DPS/Support for that preset's
+  // build (a support's chaos loadout is often DPS-built), and re-render the cached loadout.
+  function setGrPreset(preset) {
+    preset = (preset === "chaos") ? "chaos" : "raid";
+    if (preset === grPreset || !lastLoadout) return;
+    grPreset = preset;
+    grMode = defaultModeFor({ class: lastLoadout.class, gems: activeGems(lastLoadout) });
+    renderLoadout(lastLoadout);
+  }
+
   // Compact single-row gem card: rank/grade badge + cost + order/willpower + the two
   // abbreviated effects. %dmg shown is damage ABOVE the cp baseline (relDamage);
   // grade/rank are unchanged. Keeps id="gr-gem-N" so Weakest-3 can jump to + flash it.
@@ -1025,7 +1061,7 @@
   function renderLoadout(data) {
     applyAxisTheme();
     var out = $("gr-result");
-    var gems = (data && data.gems) || [];
+    var gems = activeGems(data);
     grBaseShift = 0;   // fresh loadout: drop any manual ◀▶ baseline nudge from the last one
     // tag each gem with a stable index so the Weakest-3 rows can jump to its card
     gems.forEach(function (x, i) { x._gidx = i; });
@@ -1061,6 +1097,7 @@
 
     var html = '' +
 axisToggleHtml() +
+presetToggleHtml(data) +
 '<div class="panel">' +
 '  <div class="gr-prof">' +
 '    <button type="button" class="gr-star" id="gr-fav-star"></button>' +
@@ -1108,7 +1145,10 @@ axisToggleHtml() +
     // DPS / Support toggle: flip the grading axis and re-render live. (Bound here since
     // the toggle markup is re-emitted on every loadout render.)
     Array.prototype.forEach.call(out.querySelectorAll(".gr-axispill"), function (btn) {
-      btn.addEventListener("click", function () { setGrMode(btn.getAttribute("data-axis")); });
+      btn.addEventListener("click", function () {
+        if (btn.hasAttribute("data-preset")) setGrPreset(btn.getAttribute("data-preset"));
+        else setGrMode(btn.getAttribute("data-axis"));
+      });
     });
 
     // Weakest-3 rows scroll to + flash their gem card
@@ -1263,6 +1303,7 @@ axisToggleHtml() +
         return;
       }
       lastLoadout = r.data;
+      grPreset = "raid"; // a fresh pull always starts on the raid preset
       grMode = defaultModeFor(r.data); // auto-default DPS/Support for this fresh loadout
       setPullStatus("Graded " + ((r.data.gems || []).length) + " gems.", "");
       if (refreshBtn) refreshBtn.style.display = "";
@@ -1361,6 +1402,7 @@ axisToggleHtml() +
       }
       if (charData.name && $("gr-name")) $("gr-name").value = charData.name;
       lastLoadout = charData;
+      grPreset = "raid"; // a fresh loadout always starts on the raid preset
       grMode = defaultModeFor(charData); // auto-default DPS/Support for this loadout
       // Listed characters are cached records; reflect that unless told otherwise.
       if (charData.cached == null && charData.pulledAt != null) charData.cached = true;
