@@ -938,7 +938,7 @@
   }
 
   function legendHtml() {
-    return '<div class="legend-box">'
+    return '<div class="legend-box" id="pl-legend">'
       + '<div class="lg-title">How to read these tables</div>'
       + '<div class="lg-cols">'
       // --- left column: reading one gem cell ---
@@ -1016,7 +1016,10 @@
       + '<span class="pl-gpd" id="pl-gpd-row">' + (gpdBtns || '<span class="note">Loading tiers…</span>') + '</span>'
       + rosterToggle
       + '</div>'
-      + '<div class="pl-handle" role="button" tabindex="0" onclick="window.__plToggleBar()">region / gpd &#9662;</div>'
+      + '<div class="pl-handles">'
+      + '<div class="pl-handle pl-handle-rg" role="button" tabindex="0" onclick="window.__plToggleBar()">region / gpd &#9662;</div>'
+      + '<div class="pl-handle pl-handle-legend" role="button" tabindex="0" onclick="window.__plToggleLegend()">how to read &#9662;</div>'
+      + '</div>'
       + '</div>';
   }
   function modeNote() {
@@ -1110,10 +1113,14 @@
       // would otherwise slide up over the app .tabbar at scroll 0. Only the small handle
       // shows by default (22px reserved); hovering it fades the full bar in just below.
       + '#tab-pipeline #pl-inputs{height:22px;margin:0;padding:0;border:none;border-radius:0;background:none;backdrop-filter:none;z-index:30;overflow:visible}'
-      + '#tab-pipeline #pl-inputs .pl-handle{position:absolute;top:0;left:0;height:22px;line-height:21px;margin-left:28px;padding:0 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);background:rgba(13,16,23,.97);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;cursor:pointer;user-select:none;z-index:1}'
+      + '#tab-pipeline #pl-inputs .pl-handles{position:absolute;top:0;left:0;margin-left:28px;display:flex;gap:6px;z-index:1}'
+      + '#tab-pipeline #pl-inputs .pl-handle{height:22px;line-height:21px;padding:0 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);background:rgba(13,16,23,.97);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;cursor:pointer;user-select:none}'
+      + '#tab-pipeline #pl-legend{display:none}'
+      + '#tab-pipeline #pl-legend.pl-legend-open{display:block}'
+      + '#tab-pipeline .pl-handle-legend.active{color:var(--accent);border-color:var(--accent)}'
       + '#tab-pipeline #pl-inputs .pl-bar{position:absolute;left:0;right:0;top:22px;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-6px);transition:opacity .15s ease,transform .15s ease,visibility .15s;display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:10px 16px 10px 28px;background:rgba(13,16,23,.98);border:1px solid var(--border);border-radius:0 0 10px 10px;backdrop-filter:blur(6px)}'
-      + '#tab-pipeline #pl-inputs:hover .pl-bar,#tab-pipeline #pl-inputs.pl-open .pl-bar{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)}'
-      + '#tab-pipeline #pl-inputs:hover .pl-handle,#tab-pipeline #pl-inputs.pl-open .pl-handle{color:var(--accent);border-color:var(--accent)}'
+      + '#tab-pipeline #pl-inputs:has(.pl-handle-rg:hover,.pl-bar:hover) .pl-bar,#tab-pipeline #pl-inputs.pl-open .pl-bar{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)}'
+      + '#tab-pipeline #pl-inputs:has(.pl-handle-rg:hover,.pl-bar:hover) .pl-handle-rg,#tab-pipeline #pl-inputs.pl-open .pl-handle-rg{color:var(--accent);border-color:var(--accent)}'
       + '#tab-pipeline #pl-inputs .pl-gpd{display:inline-flex;flex-wrap:wrap;gap:7px}'
       + '#tab-pipeline #pl-inputs .pl-sep{width:1px;align-self:stretch;background:var(--border);margin:2px 4px}'
       + '#tab-pipeline #pl-inputs .pl-region{display:inline-flex;flex-wrap:wrap;gap:7px}'
@@ -1314,6 +1321,13 @@
   window.__plToggleBar = function () {   // tap the handle (mobile has no hover) to open/close the bar
     var el = document.getElementById("pl-inputs");
     if (el) el.classList.toggle("pl-open");
+  };
+  window.__plToggleLegend = function () {   // collapse/expand the "How to read these tables" legend
+    var el = document.getElementById("pl-legend");
+    if (!el) return;
+    var open = el.classList.toggle("pl-legend-open");
+    var h = document.querySelector("#tab-pipeline .pl-handle-legend");
+    if (h) h.classList.toggle("active", open);
   };
   window.__plToggleInputs = function () {
     var body = document.getElementById("pl-inbody");
