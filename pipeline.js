@@ -1499,10 +1499,31 @@
       if (p.buyMat) boxes.list.push(CONST.BOX_MAT.max + "×mat");
       if (p.buyEpic) boxes.list.push(CONST.BOX_EPIC.max + "×43k");
 
+      // Processed (finished) gems — fusion guide. Per fodder tier: the recipe, the
+      // output-tier odds, and the mix-weighted expected output value at each cost.
+      // window.tierExpectedValue(cost, bl, gpd) -> {legendary,relic,ancient} = the value
+      // of a fusion-output gem that lands at that tier.
+      var processed = null;
+      if (typeof window.tierExpectedValue === "function") {
+        var fuMix = { legendary: FUSE_3L, relic: FUSE_R2L, ancient: FUSE_A2L };
+        var fuRecipe = { legendary: "3× Legendary", relic: "1 Relic + 2 Legendary", ancient: "1 Ancient + 2 Legendary" };
+        var tevC = {};
+        for (var ci2 = 0; ci2 < COSTS.length; ci2++) tevC[COSTS[ci2]] = window.tierExpectedValue(COSTS[ci2], bl, gpd);
+        processed = TIERS.map(function (t) {
+          var mix = fuMix[t], evByCost = {};
+          for (var k = 0; k < COSTS.length; k++) {
+            var c2 = COSTS[k], tev = tevC[c2], ev = 0;
+            for (var j = 0; j < TIERS.length; j++) ev += (mix[TIERS[j]] || 0) * ((tev && tev[TIERS[j]]) || 0);
+            evByCost[c2] = ev;
+          }
+          return { tier: t, recipe: fuRecipe[t], mix: mix, evByCost: evByCost };
+        });
+      }
+
       return {
         region: wantRegion, roster: roster,
         grade: baselineGrade, baselineScore: bl, gpd: gpd,
-        plan: plan, boxes: boxes
+        plan: plan, boxes: boxes, processed: processed
       };
     } finally {
       REGION = savedRegion;   // restore the Pipeline tab's region no matter what

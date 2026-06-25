@@ -422,6 +422,9 @@
 '  #tab-grader .gr-boxes .bl{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);font-weight:700;margin-right:2px}' +
 '  #tab-grader .gr-boxes .box{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700;background:var(--panel);border:1px solid var(--border);color:var(--text)}' +
 '  #tab-grader .gr-boxes .none{color:var(--dim);font-style:italic}' +
+'  #tab-grader .gr-proc{margin-top:12px}' +
+'  #tab-grader .gr-proc .proc-h{padding:10px 14px;border-bottom:1px solid var(--border);background:var(--panel);font-size:12px;font-weight:800;letter-spacing:.02em;color:var(--text)}' +
+'  #tab-grader table.gr-ptab td.odds{font-size:10.5px;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}' +
 '  #tab-grader .gr-plan-legend{margin-top:12px;font-size:11px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap;align-items:center}' +
 '  #tab-grader .gr-plan-legend .vpill{font-size:10px;padding:1px 8px}' +
 // ---- single blanket baseline header + ◀▶ nudge ----
@@ -767,6 +770,35 @@
     return '<div class="gr-plan-card">' + rows + boxesHtml + '</div>';
   }
 
+  // Processed (finished) gems — fusion guide. Per fodder tier: the recipe to fuse it,
+  // the output-tier odds, and the mix-weighted expected output value at each cost.
+  // Data from adv.processed (window.pipelineAdvice).
+  function oddsStr(mix) {
+    var defs = [["legendary", "Leg"], ["relic", "Relic"], ["ancient", "Anc"]], parts = [];
+    for (var i = 0; i < defs.length; i++) {
+      var v = mix[defs[i][0]] || 0;
+      if (v > 0.005) parts.push(Math.round(v * 100) + "% " + defs[i][1]);
+    }
+    return parts.join(" · ");
+  }
+  function processedTableHtml(adv) {
+    if (!adv || !adv.processed || !adv.processed.length) return "";
+    var rows = '<table class="gr-ptab"><thead><tr>'
+      + '<th>Fuse</th><th>Output odds</th>'
+      + '<th class="r">8-cost</th><th class="r">9-cost</th><th class="r">10-cost</th>'
+      + '</tr></thead><tbody>';
+    for (var i = 0; i < adv.processed.length; i++) {
+      var p = adv.processed[i];
+      rows += '<tr><td><span class="rar">' + esc(p.recipe) + '</span></td>'
+        + '<td class="odds">' + esc(oddsStr(p.mix)) + '</td>'
+        + '<td class="r ov">' + fmtGoldShort(p.evByCost[8]) + '</td>'
+        + '<td class="r ov">' + fmtGoldShort(p.evByCost[9]) + '</td>'
+        + '<td class="r ov">' + fmtGoldShort(p.evByCost[10]) + '</td></tr>';
+    }
+    rows += '</tbody></table>';
+    return '<div class="gr-plan-card gr-proc"><div class="proc-h">Processed (finished) gems — fuse fodder up a tier</div>' + rows + '</div>';
+  }
+
   // Baseline header: the ONE baseline rank, what it came from, and the ◀ ▶ nudge arrows.
   function baselineHeadHtml(base) {
     if (!base) return '';
@@ -809,7 +841,7 @@
     } else if (!ready) {
       body = '<div class="placeholder" id="gr-plan-cards" style="margin-top:10px"><b>Loading pipeline economics…</b>Computing what to cut, fuse, reset, or dismantle.</div>';
     } else {
-      body = '<div id="gr-plan-cards">' + planTableHtml(adv) + '</div>';
+      body = '<div id="gr-plan-cards">' + planTableHtml(adv) + processedTableHtml(adv) + '</div>';
     }
 
     var legend = '<div class="gr-plan-legend">'
@@ -846,7 +878,7 @@
     // host may be the placeholder (with inline style) before data arrived; normalize.
     host.removeAttribute("style");
     host.className = "";
-    host.innerHTML = planTableHtml(adv);
+    host.innerHTML = planTableHtml(adv) + processedTableHtml(adv);
   }
 
   // gpd selector handler (wired via inline onclick in planSectionHtml).
