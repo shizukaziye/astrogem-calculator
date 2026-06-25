@@ -57,9 +57,9 @@
   var regions = { NA: true, EU: true, KR: true };  // region filter chips (all on; click to toggle off)
   var MIN_GRADE = 65;  // hide anything ranked C+ or below — B- starts at grade 65
 
-  // (just for laughs) a certain roster member made some... questionable gem choices,
+  // (just for laughs) the entire "Buff" crew made some... questionable gem choices,
   // and is shown on the board no matter how bad it gets.
-  function isTrollTarget(c) { return !!(c && /buffgirl/i.test(c.name || "")); }
+  function isTrollTarget(c) { return !!(c && /^buff/i.test(c.name || "")); }
   function trollGems(gems) {
     var DEAD = { 8: ["Brand Power", "Ally Damage Enh."], 9: ["Ally Damage Enh.", "Ally Attack Enh."], 10: ["Brand Power", "Ally Attack Enh."] };
     // even a gem-less target gets one terrible gem, so they still rank F (not "—").
@@ -259,8 +259,8 @@
 '  #tab-leaderboard .lb-modebtn.on{background:var(--axis);color:#0c0e12}' +
 // DPS = GOLD, Support = GREEN: a mode-scoped --axis on avg grade, dmg, the header + the
 // toggle. Generic blue --accent stays for the rest; rank badges keep their rankColor.
-'  #tab-leaderboard.axis-dps{--axis:#e8a334}' +
-'  #tab-leaderboard.axis-support{--axis:#3fc1cf}' +
+'  #tab-leaderboard.axis-dps{--axis:#f3a59c}' +
+'  #tab-leaderboard.axis-support{--axis:#66c7ff}' +
 '  #tab-leaderboard .lb-regs{display:inline-flex;gap:0;border:1px solid var(--border);border-radius:99px;overflow:hidden}' +
 '  #tab-leaderboard .lb-regbtn{background:none;border:none;cursor:pointer;color:var(--dim);font-family:inherit;font-weight:700;font-size:12px;padding:5px 13px;line-height:1.4;transition:background .12s,color .12s}' +
 '  #tab-leaderboard .lb-regbtn + .lb-regbtn{border-left:1px solid var(--border)}' +
