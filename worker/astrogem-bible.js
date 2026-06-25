@@ -273,7 +273,7 @@ function parseLopecGems(html) {
 }
 
 // Known advanced classes — lostark.bible renders the English class name as a profile badge.
-const CLASS_NAMES = ["Berserker","Destroyer","Gunlancer","Paladin","Slayer","Valkyrie","Arcanist","Summoner","Bard","Sorceress","Wardancer","Scrapper","Soulfist","Glaivier","Striker","Breaker","Deathblade","Shadowhunter","Reaper","Souleater","Sharpshooter","Deadeye","Artillerist","Machinist","Gunslinger","Aeromancer","Wildsoul","Artist"];
+const CLASS_NAMES = ["Berserker","Destroyer","Gunlancer","Paladin","Slayer","Valkyrie","Arcanist","Summoner","Bard","Sorceress","Wardancer","Scrapper","Soulfist","Glaivier","Striker","Breaker","Deathblade","Shadowhunter","Reaper","Souleater","Sharpshooter","Deadeye","Artillerist","Machinist","Gunslinger","Aeromancer","Wildsoul","Artist","Guardianknight"];
 
 // lopec.kr exposes the class only as its Korean name in the RSC ("class":"버서커").
 // Map each Korean advanced-class name to the English name (the same keys the static
@@ -285,7 +285,7 @@ const KR_CLASS = {
   "블레이드": "Deathblade", "데모닉": "Shadowhunter", "리퍼": "Reaper", "소울이터": "Souleater",
   "헌터": "Sharpshooter", "데빌헌터": "Deadeye", "블래스터": "Artillerist", "스카우터": "Machinist", "건슬링어": "Gunslinger",
   "도화가": "Artist", "기상술사": "Aeromancer", "환수사": "Wildsoul",
-  "가디언나이트": "Guardian Knight" // new class (KR 2025-12-10); no icon asset yet
+  "가디언나이트": "Guardianknight" // new class (KR 2025-12-10); icon = Guardianknight.svg
 };
 
 // Item level + class from the page. lostark.bible: ilvl in the SvelteKit blob + the class

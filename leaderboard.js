@@ -79,7 +79,8 @@
     "Machinist": "Machinist.svg",
     "Gunslinger": "Gunslinger.svg",
     "Aeromancer": "Aeromancer.svg",
-    "Wildsoul": "Wildsoul.svg"
+    "Wildsoul": "Wildsoul.svg",
+    "Guardianknight": "Guardianknight.svg"
   };
 
   // Class ICON only (no name) — shown at the START of the Character cell, just before
