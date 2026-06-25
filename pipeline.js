@@ -2,7 +2,7 @@
  * pipeline.js — "Pipeline Tables" tab (BUCKET-PRIMARY, economic methodology).
  *
  * One CLICKABLE gold-per-1%-damage tier at a time (button row, one per gpd present in
- * data/pipeline.json), each a full grade × {Uncommon/Rare/Epic × c8/c9/c10} grid plus
+ * data/pipeline.json), each a full grade × {Uncommon/Rare/Epic × 8/9/10-cost} grid plus
  * a weekly-economy Pipeline group. Per-table NRB/RB toggle. The arbitrary-baseline
  * "live" DP mode is gone — every baseline shown is a baked grade row read by direct
  * key lookup (exact + instant).
@@ -218,6 +218,23 @@
     return t / BW_TOTAL;
   }
 
+  // The "other half" value of a fusion output, honoring REGION. Pre-cut fusion outputs
+  // split 50/50: half are the NRB value, half are something region-specific.
+  //   global: the other half is ROSTER-BOUND (free to cut) -> the RB open value.
+  //   KR:     there are NO roster-bound gems; the other half is TRADABLE instead. A
+  //           tradable EPIC has a floor sale value (KR_FLOOR by cost); tradable UC/Rare
+  //           are just normal gems (= the NRB value). So fusing toward epics gains the
+  //           floor as a safety net — the SAME economics as unopenedFusion's E().
+  // Used wherever the 50/50 NRB/other split appears (fuseDecisions, box EV, the UC/Rare
+  // fuse lanes in computePipeline) so the infographic differs correctly for KR.
+  function secondHalfGev(rarity, cost, baseline, gpd) {
+    if (REGION === "kr") {
+      var nrb = gev(rarity, cost, baseline, gpd, "nrb");
+      return (rarity === "epic") ? Math.max(nrb, KR_FLOOR[cost] || 0) : nrb;
+    }
+    return gev(rarity, cost, baseline, gpd, "rb");
+  }
+
   // ---------------------------------------------------------------------------
   // REAL unopened (rarity-upgrade) fusion value — what the BLOCK-level purple verdict
   // compares against opening. (Retained from the prior implementation; confirmed model.)
@@ -325,7 +342,7 @@
       for (var ri = 0; ri < RARITIES.length; ri++) {
         var orar = RARITIES[ri], rate = UC_FUSE[orar];
         fuseEv += Math.max(gev(orar, c, bl, gpd, "nrb"), 0) * rate * 0.5;
-        fuseEv += Math.max(gev(orar, c, bl, gpd, "rb"), 0) * rate * 0.5;
+        fuseEv += Math.max(secondHalfGev(orar, c, bl, gpd), 0) * rate * 0.5;
       }
       var fpi = (fuseEv - CONST.FUSION_COST) / 3;
       ucSf[c] = fpi > ucDirect;
@@ -338,7 +355,7 @@
       for (var rj = 0; rj < RARITIES.length; rj++) {
         var or2 = RARITIES[rj], rt = RARE_FUSE[or2];
         ev += Math.max(gev(or2, cc, bl, gpd, "nrb"), 0) * rt * 0.5;
-        ev += Math.max(gev(or2, cc, bl, gpd, "rb"), 0) * rt * 0.5;
+        ev += Math.max(secondHalfGev(or2, cc, bl, gpd), 0) * rt * 0.5;
       }
       fuseEvByCost[cc] = ev;
     }
@@ -633,7 +650,7 @@
   // fuse3 = block fuse value (NRB); steerCost = cost to steer the fusion toward;
   // ovNrb = NRB open value (1:2:2:1 weighted mean of the 4 bucket cut-EVs).
   function buildTip(rarity, cost, baseline, gpd, roster, fuse3, steerCost, ovNrb) {
-    var head = '<div class="pt-head">' + RARITY_LABEL[rarity] + ' · c' + cost
+    var head = '<div class="pt-head">' + RARITY_LABEL[rarity] + ' · ' + cost + '-cost'
       + ' <span class="pt-rs">' + (roster === "nrb" ? "NRB" : "RB") + '</span></div>';
 
     // per-bucket rows
@@ -678,7 +695,7 @@
           + '<td class="pt-num">' + fmtGold(tev ? tev[t] : null) + '</td>'
           + '<td class="pt-num">' + fmtPct(fusionHit(baseline, fuMix[t])) + '</td></tr>';
       }
-      fodderBlock = '<div class="pt-sec"><div class="pt-sec-h">Below baseline → fodder value &amp; fusion (c' + cost + ')</div>'
+      fodderBlock = '<div class="pt-sec"><div class="pt-sec-h">Below baseline → fodder value &amp; fusion (' + cost + '-cost)</div>'
         + '<table class="pt-tbl"><thead><tr><th>Fodder</th><th>Value</th><th>Fuse</th><th>Output EV</th><th>Hit %</th></tr></thead><tbody>'
         + frows + '</tbody></table></div>';
     }
@@ -692,10 +709,10 @@
         ? '<b class="pt-win">Fuse wins</b> by ' + fmtGold(Math.abs(win))
         : '<b class="pt-win pt-open">Open wins</b> by ' + fmtGold(Math.abs(win));
       var steerTxt = (rarity === "epic")
-        ? '<span class="pt-dim">epic — never fused</span>'
+        ? '<span class="pt-dim">Epic — never fused</span>'
         : (rarity === "uncommon")
-          ? 'keep <b>c' + cost + '</b> (UC fuse holds cost)'
-          : 'steer toward <b>c' + (steerCost || cost) + '</b>';
+          ? 'fuse as 3× <b>' + cost + '-cost</b> Uncommon (cost held)'
+          : 'fuse + 2× <b>' + (steerCost || cost) + '-cost</b> Uncommon';
       fuseBlock = '<div class="pt-sec"><div class="pt-sec-h">Block fusion decision (NRB)</div>'
         + '<div class="pt-fuse-grid">'
         + '<span class="pt-k">Steer cost</span><span class="pt-v">' + steerTxt + '</span>'
@@ -761,9 +778,9 @@
       + '<th colspan="3" class="sep">Epic</th>'
       + '<th colspan="9" class="sep">Pipeline economy (NRB-based, per week unless noted)</th>'
       + '</tr><tr>'
-      + '<th class="sep">c8</th><th>c9</th><th>c10</th>'
-      + '<th class="sep">c8</th><th>c9</th><th>c10</th>'
-      + '<th class="sep">c8</th><th>c9</th><th>c10</th>'
+      + '<th class="sep">8-cost</th><th>9-cost</th><th>10-cost</th>'
+      + '<th class="sep">8-cost</th><th>9-cost</th><th>10-cost</th>'
+      + '<th class="sep">8-cost</th><th>9-cost</th><th>10-cost</th>'
       + '<th class="sep">Boxes</th><th>Direct<br>/wk</th><th>Fuse<br>/wk</th>'
       + '<th>Total<br>/wk</th><th>Weeks</th><th>Gold</th><th>Avg<br>%dmg</th><th>Total<br>%dmg</th><th>cp%</th>'
       + '</tr></thead><tbody>';
@@ -900,7 +917,7 @@
         + '<span class="bkt-reset">' + r.glyph + '</span></div>';
     }
     return '<div class="lg-cellwrap">'
-      + '<div class="lg-cell"><div class="lg-cell-hdr">Uncommon · c9</div><div class="bkt-grid">' + rh + '</div></div>'
+      + '<div class="lg-cell"><div class="lg-cell-hdr">Uncommon · 9-cost</div><div class="bkt-grid">' + rh + '</div></div>'
       + '<div class="lg-callouts">'
       + '<p class="lg-co">Every gem column is split into <b>four rows, one per effect pair</b>. The pair is fixed when the gem rolls, so each row answers: <i>if your gem ends up with this pair, is it worth cutting?</i></p>'
       + '<dl class="lg-defs">'
@@ -1331,8 +1348,13 @@
     })();
   };
 
-  // pipelineAdvice(baselineGrade, gpd): the action plan for ONE baseline grade
-  // (a GRADE_ROWS value, e.g. 77) at ONE gpd tier, for the current REGION + NRB.
+  // pipelineAdvice(baselineGrade, gpd, region): the action plan for ONE baseline grade
+  // (a GRADE_ROWS value, e.g. 77) at ONE gpd tier, computed for `region`
+  // ("global" | "kr"; defaults to the current pipeline-tab REGION when omitted).
+  // The Grader passes the LOADED CHARACTER's region so a KR loadout gets the KR plan
+  // (no roster-bound gems; tradable-epic floor) regardless of the Pipeline tab's own
+  // region toggle. We temporarily swap the module REGION while computing and restore it
+  // in a finally, so the Pipeline tab's toggle/state is never disturbed.
   // Returns null if data isn't loaded yet (call inside pipelineReady).
   //
   // Shape:
@@ -1342,8 +1364,9 @@
   //       rarity, cost,
   //       openValue,                       // gev() open value, gold (NRB)
   //       verdict: "fuse"|"cut & reset"|"cut"|"throw",
-  //       recipe,                          // e.g. "3×UC", "1R+2L"  (fuse only, else null)
-  //       steerCost                        // cost to steer the fuse toward (fuse only, else null)
+  //       recipe,                          // unopened-fusion recipe (fuse only, else null):
+  //                                        //   "3× 9-cost Uncommon" | "8-cost Rare + 2× 9-cost Uncommon"
+  //       addCost                          // cost of the 2 Uncommons you ADD (fuse only, else null)
   //     }, … ],
   //     boxes: {                           // reuse computePipeline's box logic
   //       vendor:{buy,cost,max}, mat:{buy,cost,max}, epic:{buy,cost,max},
@@ -1352,65 +1375,85 @@
   //     }
   //   }
   //
-  // Recipe wording mirrors the Pipeline tab: a UC block fuses 3 same-cost
-  // uncommons ("3×UC", cost held); a Rare block fuses 1 rare + 2 leftover
-  // uncommons ("1R+2L") steered toward steerCost; epics never fuse.
-  window.pipelineAdvice = function (baselineGrade, gpd) {
+  // UNOPENED-FUSION recipe wording (the pre-cut "fuse the whole gem first" move). You
+  // ADD 2 Uncommons to the gem you have — NO rarity is consumed beyond that:
+  //   Uncommon block -> fuse as 3× Uncommon (the gem + 2 Uncommons), cost held.
+  //   Rare block     -> fuse as this Rare + 2× Uncommon, the 2 Uncommons steered toward
+  //                     `addCost` (= fd.rareUcCost) so the output cost is pushed there.
+  //   Epic           -> never fuses.
+  // These are Uncommon / Rare / Epic (the UNOPENED rarities), NOT the finished-gem
+  // Legendary/Relic/Ancient processed-fusion tiers — do not conflate the two.
+  // The Grader renders this as "fuse + 2× <addCost>-cost Uncommon" (the 2 you add).
+  window.pipelineAdvice = function (baselineGrade, gpd, region) {
     if (!DATA) return null;
     if (gpd == null) gpd = GPD;
     var bl = (typeof window.gradeToScore === "function") ? window.gradeToScore(baselineGrade) : baselineGrade;
     var roster = "nrb";
 
-    var fd = fuseDecisions(bl, gpd, roster);
+    // Compute for the requested region (defaults to the tab's current REGION). Swap the
+    // module REGION so every helper (gev/fuseDecisions/computePipeline via secondHalfGev)
+    // honors it, then ALWAYS restore — the Pipeline tab's toggle must be untouched.
+    var wantRegion = (region === "kr") ? "kr" : (region === "global") ? "global" : REGION;
+    var savedRegion = REGION;
+    REGION = wantRegion;
+    try {
+      var fd = fuseDecisions(bl, gpd, roster);
 
-    var plan = [];
-    for (var ri = 0; ri < RARITIES.length; ri++) {
-      for (var ci = 0; ci < COSTS.length; ci++) {
-        var rarity = RARITIES[ri], cost = COSTS[ci];
-        var ov = gev(rarity, cost, bl, gpd, roster);
-        var doFuse = (rarity === "uncommon") ? !!fd.uc[cost]
-          : (rarity === "rare") ? !!fd.rare[cost]
-            : false;   // epic never fuses pre-cut
-        var verdict, recipe = null, steerCost = null;
-        if (doFuse) {
-          verdict = "fuse";
-          if (rarity === "uncommon") { recipe = "3×UC"; steerCost = cost; }
-          else { recipe = "1R+2L"; steerCost = fd.rareUcCost[cost]; }
-        } else if (ov >= CONST.RESET_THRESHOLD) {
-          verdict = "cut & reset";
-        } else if (ov > 0) {
-          verdict = "cut";
-        } else {
-          verdict = "throw";
+      var plan = [];
+      for (var ri = 0; ri < RARITIES.length; ri++) {
+        for (var ci = 0; ci < COSTS.length; ci++) {
+          var rarity = RARITIES[ri], cost = COSTS[ci];
+          var ov = gev(rarity, cost, bl, gpd, roster);
+          var doFuse = (rarity === "uncommon") ? !!fd.uc[cost]
+            : (rarity === "rare") ? !!fd.rare[cost]
+              : false;   // epic never fuses pre-cut
+          var verdict, recipe = null, addCost = null;
+          if (doFuse) {
+            verdict = "fuse";
+            // addCost = the cost of the 2 Uncommons you ADD. A UC fuse holds its own
+            // cost; a Rare fuse steers its 2 added Uncommons toward fd.rareUcCost.
+            addCost = (rarity === "uncommon") ? cost : fd.rareUcCost[cost];
+            recipe = (rarity === "uncommon")
+              ? ("3× " + cost + "-cost Uncommon")
+              : (cost + "-cost Rare + 2× " + addCost + "-cost Uncommon");
+          } else if (ov >= CONST.RESET_THRESHOLD) {
+            verdict = "cut & reset";
+          } else if (ov > 0) {
+            verdict = "cut";
+          } else {
+            verdict = "throw";
+          }
+          plan.push({
+            rarity: rarity, cost: cost,
+            openValue: ov, verdict: verdict, recipe: recipe, addCost: addCost
+          });
         }
-        plan.push({
-          rarity: rarity, cost: cost,
-          openValue: ov, verdict: verdict, recipe: recipe, steerCost: steerCost
-        });
       }
+
+      // Box decisions: reuse computePipeline's logic (it returns buyVendor/buyMat/
+      // buyEpic + boxEV). The grade only affects avg/cp columns there, not the box
+      // buy flags (those are pure gev-vs-cost), so any grade gives the same boxes;
+      // we pass the actual baselineGrade for completeness.
+      var p = computePipeline(baselineGrade, bl, gpd);
+      var boxes = {
+        vendor: { buy: !!p.buyVendor, cost: CONST.BOX_VENDOR.cost, max: CONST.BOX_VENDOR.max },
+        mat: { buy: !!p.buyMat, cost: CONST.BOX_MAT.cost, max: CONST.BOX_MAT.max },
+        epic: { buy: !!p.buyEpic, cost: CONST.BOX_EPIC.cost, max: CONST.BOX_EPIC.max },
+        boxEV: p.boxEV,
+        list: []
+      };
+      if (p.buyVendor) boxes.list.push(CONST.BOX_VENDOR.max + "×1185");
+      if (p.buyMat) boxes.list.push(CONST.BOX_MAT.max + "×mat");
+      if (p.buyEpic) boxes.list.push(CONST.BOX_EPIC.max + "×43k");
+
+      return {
+        region: wantRegion, roster: roster,
+        grade: baselineGrade, baselineScore: bl, gpd: gpd,
+        plan: plan, boxes: boxes
+      };
+    } finally {
+      REGION = savedRegion;   // restore the Pipeline tab's region no matter what
     }
-
-    // Box decisions: reuse computePipeline's logic (it returns buyVendor/buyMat/
-    // buyEpic + boxEV). The grade only affects avg/cp columns there, not the box
-    // buy flags (those are pure gev-vs-cost), so any grade gives the same boxes;
-    // we pass the actual baselineGrade for completeness.
-    var p = computePipeline(baselineGrade, bl, gpd);
-    var boxes = {
-      vendor: { buy: !!p.buyVendor, cost: CONST.BOX_VENDOR.cost, max: CONST.BOX_VENDOR.max },
-      mat: { buy: !!p.buyMat, cost: CONST.BOX_MAT.cost, max: CONST.BOX_MAT.max },
-      epic: { buy: !!p.buyEpic, cost: CONST.BOX_EPIC.cost, max: CONST.BOX_EPIC.max },
-      boxEV: p.boxEV,
-      list: []
-    };
-    if (p.buyVendor) boxes.list.push(CONST.BOX_VENDOR.max + "×1185");
-    if (p.buyMat) boxes.list.push(CONST.BOX_MAT.max + "×mat");
-    if (p.buyEpic) boxes.list.push(CONST.BOX_EPIC.max + "×43k");
-
-    return {
-      region: REGION, roster: roster,
-      grade: baselineGrade, baselineScore: bl, gpd: gpd,
-      plan: plan, boxes: boxes
-    };
   };
 
   // The gpd tiers present in the bake (for the Grader's gpd selector). Returns []

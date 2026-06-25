@@ -63,6 +63,33 @@
 
   var REGIONS = ["NA", "EU", "KR"];
 
+  // The site a region's loadout is pulled from (the Worker routes KR -> lopec.kr, the
+  // rest -> lostark.bible). Drives the dynamic Re-pull button label + the source note.
+  function sourceSite(region) {
+    return String(region).toUpperCase() === "KR" ? "lopec.kr" : "lostark.bible";
+  }
+
+  // Pipeline-tab region key for a loadout region: KR characters get the KR economy
+  // (no roster-bound gems, tradable-epic floor), everyone else the global plan.
+  function planRegion(region) {
+    return String(region).toUpperCase() === "KR" ? "kr" : "global";
+  }
+
+  // Short, readable effect names for the compact per-gem rows (full names are long and
+  // blow out a one-line layout). Anything unmapped falls through unchanged.
+  var EFFECT_ABBR = {
+    "Attack Power": "ATK Power",
+    "Additional Damage": "Additional Dmg",
+    "Boss Damage": "Boss Dmg",
+    "Ally Attack Enh.": "Ally Atk",
+    "Ally Damage Enh.": "Ally Dmg",
+    "Brand Power": "Brand"
+  };
+  function abbrEffect(name) {
+    if (name == null) return "?";
+    return EFFECT_ABBR[name] || name;
+  }
+
   var lastLoadout = null; // cache of the most recent pulled loadout (for re-render)
 
   // ---- "what to do with your astrogems" infographic config ----
@@ -188,15 +215,45 @@
     return "https://lostark.bible/character/" + encodeURIComponent(region || "") + "/" + encodeURIComponent(name || "");
   }
 
+  // Class ICON for the loadout header. The class name maps 1:1 to a file in
+  // assets/class-icons/<ClassName>.svg (the same files the Leaderboard uses); we render
+  // it ourselves from that convention rather than depending on leaderboard.js. The
+  // brightness/invert tints the dark glyph to match the theme; onerror hides a missing
+  // file. KR loadouts (className == null) get no icon (item level only).
+  function classIconHtml(className) {
+    if (!className) return "";
+    return '<img class="gr-classicon" src="assets/class-icons/' + encodeURIComponent(className) +
+      '.svg" alt="" aria-hidden="true" loading="lazy" onerror="this.style.display=\'none\'">';
+  }
+
   // ---------------- markup ----------------
   function tabMarkup() {
     return '' +
 '<style>' +
+// Controls scroll normally — override styles.css .inputs sticky (fix: no frozen bar).
+'  #tab-grader #gr-inputs{position:static;top:auto;z-index:auto}' +
 '  #tab-grader .gr-modes{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px}' +
 '  #tab-grader .gr-modebody{margin-top:12px}' +
 '  #tab-grader .gr-status{font-size:12px;color:var(--dim);margin-top:8px;min-height:16px}' +
 '  #tab-grader .gr-status.working{color:var(--accent)}' +
 '  #tab-grader .gr-status.err{color:var(--bad)}' +
+// pull-mode top row: inputs on the LEFT, saved-character chips filling the RIGHT space.
+'  #tab-grader .gr-pullrow{display:grid;grid-template-columns:minmax(320px,auto) 1fr;gap:18px 24px;align-items:start}' +
+'  @media(max-width:760px){#tab-grader .gr-pullrow{grid-template-columns:1fr}}' +
+'  #tab-grader .gr-pullrow .gr-pullleft{min-width:0}' +
+'  #tab-grader .gr-pullrow .gr-pullright{min-width:0;border-left:1px solid var(--border);padding-left:24px}' +
+'  @media(max-width:760px){#tab-grader .gr-pullrow .gr-pullright{border-left:none;padding-left:0;border-top:1px solid var(--border);padding-top:14px}}' +
+// big lostark.bible-style profile header on the loadout panel.
+'  #tab-grader .gr-prof{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:0 0 4px}' +
+'  #tab-grader .gr-prof .gr-star{align-self:center}' +
+'  #tab-grader .gr-prof .gr-classicon{width:46px;height:46px;object-fit:contain;flex:0 0 auto;filter:brightness(0) invert(.82);opacity:.92}' +
+'  #tab-grader .gr-prof .gr-id{display:flex;flex-direction:column;gap:3px;min-width:0}' +
+'  #tab-grader .gr-prof .gr-name{font-size:30px;font-weight:800;letter-spacing:-.015em;line-height:1.05;color:var(--text)}' +
+'  #tab-grader .gr-prof .gr-name a{color:inherit;text-decoration:none;border-bottom:1px dotted transparent;transition:border-color .12s,color .12s}' +
+'  #tab-grader .gr-prof .gr-name a:hover{color:var(--accent);border-bottom-color:var(--accent)}' +
+'  #tab-grader .gr-prof .gr-meta{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12.5px;color:var(--dim)}' +
+'  #tab-grader .gr-prof .gr-meta .gr-chip{display:inline-flex;align-items:baseline;gap:5px;background:var(--panel);border:1px solid var(--border);border-radius:99px;padding:2px 10px;font-weight:600}' +
+'  #tab-grader .gr-prof .gr-meta .gr-chip b{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}' +
 '  #tab-grader .gr-headline{display:flex;align-items:center;gap:16px;flex-wrap:wrap}' +
 '  #tab-grader .gr-badge{display:inline-flex;align-items:baseline;gap:8px;border:1px solid var(--border);border-radius:12px;padding:10px 16px;background:var(--panel2)}' +
 '  #tab-grader .gr-badge .rk{font-size:30px;font-weight:800;letter-spacing:-.02em;line-height:1}' +
@@ -215,19 +272,30 @@
 '  #tab-grader .gr-bar i.gr-s{background:var(--good)}#tab-grader .gr-bar i.gr-a{background:var(--accent)}' +
 '  #tab-grader .gr-bar i.gr-b{background:var(--low)}#tab-grader .gr-bar i.gr-c{background:var(--high)}' +
 '  #tab-grader .gr-bar i.gr-d{background:var(--mid)}#tab-grader .gr-bar i.gr-f{background:var(--bad)}' +
-'  #tab-grader .gr-core{margin-top:16px}' +
-'  #tab-grader .gr-core h3{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin:0 0 8px;font-weight:700;display:flex;gap:8px;align-items:baseline}' +
-'  #tab-grader .gr-core h3 .ct{color:var(--dim);font-weight:600;letter-spacing:.02em;text-transform:none}' +
-'  #tab-grader .gr-gems{display:grid;grid-template-columns:1fr 1fr;gap:10px}' +
-'  @media(max-width:680px){#tab-grader .gr-gems{grid-template-columns:1fr}}' +
-'  #tab-grader .gr-gem{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--panel2);display:grid;grid-template-columns:54px 1fr;gap:12px;align-items:center}' +
-'  #tab-grader .gr-gem .rkbox{text-align:center}' +
-'  #tab-grader .gr-gem .rkbox .rk{font-size:22px;font-weight:800;line-height:1}' +
-'  #tab-grader .gr-gem .rkbox .gd{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}' +
-'  #tab-grader .gr-gem .meta{font-size:12px;line-height:1.5}' +
-'  #tab-grader .gr-gem .meta .top{font-weight:700;color:var(--text)}' +
-'  #tab-grader .gr-gem .meta .eff{color:var(--dim)}' +
-'  #tab-grader .gr-gem .meta .dmg{color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700}' +
+// ---- gems-by-core: two sections (Order, Chaos), each a 3-column grid (one core per
+//      column: Sun / Moon / Star), each column listing its 4 gems as compact rows. ----
+'  #tab-grader .gr-section{margin-top:18px}' +
+'  #tab-grader .gr-section > .sh{display:flex;align-items:baseline;gap:10px;margin:0 0 10px}' +
+'  #tab-grader .gr-section > .sh .st{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--accent)}' +
+'  #tab-grader .gr-section > .sh .ssub{font-size:11.5px;color:var(--dim);font-variant-numeric:tabular-nums}' +
+'  #tab-grader .gr-cores{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}' +
+'  @media(max-width:820px){#tab-grader .gr-cores{grid-template-columns:1fr}}' +
+'  #tab-grader .gr-corecol{border:1px solid var(--border);border-radius:10px;background:var(--panel2);overflow:hidden;display:flex;flex-direction:column}' +
+'  #tab-grader .gr-corecol > .ch{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:8px 11px;border-bottom:1px solid var(--border);background:var(--panel)}' +
+'  #tab-grader .gr-corecol > .ch .cn{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--text)}' +
+'  #tab-grader .gr-corecol > .ch .cd{font-size:10.5px;color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700}' +
+'  #tab-grader .gr-gem{display:grid;grid-template-columns:38px 1fr;gap:10px;align-items:center;padding:7px 11px;border-bottom:1px solid var(--border)}' +
+'  #tab-grader .gr-corecol .gr-gem:last-child{border-bottom:none}' +
+'  #tab-grader .gr-gem .rkbox{text-align:center;line-height:1}' +
+'  #tab-grader .gr-gem .rkbox .gd{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums;margin-top:2px}' +
+'  #tab-grader .gr-gem .rkbox .rk{font-size:18px;font-weight:800;line-height:1}' +
+'  #tab-grader .gr-gem .meta{font-size:11.5px;line-height:1.4;min-width:0}' +
+'  #tab-grader .gr-gem .meta .top{font-weight:700;color:var(--text);display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}' +
+'  #tab-grader .gr-gem .meta .top .dmg{color:var(--accent);font-variant-numeric:tabular-nums;font-weight:700;margin-left:auto}' +
+'  #tab-grader .gr-gem .meta .sub{color:var(--dim);font-variant-numeric:tabular-nums}' +
+'  #tab-grader .gr-gem .meta .eff{color:var(--dim);overflow:hidden;text-overflow:ellipsis}' +
+'  #tab-grader .gr-gem .meta .eff b{color:var(--text);font-weight:600}' +
+'  #tab-grader .gr-gem .meta .bad{color:var(--bad)}' +
 '  #tab-grader .gr-sum{display:flex;gap:20px;flex-wrap:wrap;align-items:center}' +
 '  #tab-grader h2 .bible-link{color:inherit;text-decoration:none;border-bottom:1px dotted var(--dim)}' +
 '  #tab-grader h2 .bible-link:hover{color:var(--accent);border-bottom-color:var(--accent)}' +
@@ -255,9 +323,9 @@
 '  #tab-grader .mbtn:disabled{opacity:.45;cursor:not-allowed}' +
 '  #tab-grader .gr-cache{display:inline-block;margin-left:10px;font-size:10px;font-weight:700;text-transform:none;letter-spacing:.02em;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 9px;vertical-align:middle}' +
 '  #tab-grader .gr-cache.fresh{color:var(--good)}' +
-// ---- saved-characters quick-pick row (pull mode) ----
-'  #tab-grader .gr-favs{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:10px 0 2px}' +
-'  #tab-grader .gr-favs .lab{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700;margin-right:2px}' +
+// ---- saved-characters quick-pick (pull mode, right-side column) ----
+'  #tab-grader .gr-favs{display:flex;align-items:flex-start;gap:7px;flex-wrap:wrap;margin:0}' +
+'  #tab-grader .gr-favs .lab{display:block;width:100%;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700;margin:0 0 4px}' +
 '  #tab-grader .gr-favs .gr-favbtn{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:4px 11px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;color:var(--text);line-height:1.3}' +
 '  #tab-grader .gr-favs .gr-favbtn:hover{border-color:var(--accent);color:var(--accent)}' +
 '  #tab-grader .gr-favs .gr-favbtn .rg{font-size:9.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:0 5px;line-height:1.6}' +
@@ -329,19 +397,23 @@
 '      <div class="note">Willpower cost = base cost &minus; willpower level (lower is better). Effect 1 and Effect 2 must differ; the dropdowns are filtered to this cost’s pool.</div>' +
 '    </div>' +
 
-// --- pull mode ---
+// --- pull mode (inputs left · saved-character chips fill the right) ---
 '    <div class="gr-modebody" id="gr-body-pull">' +
-'      <div class="ig">' +
-'        <div class="fld"><label>Region</label><select id="gr-region">' + opts(REGIONS, "NA") + '</select></div>' +
-'        <div class="fld" style="grid-column:span 2"><label>Character name</label><input id="gr-name" type="text" placeholder="e.g. Paroxysmal" autocomplete="off"></div>' +
+'      <div class="gr-pullrow">' +
+'        <div class="gr-pullleft">' +
+'          <div class="ig">' +
+'            <div class="fld"><label>Region</label><select id="gr-region">' + opts(REGIONS, "NA") + '</select></div>' +
+'            <div class="fld" style="grid-column:span 2"><label>Character name</label><input id="gr-name" type="text" placeholder="e.g. Paroxysmal" autocomplete="off"></div>' +
+'          </div>' +
+'          <div class="barrow">' +
+'            <button class="primary" id="gr-pull-go" type="button">Grade loadout</button>' +
+'            <button class="mbtn" id="gr-pull-refresh" type="button" style="display:none">Re-pull</button>' +
+'            <span class="gr-status" id="gr-pull-status"></span>' +
+'          </div>' +
+'          <div class="note" id="gr-pull-note"></div>' +
+'        </div>' +
+'        <div class="gr-pullright"><div class="gr-favs" id="gr-favs"></div></div>' +
 '      </div>' +
-'      <div class="gr-favs" id="gr-favs"></div>' +
-'      <div class="barrow">' +
-'        <button class="primary" id="gr-pull-go" type="button">Grade loadout</button>' +
-'        <button class="mbtn" id="gr-pull-refresh" type="button" style="display:none">Re-pull from lostark.bible</button>' +
-'        <span class="gr-status" id="gr-pull-status"></span>' +
-'      </div>' +
-'      <div class="note" id="gr-pull-note"></div>' +
 '    </div>' +
 '  </div>' +
 '</div>' +
@@ -406,7 +478,7 @@
 '    <div class="gr-dmg">% damage<br><b>' + dmg.toFixed(3) + '%</b></div>' +
 '  </div>' +
 '  <div class="gr-bar"><i class="' + cls + '" style="width:' + Math.max(2, g).toFixed(1) + '%"></i></div>' +
-'  <div class="note" style="margin-top:10px">c' + cfg.baseCost + ' ' + esc(cfg.gemType) +
+'  <div class="note" style="margin-top:10px">' + cfg.baseCost + '-cost ' + esc(cfg.gemType) +
      ' &middot; willpower ' + cfg.willpowerLevel + ' (cost ' + (cfg.baseCost - cfg.willpowerLevel) + ')' +
      ' &middot; order ' + cfg.orderLevel +
      ' &middot; ' + esc(cfg.effect1) + ' ' + cfg.effect1Level +
@@ -427,28 +499,30 @@
   }
 
   // ---------------- pull mode ----------------
-  function effLabel(name, lvl) {
-    return esc(name) + ' <span class="mono">' + (lvl != null ? lvl : "?") + '</span>';
-  }
 
+  // Compact single-row gem card: rank/grade badge + cost + order/willpower + the two
+  // abbreviated effects. %dmg shown is damage ABOVE the cp baseline (relDamage);
+  // grade/rank are unchanged. Keeps id="gr-gem-N" so Weakest-3 can jump to + flash it.
   function gemCardHtml(cfg) {
     var v = validateConfig(cfg);
     var g, rank, dmg, cls;
-    // %dmg shown is damage ABOVE the cp baseline (relDamage); grade/rank unchanged.
     if (v.valid) { g = grade(cfg); rank = gemRank(cfg); dmg = relDamage(cfg); cls = rankClass(rank); }
     var rkHtml = v.valid
       ? rankBadge(rank) + '<div class="gd">' + g.toFixed(0) + '</div>'
       : '<div class="rk">?</div>';
-    var dmgHtml = v.valid ? '<span class="dmg">' + dmg.toFixed(3) + '%</span>' : '<span class="bad">' + esc(v.error || "invalid") + '</span>';
     var idAttr = (cfg._gidx != null) ? ' id="gr-gem-' + cfg._gidx + '"' : '';
+    var topRight = v.valid
+      ? '<span class="dmg">' + dmg.toFixed(3) + '%</span>'
+      : '<span class="dmg bad">' + esc(v.error || "invalid") + '</span>';
     return '' +
 '<div class="gr-gem"' + idAttr + '>' +
 '  <div class="rkbox ' + (cls || "") + '">' + rkHtml + '</div>' +
 '  <div class="meta">' +
-'    <div class="top">c' + cfg.baseCost + ' ' + esc(cfg.gemType) + ' &middot; ' + dmgHtml + '</div>' +
-'    <div class="eff">WP ' + (cfg.willpowerLevel != null ? cfg.willpowerLevel : "?") +
-       ' &middot; Order ' + (cfg.orderLevel != null ? cfg.orderLevel : "?") + '</div>' +
-'    <div class="eff">' + effLabel(cfg.effect1, cfg.effect1Level) + ' &nbsp;/&nbsp; ' + effLabel(cfg.effect2, cfg.effect2Level) + '</div>' +
+'    <div class="top">' + cfg.baseCost + '-cost' +
+       ' <span class="sub">WP ' + (cfg.willpowerLevel != null ? cfg.willpowerLevel : "?") +
+       ' &middot; Ord ' + (cfg.orderLevel != null ? cfg.orderLevel : "?") + '</span>' + topRight + '</div>' +
+'    <div class="eff"><b>' + esc(abbrEffect(cfg.effect1)) + '</b> ' + (cfg.effect1Level != null ? cfg.effect1Level : "?") +
+       ' &middot; <b>' + esc(abbrEffect(cfg.effect2)) + '</b> ' + (cfg.effect2Level != null ? cfg.effect2Level : "?") + '</div>' +
 '  </div>' +
 '</div>';
   }
@@ -485,6 +559,64 @@
       '</div>';
   }
 
+  // Short display name for a core column header: strip the leading "Order "/"Chaos "
+  // (the section already says which), leaving e.g. "Sun" / "Moon" / "Star".
+  function coreShortName(slot) {
+    return String(slot || "").replace(/^\s*(order|chaos)\s+/i, "").trim() || slot || "Core";
+  }
+
+  // One core column: header (core name + its % dmg) + its gems as compact rows.
+  function coreColHtml(slot, list) {
+    var cdmg = 0; list.forEach(function (x) { if (validateConfig(x).valid) cdmg += relDamage(x); });
+    return '<div class="gr-corecol">' +
+      '<div class="ch"><span class="cn">' + esc(coreShortName(slot)) + '</span>' +
+      '<span class="cd">' + cdmg.toFixed(2) + '%</span></div>' +
+      list.map(gemCardHtml).join("") +
+      '</div>';
+  }
+
+  // One section (Order or Chaos): a 3-column grid of that type's cores. `slots` is the
+  // ordered list of core keys for this type; `groups` maps key -> gems.
+  function sectionHtml(title, slots, groups) {
+    if (!slots.length) return "";
+    var tot = 0, n = 0;
+    var cols = slots.map(function (key) {
+      var list = groups[key];
+      list.forEach(function (x) { if (validateConfig(x).valid) tot += relDamage(x); });
+      n += list.length;
+      return coreColHtml(key, list);
+    }).join("");
+    return '<div class="gr-section">' +
+      '<div class="sh"><span class="st">' + esc(title) + '</span>' +
+      '<span class="ssub">' + slots.length + ' cores &middot; ' + n + ' gems &middot; ' + tot.toFixed(2) + '% dmg</span></div>' +
+      '<div class="gr-cores">' + cols + '</div>' +
+      '</div>';
+  }
+
+  // Build the two core sections (ORDER then CHAOS). Cores are grouped by slot, preserving
+  // first-appearance order; a core's section is decided by the majority gemType of its
+  // gems (so a gem mis-tagged inside an otherwise-order core doesn't split the column).
+  function gemsByCoreHtml(gems) {
+    var order = [], groups = {};
+    gems.forEach(function (x) {
+      var key = x.slot || ("Core " + (x.coreBase || "?"));
+      if (!groups[key]) { groups[key] = []; order.push(key); }
+      groups[key].push(x);
+    });
+    function coreType(list) {
+      var o = 0, c = 0;
+      list.forEach(function (x) { if (x.gemType === "order") o++; else if (x.gemType === "chaos") c++; });
+      // tie-break on the slot name so well-named cores ("Order Sun") always sort right
+      if (o === c) return /chaos/i.test(list[0] && list[0].slot || "") ? "chaos" : "order";
+      return o >= c ? "order" : "chaos";
+    }
+    var orderSlots = [], chaosSlots = [];
+    order.forEach(function (key) {
+      (coreType(groups[key]) === "chaos" ? chaosSlots : orderSlots).push(key);
+    });
+    return sectionHtml("Order", orderSlots, groups) + sectionHtml("Chaos", chaosSlots, groups);
+  }
+
   // ---------------- "what to do with your astrogems" infographic ----------------
   // Per-rarity/cost action plan + vendor boxes, pulled from window.pipelineAdvice,
   // for the ORDER and CHAOS baselines at the selected gpd. Recomputes on gpd change.
@@ -509,11 +641,13 @@
   function verdictPill(entry) {
     var meta = VERDICT_META[entry.verdict] || VERDICT_META["throw"];
     var inner = meta.label;
-    if (entry.verdict === "fuse" && entry.recipe) {
-      var recipe = entry.recipe;
-      // show the steer cost for rare fuses (UC holds its own cost).
-      if (entry.rarity === "rare" && entry.steerCost != null) recipe += " → c" + entry.steerCost;
-      inner += ' <span class="rcp">' + esc(recipe) + '</span>';
+    if (entry.verdict === "fuse") {
+      // UNOPENED fusion: you ADD 2 Uncommons to the gem you have (no arrow, no
+      // Legendary/Relic/Ancient — those are the finished-gem tiers, a different thing).
+      // addCost = the cost of the 2 Uncommons you add (UC holds its own cost; a Rare
+      // steers its 2 added Uncommons toward addCost).
+      var add = (entry.addCost != null) ? entry.addCost : entry.cost;
+      inner += ' <span class="rcp">+ 2&times; ' + esc(add) + '-cost Uncommon</span>';
     }
     return '<span class="vpill ' + meta.cls + '">' + inner + '</span>';
   }
@@ -539,7 +673,7 @@
     for (var i = 0; i < adv.plan.length; i++) {
       var e = adv.plan[i];
       rows += '<tr>'
-        + '<td><span class="rar">' + esc(RAR_LABEL[e.rarity] || e.rarity) + ' <span class="c">c' + e.cost + '</span></span></td>'
+        + '<td><span class="rar">' + esc(RAR_LABEL[e.rarity] || e.rarity) + ' <span class="c">' + e.cost + '-cost</span></span></td>'
         + '<td>' + verdictPill(e) + '</td>'
         + '<td class="r ov">' + fmtGoldShort(e.openValue) + '</td>'
         + '</tr>';
@@ -568,9 +702,13 @@
         + '" onclick="window.__grSetGpd(' + g + ')">' + gpdLabel(g) + '</span>';
     }
 
+    // KR loadouts get the KR plan (no roster-bound gems, tradable-epic floor); global
+    // loadouts the global plan. Pass the LOADED CHARACTER's region, not the Pipeline
+    // tab's toggle, so the infographic matches the character on screen.
+    var rgn = planRegion(lastLoadout && lastLoadout.region);
     var ready = (typeof window.pipelineAdvice === "function") && !!window.__grPipelineReady;
-    var ordAdv = (ready && bases.order) ? window.pipelineAdvice(bases.order.baseGrade, grGpd) : null;
-    var chaAdv = (ready && bases.chaos) ? window.pipelineAdvice(bases.chaos.baseGrade, grGpd) : null;
+    var ordAdv = (ready && bases.order) ? window.pipelineAdvice(bases.order.baseGrade, grGpd, rgn) : null;
+    var chaAdv = (ready && bases.chaos) ? window.pipelineAdvice(bases.chaos.baseGrade, grGpd, rgn) : null;
 
     var body;
     if (!ready) {
@@ -589,9 +727,10 @@
       + '<span class="vpill vp-throw">Throw</span><span>not worth cutting</span>'
       + '</div>';
 
+    var econLabel = (rgn === "kr") ? "KR economy" : "NRB";
     return '<div class="gr-plan">'
       + '<h2>What to do with your astrogems '
-      + '<span class="pl-sub">NRB · per-rarity action plan at your loadout’s baselines</span></h2>'
+      + '<span class="pl-sub">' + econLabel + ' · per-rarity action plan at your loadout’s baselines</span></h2>'
       + '<div class="gr-gpd"><span class="lab">Gold per 1% damage</span>' + gpdBtns + '</div>'
       + body
       + legend
@@ -607,8 +746,9 @@
     var bases = { order: typeBaseline(gems, "order"), chaos: typeBaseline(gems, "chaos") };
     var ready = (typeof window.pipelineAdvice === "function") && !!window.__grPipelineReady;
     if (!ready) return;   // still loading; the ready-callback re-renders the section
-    var ordAdv = bases.order ? window.pipelineAdvice(bases.order.baseGrade, grGpd) : null;
-    var chaAdv = bases.chaos ? window.pipelineAdvice(bases.chaos.baseGrade, grGpd) : null;
+    var rgn = planRegion(lastLoadout && lastLoadout.region);  // KR vs global plan
+    var ordAdv = bases.order ? window.pipelineAdvice(bases.order.baseGrade, grGpd, rgn) : null;
+    var chaAdv = bases.chaos ? window.pipelineAdvice(bases.chaos.baseGrade, grGpd, rgn) : null;
     var html = planCardHtml("Order", bases.order, ordAdv) + planCardHtml("Chaos", bases.chaos, chaAdv);
     // host may be the placeholder (a non-grid div) before data arrived; normalize.
     if (!host.classList.contains("gr-plan-grid")) {
@@ -636,6 +776,14 @@
       return;
     }
 
+    // Keep the region select + Re-pull label/source note aligned with THIS loadout's
+    // region (so "Re-pull from lopec.kr" shows for KR and the re-pull targets lopec).
+    if (data.region && $("gr-region")) {
+      var rr = String(data.region).toUpperCase();
+      if (REGIONS.indexOf(rr) !== -1) $("gr-region").value = rr;
+    }
+    syncSourceUI(data.region);
+
     // overall summary over the VALID gems. %dmg is damage ABOVE the cp baseline
     // (relDamage); grade/rank are unchanged.
     var valid = gems.filter(function (x) { return validateConfig(x).valid; });
@@ -644,10 +792,23 @@
     var avgGrade = valid.length ? sumGrade / valid.length : 0;
     var avgRank = rankFromGrade(avgGrade);
 
+    // Big lostark.bible-style profile header: class icon + large bold name, with region
+    // / class / item level as secondary chips. KR (data.class == null) -> item level only.
+    var metaChips = '<span class="gr-chip">' + esc(data.region || "") + '</span>';
+    if (data.class) metaChips += '<span class="gr-chip">' + esc(data.class) + '</span>';
+    if (data.itemLevel != null) metaChips += '<span class="gr-chip">ilvl <b>' + esc(Number(data.itemLevel).toLocaleString()) + '</b></span>';
+
     var html = '' +
 '<div class="panel">' +
-'  <h2><button type="button" class="gr-star" id="gr-fav-star"></button> Loadout &mdash; <a class="bible-link" href="' + bibleUrl(data.region, data.name) + '" target="_blank" rel="noopener">' + esc(data.name || "") + '</a> <span class="note" style="text-transform:none">(' + esc(data.region || "") + ')</span>' +
-     cacheNoteHtml(data) + '<span class="gr-star-note" id="gr-fav-note" style="display:none"></span></h2>' +
+'  <div class="gr-prof">' +
+'    <button type="button" class="gr-star" id="gr-fav-star"></button>' +
+     classIconHtml(data.class) +
+'    <div class="gr-id">' +
+'      <div class="gr-name"><a class="bible-link" href="' + bibleUrl(data.region, data.name) + '" target="_blank" rel="noopener">' + esc(data.name || "") + '</a>' +
+       cacheNoteHtml(data) + '<span class="gr-star-note" id="gr-fav-note" style="display:none"></span></div>' +
+'      <div class="gr-meta">' + metaChips + '</div>' +
+'    </div>' +
+'  </div>' +
 '  <div class="gr-sum">' +
 '    <div class="stat"><span class="k">Avg grade</span><span class="v ' + rankClass(avgRank) + '">' + avgGrade.toFixed(1) + '</span></div>' +
 '    <div class="stat"><span class="k">Avg rank</span><span class="v">' + rankBadge(avgRank) + '</span></div>' +
@@ -668,19 +829,11 @@
     var bases = { order: typeBaseline(gems, "order"), chaos: typeBaseline(gems, "chaos") };
     html += planSectionHtml(bases);
 
-    // group by core slot, preserving order of first appearance
-    var order = [], groups = {};
-    gems.forEach(function (x) {
-      var key = x.slot || ("Core " + (x.coreBase || "?"));
-      if (!groups[key]) { groups[key] = []; order.push(key); }
-      groups[key].push(x);
-    });
-    order.forEach(function (key) {
-      var list = groups[key];
-      var cdmg = 0; list.forEach(function (x) { if (validateConfig(x).valid) cdmg += relDamage(x); });
-      html += '<div class="gr-core"><h3>' + esc(key) + ' <span class="ct">' + list.length + ' gems &middot; ' + cdmg.toFixed(2) + '% dmg</span></h3>' +
-        '<div class="gr-gems">' + list.map(gemCardHtml).join("") + '</div></div>';
-    });
+    // Gems by core, laid out as two sections (ORDER then CHAOS). Each section is a
+    // 3-column grid: one column per core (Sun / Moon / Star), each column listing that
+    // core's gems as compact stacked rows. Cores are grouped by slot, preserving first-
+    // appearance order; the section a core belongs to is its gems' gemType.
+    html += gemsByCoreHtml(gems);
 
     out.innerHTML = html;
     // Weakest-3 rows scroll to + flash their gem card
@@ -733,6 +886,21 @@
     var el = $("gr-pull-status");
     el.textContent = msg || "";
     el.className = "gr-status" + (kind ? " " + kind : "");
+  }
+
+  // Make the Re-pull button + the source note reflect the site a region pulls from
+  // (KR -> lopec.kr, otherwise lostark.bible). The Worker already routes KR to lopec;
+  // this just keeps the labels honest. Called on render + whenever the region changes.
+  function syncSourceUI(region) {
+    if (!WORKER_URL) return;
+    var site = sourceSite(region);
+    var refreshBtn = $("gr-pull-refresh");
+    if (refreshBtn) {
+      refreshBtn.textContent = "Re-pull from " + site;
+      refreshBtn.title = "Force a fresh pull from " + site;
+    }
+    var note = $("gr-pull-note");
+    if (note) note.textContent = "Fetched live from " + site + " via your Worker.";
   }
 
   // ---------------- saved-characters quick-pick ----------------
@@ -851,14 +1019,17 @@
     if (!elTab) return;
     elTab.innerHTML = tabMarkup();
 
-    // pull-mode availability note
+    // pull-mode availability note (source-aware: lostark.bible / lopec.kr by region)
     var note = $("gr-pull-note");
     if (!WORKER_URL) {
       note.innerHTML = 'Set <code>WORKER_URL</code> at the top of <code>grader.js</code> after deploying <code>worker/astrogem-bible.js</code> (see <code>worker/README-bible.md</code>). Custom input works without it.';
       $("gr-pull-go").disabled = true;
     } else {
-      note.textContent = "Fetched live from lostark.bible via your Worker.";
+      syncSourceUI($("gr-region") ? $("gr-region").value : "NA");
     }
+
+    // region change -> update the Re-pull label + source note to match the site
+    if ($("gr-region")) $("gr-region").addEventListener("change", function () { syncSourceUI(this.value); });
 
     // custom mode: build effect lists, grade on every change
     refillCustomEffects("Boss Damage", "Additional Damage");
