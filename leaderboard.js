@@ -141,14 +141,20 @@
 '  #tab-leaderboard .lb-status{font-size:12px;color:var(--dim);margin:2px 0 12px;min-height:16px}' +
 '  #tab-leaderboard .lb-status.err{color:var(--bad)}' +
 '  #tab-leaderboard .lb-actions{display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap}' +
-'  #tab-leaderboard table{width:100%}' +
+'  #tab-leaderboard table{width:100%;table-layout:fixed}' +
+'  #tab-leaderboard td,#tab-leaderboard th{overflow:hidden}' +
+// Character cell: icon (fixed) + name (flexes & truncates) + region (fixed) on one
+// row. The NAME ellipsis-truncates so a long name can never widen the fixed column.
+'  #tab-leaderboard td.lb-char{white-space:nowrap}' +
+'  #tab-leaderboard .lb-charwrap{display:flex;align-items:center;min-width:0}' +
+'  #tab-leaderboard .lb-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
 '  #tab-leaderboard tbody tr{cursor:pointer}' +
 '  #tab-leaderboard tbody tr:hover{background:var(--panel2)}' +
 '  #tab-leaderboard .lb-rank{font-variant-numeric:tabular-nums;color:var(--dim);font-weight:700;width:48px}' +
 '  #tab-leaderboard .lb-name{font-weight:700;color:var(--text);text-decoration:none;border-bottom:1px dotted transparent}' +
 '  #tab-leaderboard .lb-name:hover{color:var(--accent);border-bottom-color:var(--accent)}' +
 '  #tab-leaderboard .lb-dmg{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}' +
-'  #tab-leaderboard .lb-region{color:var(--dim);font-weight:600;font-size:11px;margin-left:6px}' +
+'  #tab-leaderboard .lb-region{color:var(--dim);font-weight:600;font-size:11px;margin-left:6px;flex:0 0 auto}' +
 '  #tab-leaderboard .lb-grade{font-variant-numeric:tabular-nums;font-weight:700}' +
 '  #tab-leaderboard img.lb-class-icon{width:20px;height:20px;vertical-align:middle;margin-right:7px;object-fit:contain;opacity:.9;flex:0 0 auto;filter:brightness(0) invert(.82)}' +
 '  #tab-leaderboard .lb-ilvl{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}' +
@@ -161,8 +167,6 @@
 '  #tab-leaderboard .lb-starbtn{background:none;border:none;cursor:pointer;font-size:17px;line-height:1;padding:2px 3px;color:var(--none);font-family:inherit;transition:color .12s,transform .08s}' +
 '  #tab-leaderboard .lb-starbtn:hover{transform:scale(1.18);color:var(--high)}' +
 '  #tab-leaderboard .lb-starbtn.on{color:var(--high)}' +
-'  #tab-leaderboard .lb-starbtn[disabled]{cursor:not-allowed;opacity:.4}' +
-'  #tab-leaderboard .lb-starbtn[disabled]:hover{transform:none;color:var(--none)}' +
 // ---- "★ Favorites" section above the main table ----
 '  #tab-leaderboard .lb-favsec{margin:2px 0 18px}' +
 '  #tab-leaderboard .lb-favsec h3{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--high);margin:0 0 8px;font-weight:700;display:flex;align-items:center;gap:8px}' +
@@ -210,15 +214,14 @@
   }
 
   // The star <button> cell for a character. `data-i` indexes into allChars so a
-  // delegated handler can toggle it. Disabled (☆, dimmed) when adding it would
-  // exceed the 12-favorite cap and it isn't already saved.
+  // delegated handler can toggle it. Favorites are unlimited, so the star is always
+  // clickable (no cap / disabled state).
   function starCell(c, i) {
     if (!Favs) return '';
     var on = Favs.has(c.region, c.name);
-    var disabled = !on && Favs.isFull();
     return '<td class="lb-star">' +
       '<button type="button" class="lb-starbtn' + (on ? " on" : "") + '" data-star="' + i + '"' +
-      (disabled ? ' disabled title="Max 12 favorites"' : ' title="' + (on ? "Remove from favorites" : "Add to favorites") + '"') +
+      ' title="' + (on ? "Remove from favorites" : "Add to favorites") + '"' +
       ' aria-pressed="' + (on ? "true" : "false") + '">' + (on ? "&#9733;" : "&#9734;") + '</button></td>';
   }
 
@@ -234,13 +237,30 @@
       starCell(c, i) +
       '<td class="lb-rank">#' + rankNum + '</td>' +
       '<td class="lb-ilvl">' + (c.itemLevel ? Number(c.itemLevel).toLocaleString() : '<span class="lb-dash">—</span>') + '</td>' +
-      '<td>' + classIcon(c.class) +
-        '<a class="lb-name" href="' + bibleUrl(c.region, c.name) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + esc(c.name || "—") + '</a>' +
-        '<span class="lb-region">' + esc(c.region || "") + '</span></td>' +
+      '<td class="lb-char"><span class="lb-charwrap">' + classIcon(c.class) +
+        '<a class="lb-name" href="' + bibleUrl(c.region, c.name) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="' + esc(c.name || "") + '">' + esc(c.name || "—") + '</a>' +
+        '<span class="lb-region">' + esc(c.region || "") + '</span></span></td>' +
       '<td><span class="lb-grade">' + gradeTxt + '</span>' + badge + '</td>' +
       '<td class="lb-dmg">' + dmgTxt + '</td>' +
       '<td class="lb-age">' + esc(ageLabel(c.pulledAt)) + '</td>' +
       '</tr>';
+  }
+
+  // Shared <colgroup> reused by BOTH leaderboard tables. With table-layout:fixed,
+  // these explicit widths make every column line up vertically between the Favorites
+  // table and the All-characters table regardless of each table's own content. Only
+  // the Character column is left flexible (no width), so it absorbs all leftover
+  // space identically in both tables; everything else is pinned.
+  function colGroup() {
+    return '<colgroup>' +
+      (Favs ? '<col style="width:30px">' : '') +  // star
+      '<col style="width:48px">' +                // Rank
+      '<col style="width:64px">' +                // iLvl
+      '<col>' +                                   // Character (flexible)
+      '<col style="width:112px">' +               // Avg grade (number + badge)
+      '<col style="width:92px">' +                // Total dmg%
+      '<col style="width:96px">' +                // Last pulled
+      '</colgroup>';
   }
 
   function headRow() {
@@ -264,14 +284,14 @@
     if (!n) return ''; // no favorites -> hide the whole section
     return '<div class="lb-favsec" id="lb-favsec">' +
       '<h3><span class="st">&#9733;</span> Favorites <span class="ct">' + n + ' saved &middot; shown with their overall rank</span></h3>' +
-      '<table>' + headRow() + '<tbody id="lb-fav-rows">' + rows + '</tbody></table>' +
+      '<table>' + colGroup() + headRow() + '<tbody id="lb-fav-rows">' + rows + '</tbody></table>' +
       '</div>';
   }
 
   function mainTableHtml() {
     var rows = allChars.map(function (c, i) { return charRow(c, i, c._rank); }).join("");
     return (Favs ? '<div class="lb-mainhdr">All characters</div>' : '') +
-      '<table>' + headRow() + '<tbody id="lb-rows">' + rows + '</tbody></table>' +
+      '<table>' + colGroup() + headRow() + '<tbody id="lb-rows">' + rows + '</tbody></table>' +
       '<div class="lb-hint">Click a character to open its loadout in the Grader' +
       (Favs ? '; tap the ★ to save it.' : '.') + '</div>';
   }
