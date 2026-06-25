@@ -581,7 +581,8 @@
       return;
     }
     setStatus("Loading characters…", "");
-    var url = WORKER_URL.replace(/\/+$/, "") + "/?list=1";
+    var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
+    var url = WORKER_URL.replace(/\/+$/, "") + "/?list=1" + (k ? "&k=" + encodeURIComponent(k) : "");
     fetch(url).then(function (resp) {
       return resp.json().then(function (data) { return { ok: resp.ok, data: data }; });
     }).then(function (r) {

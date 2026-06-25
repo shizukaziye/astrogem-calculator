@@ -1298,9 +1298,11 @@ presetToggleHtml(data) +
     var refreshBtn = $("gr-pull-refresh");
     if (refreshBtn) refreshBtn.disabled = true;
 
+    var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
     var url = WORKER_URL.replace(/\/+$/, "") +
       "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) +
-      (refresh ? "&refresh=1" : "");
+      (refresh ? "&refresh=1" : "") +
+      (k ? "&k=" + encodeURIComponent(k) : "");
     fetch(url).then(function (resp) {
       return resp.json().then(function (data) { return { ok: resp.ok, data: data }; });
     }).then(function (r) {

@@ -215,6 +215,13 @@ function coresToGems(cores) {
 // ---- KV cache config + helpers ----
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // a cached character is "fresh" for 7 days.
 const INDEX_KEY = "__index__";               // KV key holding a JSON array of all char keys.
+const SNAPSHOT_KEY = "lb:snapshot";          // single KV key caching the whole leaderboard list (?list=1).
+const SNAPSHOT_TTL_MS = 10 * 60 * 1000;      // rebuild that snapshot at most once per 10 minutes.
+// Access token the GATED client appends as ?k= (== gate.js's salted hash). Requests without it
+// are un-refreshed pre-gate clients -> 403'd before any KV work, so they stop draining the quota.
+// Not the password (a one-way hash); a stale client just needs to refresh the page.
+const GATE_TOKEN = "6104928cd0cc5374f5330e63e6a834f99aef7579db15c77d9d154932bf7a8ced";
+function gated(u) { return (u.searchParams.get("k") || "") === GATE_TOKEN; }
 
 // key = "region:name" lowercased (e.g. "na:paroxysmal").
 function charKey(region, name) {
@@ -441,21 +448,17 @@ async function handleCharacter(env, region, name, refresh) {
   return json(Object.assign({}, record, { cached: false }), 200);
 }
 
-// GET /?list=1 — every stored character (from the "__index__" key). No KV -> empty.
-async function handleList(env) {
-  if (!env || !env.CHARS) return json({ characters: [] }, 200);
-  // Enumerate ALL stored character keys via KV list() — race-free (no hand-maintained
-  // "__index__"). Cursor-paginate so it scales past one list() page. Skip the legacy
-  // INDEX_KEY if it lingers from the old scheme.
+// Rebuild the leaderboard list from a race-free KV enumeration. This is the EXPENSIVE path
+// (~one KV read per stored character) — handleList only calls it when the snapshot is stale.
+async function buildCharacterList(env) {
   const keys = [];
   let cursor;
   do {
     const res = await env.CHARS.list({ cursor: cursor, limit: 1000 });
-    for (const k of res.keys) { if (k.name !== INDEX_KEY) keys.push(k.name); }
+    for (const k of res.keys) { if (k.name !== INDEX_KEY && k.name !== SNAPSHOT_KEY) keys.push(k.name); }
     cursor = res.list_complete ? null : res.cursor;
   } while (cursor);
-  // Read every character record CONCURRENTLY (one KV read each); Promise.all collapses
-  // the latency to ~a single read. Fine for hundreds of keys.
+  // Read every character record CONCURRENTLY (one KV read each); Promise.all collapses latency.
   const records = await Promise.all(keys.map(function (k) { return kvGetJson(env, k); }));
   const characters = [];
   for (const c of records) {
@@ -463,7 +466,27 @@ async function handleList(env) {
       characters.push({ region: c.region, name: c.name, gems: c.gems, pulledAt: c.pulledAt, itemLevel: c.itemLevel, class: c.class });
     }
   }
-  return json({ characters: characters }, 200);
+  return characters;
+}
+
+// GET /?list=1 — leaderboard list. Served from ONE snapshot key (a single KV read) that is
+// lazily rebuilt at most once per SNAPSHOT_TTL_MS. This collapses the old ~1-read-per-character
+// cost (hundreds of reads per open) to one read — the fix for the blown free KV read quota.
+async function handleList(env) {
+  if (!env || !env.CHARS) return json({ characters: [] }, 200);
+  const snap = await kvGetJson(env, SNAPSHOT_KEY);
+  if (snap && typeof snap.builtAt === "number" && Array.isArray(snap.characters)
+      && (Date.now() - snap.builtAt) < SNAPSHOT_TTL_MS) {
+    return json({ characters: snap.characters, snapshot: true, builtAt: snap.builtAt }, 200);
+  }
+  // Stale or missing -> rebuild from the live keys (the only multi-read path).
+  const characters = await buildCharacterList(env);
+  // Cache it for next time — but NEVER pin an empty result (a throttled/failed read shouldn't
+  // stick a blank leaderboard for the whole TTL; let the next request retry instead).
+  if (characters.length) {
+    try { await env.CHARS.put(SNAPSHOT_KEY, JSON.stringify({ builtAt: Date.now(), characters: characters })); } catch (e) {}
+  }
+  return json({ characters: characters, snapshot: false }, 200);
 }
 
 export default {
@@ -477,8 +500,9 @@ export default {
 
     const u = new URL(request.url);
 
-    // Leaderboard listing.
+    // Leaderboard listing (gated — blocks un-refreshed pre-gate clients before any KV read).
     if (u.searchParams.get("list") === "1") {
+      if (!gated(u)) return json({ error: "This app was updated — please refresh the page to continue.", refresh: true }, 403);
       return handleList(env);
     }
 
@@ -492,6 +516,7 @@ export default {
     if (!region || !name) {
       return json({ error: "Both ?region= and ?name= are required (e.g. ?region=NA&name=Paroxysmal)." }, 400);
     }
+    if (!gated(u)) return json({ error: "This app was updated — please refresh the page to continue.", refresh: true }, 403);
 
     return handleCharacter(env, region, name, refresh);
   }

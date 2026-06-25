@@ -45,5 +45,10 @@
     }).catch(function () { return false; });
   }
 
-  window.astrogemGate = { ensureUnlocked: ensureUnlocked, isUnlocked: isUnlocked };
+  // Access token the app sends to the Worker (?k=) once unlocked. The Worker rejects requests
+  // without it, so un-refreshed pre-gate clients are blocked server-side. It's the embedded
+  // hash (never the plaintext), and "" while locked so a locked client can't reach the Worker.
+  function token() { return isUnlocked() ? HASH : ""; }
+
+  window.astrogemGate = { ensureUnlocked: ensureUnlocked, isUnlocked: isUnlocked, token: token };
 })();
