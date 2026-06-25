@@ -6,7 +6,7 @@
  * Persistence: a single cookie, name `astrogem_favs`, whose value is
  *   encodeURIComponent(JSON.stringify(list))
  * where `list` is an array of { region, name } (region upper-cased, name kept as
- * the user entered it), capped at 12 — the 13th add is rejected. The cookie is
+ * the user entered it). The list is UNLIMITED — there is no cap. The cookie is
  * written with `path=/; max-age=31536000; SameSite=Lax` (one year), so favorites
  * persist per-browser across reloads and sessions.
  *
@@ -16,11 +16,11 @@
  * Public API (window.Favorites):
  *   list()                  -> [{region, name}, ...]  (a fresh copy)
  *   has(region, name)       -> bool
- *   add(region, name)       -> bool  (false if full or already present)
+ *   add(region, name)       -> bool  (false only if already present or blank name)
  *   remove(region, name)    -> bool  (true if something was removed)
  *   toggle(region, name)    -> bool  (the NEW state: true = now favorited)
  *   count()                 -> number
- *   isFull()                -> bool  (count >= MAX)
+ *   isFull()                -> bool  (always false — favorites are unlimited)
  *   onChange(cb)            -> unsubscribe fn; cb runs after every change
  *
  * node-safe: when there's no `document` (e.g. Node import for a sanity check) the
@@ -31,7 +31,7 @@
   "use strict";
 
   var COOKIE = "astrogem_favs";
-  var MAX = 12;
+  var MAX = Infinity; // unlimited favorites (symbol kept for callers that reference it)
   var ONE_YEAR = 31536000; // seconds
 
   var hasDoc = (typeof document !== "undefined");
@@ -106,11 +106,10 @@
       return indexOf(items, region, name) !== -1;
     },
     count: function () { return items.length; },
-    isFull: function () { return items.length >= MAX; },
+    isFull: function () { return false; }, // unlimited favorites: never full
     add: function (region, name) {
       if (name == null || norm(name) === "") return false;
       if (indexOf(items, region, name) !== -1) return false; // dup
-      if (items.length >= MAX) return false;                 // full: reject the 13th
       items.push({ region: String(region == null ? "" : region).toUpperCase(), name: String(name) });
       writeCookie(items);
       notify();
@@ -129,7 +128,7 @@
         this.remove(region, name);
         return false; // now not favorited
       }
-      return this.add(region, name); // true if it was added, false if full
+      return this.add(region, name); // true once added (only fails on dup/blank)
     },
     onChange: function (cb) {
       if (typeof cb !== "function") return function () {};
