@@ -202,6 +202,13 @@ function charKey(region, name) {
   return (region + ":" + name).toLowerCase();
 }
 
+// Normalize a character's DISPLAY name: for Roman/Latin-script names, capitalize the
+// first letter and lowercase the rest ("subsz"->"Subsz", "PAROXYSMAL"->"Paroxysmal").
+// Korean (Hangul) names are left untouched ("마스터Asia" stays as-is). LA names are
+// single tokens (no spaces). NOTE: this only affects the display name; charKey() still
+// lowercases "region:name" so the KV cache key stays case-insensitive and lookups hit.
+function normalizeName(name){ if(!name) return name; if(/[가-힣㄰-㆏]/.test(name)) return name; return name.charAt(0).toUpperCase()+name.slice(1).toLowerCase(); }
+
 // Read + JSON.parse a KV value, tolerating missing/corrupt entries.
 async function kvGetJson(env, key) {
   if (!env || !env.CHARS) return null;
@@ -380,7 +387,11 @@ async function fetchCharacterData(region, name) {
   const meta = parseMeta(html, isKR);
   return { ok: true, data: {
     region: region,
-    name: name,
+    // Normalize the DISPLAY name (Roman-script -> Title-case; Korean left as-is). This
+    // record flows into both the KV value and the JSON response, and ?list=1 echoes it,
+    // so the leaderboard shows normalized names. The KV cache KEY is unaffected — it
+    // comes from charKey(region, name) on the ORIGINAL requested name, which lowercases.
+    name: normalizeName(name),
     source: site,
     url: url,
     itemLevel: meta.itemLevel,
