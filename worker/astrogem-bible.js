@@ -273,11 +273,24 @@ function parseLopecGems(html) {
 }
 
 // Known advanced classes — lostark.bible renders the English class name as a profile badge.
-const CLASS_NAMES = ["Berserker","Destroyer","Gunlancer","Paladin","Slayer","Arcanist","Summoner","Bard","Sorceress","Wardancer","Scrapper","Soulfist","Glaivier","Striker","Breaker","Deathblade","Shadowhunter","Reaper","Souleater","Sharpshooter","Deadeye","Artillerist","Machinist","Gunslinger","Aeromancer","Wildsoul","Artist"];
+const CLASS_NAMES = ["Berserker","Destroyer","Gunlancer","Paladin","Slayer","Valkyrie","Arcanist","Summoner","Bard","Sorceress","Wardancer","Scrapper","Soulfist","Glaivier","Striker","Breaker","Deathblade","Shadowhunter","Reaper","Souleater","Sharpshooter","Deadeye","Artillerist","Machinist","Gunslinger","Aeromancer","Wildsoul","Artist"];
+
+// lopec.kr exposes the class only as its Korean name in the RSC ("class":"버서커").
+// Map each Korean advanced-class name to the English name (the same keys the static
+// app's class-icon files use). Anchored on user-confirmed: 버서커/환수사/아르카나.
+const KR_CLASS = {
+  "버서커": "Berserker", "디스트로이어": "Destroyer", "워로드": "Gunlancer", "홀리나이트": "Paladin", "슬레이어": "Slayer", "발키리": "Valkyrie",
+  "아르카나": "Arcanist", "서머너": "Summoner", "바드": "Bard", "소서리스": "Sorceress",
+  "배틀마스터": "Wardancer", "인파이터": "Scrapper", "기공사": "Soulfist", "창술사": "Glaivier", "스트라이커": "Striker", "브레이커": "Breaker",
+  "블레이드": "Deathblade", "데모닉": "Shadowhunter", "리퍼": "Reaper", "소울이터": "Souleater",
+  "헌터": "Sharpshooter", "데빌헌터": "Deadeye", "블래스터": "Artillerist", "스카우터": "Machinist", "건슬링어": "Gunslinger",
+  "도화가": "Artist", "기상술사": "Aeromancer", "환수사": "Wildsoul",
+  "가디언나이트": "Guardian Knight" // new class (KR 2025-12-10); no icon asset yet
+};
 
 // Item level + class from the page. lostark.bible: ilvl in the SvelteKit blob + the class
-// as a profile badge. lopec.kr: per-piece "itemLevel" averaged (~= character level); its
-// class isn't exposed in a parseable field, so it's left null for now.
+// as a profile badge. lopec.kr: per-piece "itemLevel" averaged (~= character level) + the
+// class from the RSC "class" field (a Korean name) mapped to English via KR_CLASS.
 function parseMeta(html, isKR) {
   let itemLevel = null, klass = null;
   if (isKR) {
@@ -285,6 +298,10 @@ function parseMeta(html, isKR) {
     const lvls = []; const re = /"itemLevel":\s*(\d+)/g; let m;
     while ((m = re.exec(u)) !== null) lvls.push(parseInt(m[1], 10));
     if (lvls.length) itemLevel = Math.round(lvls.reduce((a, b) => a + b, 0) / lvls.length);
+    // class: the first RSC "class":"<value>" whose value is a known Korean class name
+    // (skips CSS "className"/"firstClass"/"secondClass" — different keys).
+    const re2 = /"class":"([^"]+)"/g; let cm;
+    while ((cm = re2.exec(u)) !== null) { if (KR_CLASS[cm[1]]) { klass = KR_CLASS[cm[1]]; break; } }
   } else {
     const im = html.match(/ilvl:(\d+)/);
     if (im) itemLevel = parseInt(im[1], 10);
