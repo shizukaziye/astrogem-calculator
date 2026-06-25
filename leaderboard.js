@@ -52,7 +52,8 @@
   }
 
   var Favs = (typeof window !== "undefined" && window.Favorites) || null;
-  var allChars = [];   // the full ranked list (each tagged with _rank = overall #)
+  var allChars = [];   // current DISPLAY list (search matches, or the ranked board); tagged _rank/_idx
+  var searchQuery = ""; // leaderboard name-search ("" = normal board; non-empty filters by name, any grade)
   var rawChars = [];   // every character as fetched (unfiltered, unsorted by mode)
   var regions = { NA: true, EU: true, KR: true };  // region filter chips (all on; click to toggle off)
   var MIN_GRADE = 65;  // hide anything ranked C+ or below — B- starts at grade 65
@@ -264,6 +265,9 @@
 '  #tab-leaderboard .lb-regs{display:inline-flex;gap:0;border:1px solid var(--border);border-radius:99px;overflow:hidden}' +
 '  #tab-leaderboard .lb-regbtn{background:none;border:none;cursor:pointer;color:var(--dim);font-family:inherit;font-weight:700;font-size:12px;padding:5px 13px;line-height:1.4;transition:background .12s,color .12s}' +
 '  #tab-leaderboard .lb-regbtn + .lb-regbtn{border-left:1px solid var(--border)}' +
+'  #tab-leaderboard .lb-search{background:var(--panel2);border:1px solid var(--border);border-radius:99px;color:var(--text);font-family:inherit;font-size:12px;padding:6px 14px;width:150px;outline:none}' +
+'  #tab-leaderboard .lb-search:focus{border-color:var(--axis,var(--accent))}' +
+'  #tab-leaderboard .lb-search::placeholder{color:var(--dim)}' +
 '  #tab-leaderboard .lb-regbtn:hover:not(.on){color:var(--text)}' +
 '  #tab-leaderboard .lb-regbtn.on{background:#4b5563;color:#fff}' +
 // ---- pagination controls (shown only when >PAGE_SIZE characters) ----
@@ -288,6 +292,7 @@
 '      <button class="lb-regbtn on" id="lb-reg-EU" type="button" aria-pressed="true">EU</button>' +
 '      <button class="lb-regbtn on" id="lb-reg-KR" type="button" aria-pressed="true">KR</button>' +
 '    </div>' +
+'    <input class="lb-search" id="lb-search" type="search" placeholder="Search name&hellip;" autocomplete="off" aria-label="Search characters by name">' +
 '    <button class="mbtn" id="lb-refresh" type="button">Refresh</button>' +
 '    <span class="lb-status" id="lb-status"></span>' +
 '  </div>' +
@@ -388,6 +393,7 @@
   // favorited (the section is hidden entirely).
   function favSectionHtml() {
     if (!Favs) return '';
+    if ((searchQuery || "").trim()) return ''; // hide favorites while searching
     var rows = '';
     var n = 0;
     for (var i = 0; i < allChars.length; i++) {
@@ -430,10 +436,15 @@
 
   function mainTableHtml() {
     clampPage();
+    var searching = !!(searchQuery || "").trim();
+    if (searching && !allChars.length) {
+      return '<div class="lb-mainhdr">No characters match your search.</div>';
+    }
     var start = (page - 1) * PAGE_SIZE;
     var slice = allChars.slice(start, start + PAGE_SIZE);
     var rows = slice.map(function (c) { return charRow(c, c._idx, c._rank); }).join("");
-    return (Favs ? '<div class="lb-mainhdr">All characters</div>' : '') +
+    var hdr = searching ? (allChars.length + ' match' + (allChars.length === 1 ? '' : 'es')) : 'All characters';
+    return (Favs ? '<div class="lb-mainhdr">' + hdr + '</div>' : '') +
       '<table>' + colGroup() + headRow() + '<tbody id="lb-rows">' + rows + '</tbody></table>' +
       pagerHtml() +
       '<div class="lb-hint">Click a character to open its loadout in the Grader' +
@@ -485,15 +496,28 @@
     var base = (mode === "support")
       ? rawChars.filter(isSupportClass)
       : rawChars.slice();
-    // Region chips + hide anything ranked C+ or below (< B-) on the ACTIVE axis.
-    var list = base.filter(function (c) {
-      if (!regions[c.region]) return false;
-      if (isTrollTarget(c)) return true; // always on the board, however bad it gets
-      var avg = (mode === "support") ? c._savg : c._avg;
-      return avg != null && avg >= MIN_GRADE;
-    });
-    list.sort(byActiveGradeDesc);
-    for (var i = 0; i < list.length; i++) { list[i]._rank = i + 1; list[i]._idx = i; }
+    var q = (searchQuery || "").trim().toLowerCase();
+    var list;
+    if (q) {
+      // Search: rank every region character on the active axis, then keep the name matches —
+      // at ANY grade, so even a sub-B- character is findable showing its true overall rank.
+      list = base.filter(function (c) { return regions[c.region]; });
+      list.sort(byActiveGradeDesc);
+      for (var i = 0; i < list.length; i++) list[i]._rank = i + 1;
+      list = list.filter(function (c) { return (c.name || "").toLowerCase().indexOf(q) !== -1; });
+    } else {
+      // Normal board: region chips + hide anything ranked C+ or below (< B-) on the active
+      // axis (troll targets excepted — always on the board, however bad it gets).
+      list = base.filter(function (c) {
+        if (!regions[c.region]) return false;
+        if (isTrollTarget(c)) return true;
+        var avg = (mode === "support") ? c._savg : c._avg;
+        return avg != null && avg >= MIN_GRADE;
+      });
+      list.sort(byActiveGradeDesc);
+      for (var k = 0; k < list.length; k++) list[k]._rank = k + 1;
+    }
+    for (var j = 0; j < list.length; j++) list[j]._idx = j;
     allChars = list;
     clampPage();
     repaint();
@@ -589,6 +613,15 @@
     el.innerHTML = shell();
     el.classList.add("axis-dps");   // default DPS = red theme
     $("lb-refresh").addEventListener("click", load);
+
+    // Name search: filter the table by name (matches at ANY grade, so sub-B- characters
+    // are findable). Empty box restores the normal board. Favorites hide while searching.
+    var searchEl = $("lb-search");
+    if (searchEl) searchEl.addEventListener("input", function () {
+      searchQuery = searchEl.value || "";
+      page = 1;
+      if (rawChars.length) rebuild();
+    });
 
     // DPS / Support toggle: re-filter, re-rank, and reset to page 1. The Favorites
     // section follows the mode too (it reads from the rebuilt allChars).
