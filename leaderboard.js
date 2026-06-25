@@ -54,6 +54,8 @@
   var Favs = (typeof window !== "undefined" && window.Favorites) || null;
   var allChars = [];   // the full ranked list (each tagged with _rank = overall #)
   var rawChars = [];   // every character as fetched (unfiltered, unsorted by mode)
+  var regions = { NA: true, EU: true, KR: true };  // region filter chips (all on; click to toggle off)
+  var MIN_GRADE = 65;  // hide anything ranked C+ or below — B- starts at grade 65
   var mode = "dps";    // "dps" | "support" — which leaderboard is shown
   var page = 1;        // 1-based current page of the main (paginated) table
   var PAGE_SIZE = 100; // max rows per page of the All-characters table
@@ -223,6 +225,11 @@
 '  #tab-leaderboard .lb-modebtn:hover{color:var(--text)}' +
 '  #tab-leaderboard .lb-modebtn.on{background:var(--accent);color:#0c0e12}' +
 '  #tab-leaderboard #lb-mode-dps.on{background:#d9534f;color:#fff}' +
+'  #tab-leaderboard .lb-regs{display:inline-flex;gap:0;border:1px solid var(--border);border-radius:99px;overflow:hidden}' +
+'  #tab-leaderboard .lb-regbtn{background:none;border:none;cursor:pointer;color:var(--dim);font-family:inherit;font-weight:700;font-size:12px;padding:5px 13px;line-height:1.4;transition:background .12s,color .12s}' +
+'  #tab-leaderboard .lb-regbtn + .lb-regbtn{border-left:1px solid var(--border)}' +
+'  #tab-leaderboard .lb-regbtn:hover:not(.on){color:var(--text)}' +
+'  #tab-leaderboard .lb-regbtn.on{background:#4b5563;color:#fff}' +
 // ---- pagination controls (shown only when >PAGE_SIZE characters) ----
 '  #tab-leaderboard .lb-pager{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap;color:var(--dim);font-size:12px}' +
 '  #tab-leaderboard .lb-pager .lb-pagebtn{background:var(--panel2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-weight:700;font-size:12px;padding:5px 12px;cursor:pointer}' +
@@ -239,6 +246,11 @@
 '    <div class="lb-modes" role="group" aria-label="Leaderboard type">' +
 '      <button class="lb-modebtn on" id="lb-mode-dps" type="button" aria-pressed="true">DPS</button>' +
 '      <button class="lb-modebtn" id="lb-mode-support" type="button" aria-pressed="false">Support</button>' +
+'    </div>' +
+'    <div class="lb-regs" role="group" aria-label="Filter by region">' +
+'      <button class="lb-regbtn on" id="lb-reg-NA" type="button" aria-pressed="true">NA</button>' +
+'      <button class="lb-regbtn on" id="lb-reg-EU" type="button" aria-pressed="true">EU</button>' +
+'      <button class="lb-regbtn on" id="lb-reg-KR" type="button" aria-pressed="true">KR</button>' +
 '    </div>' +
 '    <button class="mbtn" id="lb-refresh" type="button">Refresh</button>' +
 '    <span class="lb-status" id="lb-status"></span>' +
@@ -434,9 +446,15 @@
   // Tags each kept char with _rank (overall #, 1..N within this mode's list) and
   // _idx (its index in allChars, for the delegated click/star handlers).
   function rebuild() {
-    var list = (mode === "support")
+    var base = (mode === "support")
       ? rawChars.filter(isSupportClass)
       : rawChars.slice();
+    // Region chips + hide anything ranked C+ or below (< B-) on the ACTIVE axis.
+    var list = base.filter(function (c) {
+      if (!regions[c.region]) return false;
+      var avg = (mode === "support") ? c._savg : c._avg;
+      return avg != null && avg >= MIN_GRADE;
+    });
     list.sort(byActiveGradeDesc);
     for (var i = 0; i < list.length; i++) { list[i]._rank = i + 1; list[i]._idx = i; }
     allChars = list;
@@ -538,6 +556,19 @@
     }
     $("lb-mode-dps").addEventListener("click", function () { setMode("dps"); });
     $("lb-mode-support").addEventListener("click", function () { setMode("support"); });
+
+    // Region chips: independently toggle NA / EU / KR (all on by default). Re-filter + page 1.
+    ["NA", "EU", "KR"].forEach(function (rg) {
+      var btn = $("lb-reg-" + rg);
+      if (!btn) return;
+      btn.addEventListener("click", function () {
+        regions[rg] = !regions[rg];
+        btn.classList.toggle("on", regions[rg]);
+        btn.setAttribute("aria-pressed", regions[rg] ? "true" : "false");
+        page = 1;
+        if (rawChars.length) rebuild();
+      });
+    });
 
     // Re-render when favorites change anywhere (this tab or the Grader). Only repaint
     // if we've actually loaded the list (otherwise there's nothing to show yet).

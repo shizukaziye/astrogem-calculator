@@ -220,16 +220,9 @@ async function kvGetJson(env, key) {
   }
 }
 
-// Add a key to the "__index__" array if it isn't already there.
-async function indexAdd(env, key) {
-  if (!env || !env.CHARS) return;
-  let idx = await kvGetJson(env, INDEX_KEY);
-  if (!Array.isArray(idx)) idx = [];
-  if (idx.indexOf(key) === -1) {
-    idx.push(key);
-    await env.CHARS.put(INDEX_KEY, JSON.stringify(idx));
-  }
-}
+// (No indexAdd anymore: handleList enumerates keys via KV list(), which is race-free.
+// The old read-modify-write on "__index__" could lose an add when two pulls ran
+// concurrently, so a character would grade fine yet never appear in ?list=1.)
 
 // --- KR (lopec.kr) support --------------------------------------------------
 // lopec.kr is a Next.js app whose RSC payload carries clean gem objects:
@@ -425,7 +418,7 @@ async function handleCharacter(env, region, name, refresh) {
   if (env && env.CHARS) {
     try {
       await env.CHARS.put(key, JSON.stringify(record));
-      await indexAdd(env, key);
+      // No index to maintain — handleList enumerates keys via KV list() (race-free).
     } catch (e) {
       // Storage failure is non-fatal: still return the freshly fetched data.
     }
@@ -436,11 +429,18 @@ async function handleCharacter(env, region, name, refresh) {
 // GET /?list=1 — every stored character (from the "__index__" key). No KV -> empty.
 async function handleList(env) {
   if (!env || !env.CHARS) return json({ characters: [] }, 200);
-  const idx = await kvGetJson(env, INDEX_KEY);
-  const keys = Array.isArray(idx) ? idx : [];
-  // Read every character record CONCURRENTLY. Sequential awaits made a cold ?list=1
-  // ~5s for ~40 chars (one KV round-trip each); Promise.all collapses it to roughly a
-  // single read's latency. (Fine for hundreds of keys; batch if the roster ever explodes.)
+  // Enumerate ALL stored character keys via KV list() — race-free (no hand-maintained
+  // "__index__"). Cursor-paginate so it scales past one list() page. Skip the legacy
+  // INDEX_KEY if it lingers from the old scheme.
+  const keys = [];
+  let cursor;
+  do {
+    const res = await env.CHARS.list({ cursor: cursor, limit: 1000 });
+    for (const k of res.keys) { if (k.name !== INDEX_KEY) keys.push(k.name); }
+    cursor = res.list_complete ? null : res.cursor;
+  } while (cursor);
+  // Read every character record CONCURRENTLY (one KV read each); Promise.all collapses
+  // the latency to ~a single read. Fine for hundreds of keys.
   const records = await Promise.all(keys.map(function (k) { return kvGetJson(env, k); }));
   const characters = [];
   for (const c of records) {
