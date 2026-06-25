@@ -82,17 +82,16 @@
     "Wildsoul": "Wildsoul.svg"
   };
 
-  // The cell contents for the Class column: icon (if we have one) + the class name,
-  // or a dash when the character has no class (KR characters: c.class === null).
-  // Graceful: a missing icon file degrades to text only (onerror hides the <img>).
-  function classCell(className) {
-    if (!className) return '<span class="lb-dash">—</span>';
+  // Class ICON only (no name) — shown at the START of the Character cell, just before
+  // the name link. Empty string when the character has no class (KR characters:
+  // c.class === null) or we have no icon file for it, so the name shows alone.
+  // Graceful: a missing icon file degrades away (onerror hides the <img>).
+  function classIcon(className) {
+    if (!className) return '';
     var file = CLASS_ICON[className];
-    var img = file
-      ? '<img class="lb-class-icon" src="assets/class-icons/' + encodeURIComponent(file) +
-        '" alt="" aria-hidden="true" loading="lazy" onerror="this.style.display=\'none\'">'
-      : '';
-    return img + '<span class="lb-class-name">' + esc(className) + '</span>';
+    if (!file) return '';
+    return '<img class="lb-class-icon" src="assets/class-icons/' + encodeURIComponent(file) +
+      '" alt="" aria-hidden="true" loading="lazy" onerror="this.style.display=\'none\'">';
   }
 
   function rankBadge(rank) {
@@ -150,9 +149,7 @@
 '  #tab-leaderboard .lb-dmg{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}' +
 '  #tab-leaderboard .lb-region{color:var(--dim);font-weight:600;font-size:11px;margin-left:6px}' +
 '  #tab-leaderboard .lb-grade{font-variant-numeric:tabular-nums;font-weight:700}' +
-'  #tab-leaderboard .lb-class{color:var(--text);font-weight:600}' +
-'  #tab-leaderboard .lb-class .lb-class-name{vertical-align:middle}' +
-'  #tab-leaderboard .lb-class img.lb-class-icon{width:20px;height:20px;vertical-align:middle;margin-right:7px;object-fit:contain;opacity:.9;flex:0 0 auto;filter:brightness(0) invert(.82)}' +
+'  #tab-leaderboard img.lb-class-icon{width:20px;height:20px;vertical-align:middle;margin-right:7px;object-fit:contain;opacity:.9;flex:0 0 auto;filter:brightness(0) invert(.82)}' +
 '  #tab-leaderboard .lb-ilvl{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}' +
 '  #tab-leaderboard .lb-dash{color:var(--dim)}' +
 '  #tab-leaderboard .lb-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-weight:800;line-height:1.4;font-variant-numeric:tabular-nums;margin-left:8px;font-size:12px}' +
@@ -235,10 +232,10 @@
     return '<tr data-i="' + i + '">' +
       starCell(c, i) +
       '<td class="lb-rank">#' + rankNum + '</td>' +
-      '<td><a class="lb-name" href="' + bibleUrl(c.region, c.name) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + esc(c.name || "—") + '</a>' +
-        '<span class="lb-region">' + esc(c.region || "") + '</span></td>' +
-      '<td class="lb-class">' + classCell(c.class) + '</td>' +
       '<td class="lb-ilvl">' + (c.itemLevel ? Number(c.itemLevel).toLocaleString() : '<span class="lb-dash">—</span>') + '</td>' +
+      '<td>' + classIcon(c.class) +
+        '<a class="lb-name" href="' + bibleUrl(c.region, c.name) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + esc(c.name || "—") + '</a>' +
+        '<span class="lb-region">' + esc(c.region || "") + '</span></td>' +
       '<td><span class="lb-grade">' + gradeTxt + '</span>' + badge + '</td>' +
       '<td class="lb-dmg">' + dmgTxt + '</td>' +
       '<td class="lb-age">' + esc(ageLabel(c.pulledAt)) + '</td>' +
@@ -248,7 +245,7 @@
   function headRow() {
     return '<thead><tr>' +
       (Favs ? '<th class="lb-star" aria-label="Favorite"></th>' : '') +
-      '<th>Rank</th><th>Character</th><th>Class</th><th>iLvl</th><th>Avg grade</th><th>Total dmg%</th><th>Last pulled</th>' +
+      '<th>Rank</th><th>iLvl</th><th>Character</th><th>Avg grade</th><th>Total dmg%</th><th>Last pulled</th>' +
       '</tr></thead>';
   }
 
