@@ -999,7 +999,7 @@
       + '<span class="pl-gpd" id="pl-gpd-row">' + (gpdBtns || '<span class="note">Loading tiers…</span>') + '</span>'
       + rosterToggle
       + '</div>'
-      + '<div class="pl-handle" aria-hidden="true">region / gpd &#9662;</div>'
+      + '<div class="pl-handle" role="button" tabindex="0" onclick="window.__plToggleBar()">region / gpd &#9662;</div>'
       + '</div>';
   }
   function modeNote() {
@@ -1093,10 +1093,10 @@
       // would otherwise slide up over the app .tabbar at scroll 0. Only the small handle
       // shows by default (22px reserved); hovering it fades the full bar in just below.
       + '#tab-pipeline #pl-inputs{height:22px;margin:0;padding:0;border:none;border-radius:0;background:none;backdrop-filter:none;z-index:30;overflow:visible}'
-      + '#tab-pipeline #pl-inputs .pl-handle{position:absolute;top:0;left:0;height:22px;line-height:21px;margin-left:28px;padding:0 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);background:rgba(13,16,23,.97);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;cursor:default;user-select:none;z-index:1}'
+      + '#tab-pipeline #pl-inputs .pl-handle{position:absolute;top:0;left:0;height:22px;line-height:21px;margin-left:28px;padding:0 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);background:rgba(13,16,23,.97);border:1px solid var(--border);border-top:none;border-radius:0 0 8px 8px;cursor:pointer;user-select:none;z-index:1}'
       + '#tab-pipeline #pl-inputs .pl-bar{position:absolute;left:0;right:0;top:22px;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-6px);transition:opacity .15s ease,transform .15s ease,visibility .15s;display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:10px 16px 10px 28px;background:rgba(13,16,23,.98);border:1px solid var(--border);border-radius:0 0 10px 10px;backdrop-filter:blur(6px)}'
-      + '#tab-pipeline #pl-inputs:hover .pl-bar{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)}'
-      + '#tab-pipeline #pl-inputs:hover .pl-handle{color:var(--accent);border-color:var(--accent)}'
+      + '#tab-pipeline #pl-inputs:hover .pl-bar,#tab-pipeline #pl-inputs.pl-open .pl-bar{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)}'
+      + '#tab-pipeline #pl-inputs:hover .pl-handle,#tab-pipeline #pl-inputs.pl-open .pl-handle{color:var(--accent);border-color:var(--accent)}'
       + '#tab-pipeline #pl-inputs .pl-gpd{display:inline-flex;flex-wrap:wrap;gap:7px}'
       + '#tab-pipeline #pl-inputs .pl-sep{width:1px;align-self:stretch;background:var(--border);margin:2px 4px}'
       + '#tab-pipeline #pl-inputs .pl-region{display:inline-flex;flex-wrap:wrap;gap:7px}'
@@ -1286,10 +1286,17 @@
     renderBody();
   };
   window.__plSetRegion = function (rg) {
+    var inp0 = document.getElementById("pl-inputs");
+    var wasOpen = !!(inp0 && inp0.classList.contains("pl-open"));   // keep the bar open across the rebuild (mobile)
     REGION = (rg === "kr") ? "kr" : "global";
     if (REGION === "kr") ROSTER = "nrb";   // KR has no roster-bound gems
     refreshInputs();   // rebuild the bar (region/roster buttons, RB hidden in KR)
     renderBody();      // recompute the grid with the region's fusion economics
+    if (wasOpen) { var inp1 = document.getElementById("pl-inputs"); if (inp1) inp1.classList.add("pl-open"); }
+  };
+  window.__plToggleBar = function () {   // tap the handle (mobile has no hover) to open/close the bar
+    var el = document.getElementById("pl-inputs");
+    if (el) el.classList.toggle("pl-open");
   };
   window.__plToggleInputs = function () {
     var body = document.getElementById("pl-inbody");
