@@ -542,6 +542,14 @@
   var loadedOnce = false;
 
   function load() {
+    // Worker-access gate: if locked, prompt; on success re-run unlocked, else show locked.
+    if (window.astrogemGate && !window.astrogemGate.isUnlocked()) {
+      window.astrogemGate.ensureUnlocked().then(function (ok) {
+        if (ok) load();
+        else { setStatus("Locked", "err"); renderEmpty("This leaderboard is access-limited — click Refresh and enter the password to load it."); loadedOnce = true; }
+      });
+      return;
+    }
     if (!WORKER_URL) {
       setStatus("", "");
       renderEmpty("The lostark.bible Worker isn’t configured. Set WORKER_URL in leaderboard.js (and deploy worker/astrogem-bible.js).");

@@ -1276,6 +1276,14 @@ presetToggleHtml(data) +
   }
 
   function runPull(refresh) {
+    // Worker-access gate: if locked, prompt; on success re-run unlocked, else abort.
+    if (window.astrogemGate && !window.astrogemGate.isUnlocked()) {
+      window.astrogemGate.ensureUnlocked().then(function (ok) {
+        if (ok) runPull(refresh);
+        else setPullStatus("Locked — enter the password to pull from the Worker.", "err");
+      });
+      return;
+    }
     if (!WORKER_URL) {
       setPullStatus("", "");
       $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">The lostark.bible Worker isn’t configured. Deploy worker/astrogem-bible.js and set WORKER_URL at the top of grader.js.</div></div>';
