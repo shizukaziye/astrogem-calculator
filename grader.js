@@ -65,6 +65,67 @@
 
   var lastLoadout = null; // cache of the most recent pulled loadout (for re-render)
 
+  // ---- "what to do with your astrogems" infographic config ----
+  // The Pipeline tab bakes one DP solve per these 12 anchor grades; each maps 1:1
+  // to a distinct rank (C- … S+), so the array IS a clean rank ladder. We mirror it
+  // here so a gem's rank can be "bumped one rank up" by stepping to the next index.
+  var GRADE_ROWS = [52, 57, 62, 66, 70, 73, 77, 80, 83, 87, 92, 97];
+  // gpd tiers offered by the selector (must match gpdsInData() in pipeline.json).
+  var GPD_TIERS = [500000, 1000000, 1500000, 2500000, 3500000, 5000000, 7500000, 10000000];
+  var GPD_DEFAULT = 1500000;
+  var grGpd = GPD_DEFAULT;           // currently-selected gpd for the infographic
+
+  function gpdLabel(g) {
+    if (g >= 1000000) { var m = (g / 1000000).toFixed(1).replace(/\.0$/, ""); return m + "M"; }
+    return (g / 1000).toFixed(0) + "k";
+  }
+
+  // rank string -> index in GRADE_ROWS (cached). Built by ranking each anchor grade.
+  var RANK_TO_IDX = null;
+  function rankToIdx() {
+    if (RANK_TO_IDX) return RANK_TO_IDX;
+    RANK_TO_IDX = {};
+    for (var i = 0; i < GRADE_ROWS.length; i++) RANK_TO_IDX[rankFromGrade(GRADE_ROWS[i])] = i;
+    return RANK_TO_IDX;
+  }
+
+  // The baseline GRADE_ROWS grade for a gem grade, bumped ONE rank up: find the
+  // anchor index for the gem's rank, step +1 (clamped to the top), return that
+  // anchor grade. Falls back to the gem's own anchor if its rank isn't on the ladder.
+  function bumpedBaselineGrade(gemGrade) {
+    var map = rankToIdx();
+    var rank = rankFromGrade(gemGrade);
+    var idx = map[rank];
+    if (idx == null) {
+      // off-ladder: snap to the nearest anchor grade by value, then bump.
+      var best = 0, bd = Infinity;
+      for (var i = 0; i < GRADE_ROWS.length; i++) {
+        var d = Math.abs(GRADE_ROWS[i] - gemGrade);
+        if (d < bd) { bd = d; best = i; }
+      }
+      idx = best;
+    }
+    var up = Math.min(idx + 1, GRADE_ROWS.length - 1);
+    return GRADE_ROWS[up];
+  }
+
+  // ORDER/CHAOS baseline from the 3rd-lowest-GRADE gem of that type, bumped one
+  // rank up. <3 valid gems -> use the lowest available. Returns null if none.
+  //   { srcGrade, srcRank, baseGrade, baseRank, count }
+  function typeBaseline(gems, gemType) {
+    var graded = (gems || []).filter(function (x) {
+      return x.gemType === gemType && validateConfig(x).valid;
+    }).map(function (x) { return grade(x); }).sort(function (a, b) { return a - b; });
+    if (!graded.length) return null;
+    var src = graded.length >= 3 ? graded[2] : graded[0];
+    var baseGrade = bumpedBaselineGrade(src);
+    return {
+      srcGrade: src, srcRank: rankFromGrade(src),
+      baseGrade: baseGrade, baseRank: rankFromGrade(baseGrade),
+      count: graded.length
+    };
+  }
+
   // ---------------- DOM helpers ----------------
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
@@ -194,6 +255,41 @@
 '  #tab-grader .mbtn:disabled{opacity:.45;cursor:not-allowed}' +
 '  #tab-grader .gr-cache{display:inline-block;margin-left:10px;font-size:10px;font-weight:700;text-transform:none;letter-spacing:.02em;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 9px;vertical-align:middle}' +
 '  #tab-grader .gr-cache.fresh{color:var(--good)}' +
+// ---- "what to do with your astrogems" infographic ----
+'  #tab-grader .gr-plan{margin-top:18px}' +
+'  #tab-grader .gr-plan > h2{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px}' +
+'  #tab-grader .gr-plan .pl-sub{font-size:12px;color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0}' +
+'  #tab-grader .gr-gpd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 4px}' +
+'  #tab-grader .gr-gpd .lab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700}' +
+'  #tab-grader .gr-gpd .gpd-btn{min-width:46px;text-align:center;cursor:pointer}' +
+'  #tab-grader .gr-plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px}' +
+'  @media(max-width:680px){#tab-grader .gr-plan-grid{grid-template-columns:1fr}}' +
+'  #tab-grader .gr-plan-card{border:1px solid var(--border);border-radius:10px;background:var(--panel2);overflow:hidden}' +
+'  #tab-grader .gr-plan-card > .hd{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--panel)}' +
+'  #tab-grader .gr-plan-card > .hd .t{font-size:13px;font-weight:800;letter-spacing:.02em}' +
+'  #tab-grader .gr-plan-card > .hd .bl{font-size:11px;color:var(--dim);font-weight:600}' +
+'  #tab-grader .gr-plan-card > .hd .bl b{color:var(--text)}' +
+'  #tab-grader .gr-plan-card .empty{padding:14px;font-size:12px;color:var(--dim)}' +
+'  #tab-grader table.gr-ptab{width:100%;border-collapse:collapse;font-size:12px}' +
+'  #tab-grader table.gr-ptab th{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);font-weight:700;text-align:left;padding:6px 10px;border-bottom:1px solid var(--border)}' +
+'  #tab-grader table.gr-ptab th.r,#tab-grader table.gr-ptab td.r{text-align:right}' +
+'  #tab-grader table.gr-ptab td{padding:5px 10px;border-bottom:1px solid var(--border);vertical-align:middle}' +
+'  #tab-grader table.gr-ptab tr:last-child td{border-bottom:none}' +
+'  #tab-grader table.gr-ptab .rar{font-weight:700;color:var(--text);white-space:nowrap}' +
+'  #tab-grader table.gr-ptab .rar .c{color:var(--dim);font-weight:600;font-variant-numeric:tabular-nums}' +
+'  #tab-grader table.gr-ptab .ov{font-variant-numeric:tabular-nums;color:var(--dim)}' +
+'  #tab-grader .vpill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:800;line-height:1.4;white-space:nowrap}' +
+'  #tab-grader .vpill .rcp{font-weight:600;opacity:.85;font-variant-numeric:tabular-nums}' +
+'  #tab-grader .vp-reset{background:#1f6b3e;color:#d6ffe6}' +
+'  #tab-grader .vp-cut{background:#4a5520;color:#eee6a8}' +
+'  #tab-grader .vp-fuse{background:#3a2a66;color:#cdb4ff}' +
+'  #tab-grader .vp-throw{background:#4a1c1c;color:#ef9a9a}' +
+'  #tab-grader .gr-boxes{padding:10px 14px;border-top:1px solid var(--border);font-size:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}' +
+'  #tab-grader .gr-boxes .bl{font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);font-weight:700;margin-right:2px}' +
+'  #tab-grader .gr-boxes .box{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700;background:var(--panel);border:1px solid var(--border);color:var(--text)}' +
+'  #tab-grader .gr-boxes .none{color:var(--dim);font-style:italic}' +
+'  #tab-grader .gr-plan-legend{margin-top:12px;font-size:11px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap;align-items:center}' +
+'  #tab-grader .gr-plan-legend .vpill{font-size:10px;padding:1px 8px}' +
 '</style>' +
 
 // ---- INPUT panel ----
@@ -375,6 +471,147 @@
       '</div>';
   }
 
+  // ---------------- "what to do with your astrogems" infographic ----------------
+  // Per-rarity/cost action plan + vendor boxes, pulled from window.pipelineAdvice,
+  // for the ORDER and CHAOS baselines at the selected gpd. Recomputes on gpd change.
+
+  var RAR_LABEL = { uncommon: "Uncommon", rare: "Rare", epic: "Epic" };
+  // verdict -> {cls, label}. Recipe/steer (fuse) is appended separately.
+  var VERDICT_META = {
+    "fuse": { cls: "vp-fuse", label: "Fuse" },
+    "cut & reset": { cls: "vp-reset", label: "Cut & reset" },
+    "cut": { cls: "vp-cut", label: "Cut" },
+    "throw": { cls: "vp-throw", label: "Throw" }
+  };
+
+  function fmtGoldShort(g) {
+    if (g == null || !isFinite(g)) return "—";
+    g = Math.round(g);
+    if (Math.abs(g) >= 1000000) { var m = (g / 1000000).toFixed(1).replace(/\.0$/, ""); return m + "M"; }
+    if (Math.abs(g) >= 1000) { var k = (g / 1000).toFixed(Math.abs(g) >= 100000 ? 0 : 1).replace(/\.0$/, ""); return k + "k"; }
+    return String(g);
+  }
+
+  function verdictPill(entry) {
+    var meta = VERDICT_META[entry.verdict] || VERDICT_META["throw"];
+    var inner = meta.label;
+    if (entry.verdict === "fuse" && entry.recipe) {
+      var recipe = entry.recipe;
+      // show the steer cost for rare fuses (UC holds its own cost).
+      if (entry.rarity === "rare" && entry.steerCost != null) recipe += " → c" + entry.steerCost;
+      inner += ' <span class="rcp">' + esc(recipe) + '</span>';
+    }
+    return '<span class="vpill ' + meta.cls + '">' + inner + '</span>';
+  }
+
+  // One side's card (ORDER or CHAOS) for advice `adv` (null => no gems of this type).
+  function planCardHtml(title, base, adv) {
+    var head = '<div class="hd"><span class="t">' + esc(title) + '</span>';
+    if (base) {
+      head += '<span class="bl">baseline <b>' + esc(base.baseRank) + '</b> '
+        + '<span style="opacity:.75">(from your 3rd-lowest ' + esc(base.srcRank) + ' gem)</span></span>';
+    }
+    head += '</div>';
+
+    if (!base) {
+      return '<div class="gr-plan-card">' + head + '<div class="empty">No ' + esc(title.toLowerCase()) + ' gems in this loadout.</div></div>';
+    }
+    if (!adv) {
+      return '<div class="gr-plan-card">' + head + '<div class="empty">Pipeline data unavailable.</div></div>';
+    }
+
+    var rows = '<table class="gr-ptab"><thead><tr>'
+      + '<th>Gem</th><th>What to do</th><th class="r">Open value</th></tr></thead><tbody>';
+    for (var i = 0; i < adv.plan.length; i++) {
+      var e = adv.plan[i];
+      rows += '<tr>'
+        + '<td><span class="rar">' + esc(RAR_LABEL[e.rarity] || e.rarity) + ' <span class="c">c' + e.cost + '</span></span></td>'
+        + '<td>' + verdictPill(e) + '</td>'
+        + '<td class="r ov">' + fmtGoldShort(e.openValue) + '</td>'
+        + '</tr>';
+    }
+    rows += '</tbody></table>';
+
+    var boxList = (adv.boxes && adv.boxes.list) || [];
+    var boxesHtml = '<div class="gr-boxes"><span class="bl">Boxes worth buying</span>';
+    if (boxList.length) {
+      boxesHtml += boxList.map(function (b) { return '<span class="box">' + esc(b) + '</span>'; }).join(" ");
+    } else {
+      boxesHtml += '<span class="none">none at this baseline / gpd</span>';
+    }
+    boxesHtml += '</div>';
+
+    return '<div class="gr-plan-card">' + head + rows + boxesHtml + '</div>';
+  }
+
+  // The whole infographic (title + gpd selector + two baseline cards + legend).
+  // `bases` = { order, chaos } from typeBaseline(); pipeline data must be ready.
+  function planSectionHtml(bases) {
+    var gpdBtns = "";
+    for (var i = 0; i < GPD_TIERS.length; i++) {
+      var g = GPD_TIERS[i];
+      gpdBtns += '<span class="mbtn gpd-btn ' + (g === grGpd ? "active" : "") + '" data-gpd="' + g
+        + '" onclick="window.__grSetGpd(' + g + ')">' + gpdLabel(g) + '</span>';
+    }
+
+    var ready = (typeof window.pipelineAdvice === "function") && !!window.__grPipelineReady;
+    var ordAdv = (ready && bases.order) ? window.pipelineAdvice(bases.order.baseGrade, grGpd) : null;
+    var chaAdv = (ready && bases.chaos) ? window.pipelineAdvice(bases.chaos.baseGrade, grGpd) : null;
+
+    var body;
+    if (!ready) {
+      body = '<div class="placeholder" id="gr-plan-cards" style="margin-top:10px"><b>Loading pipeline economics…</b>Computing what to cut, fuse, reset, or throw.</div>';
+    } else {
+      body = '<div class="gr-plan-grid" id="gr-plan-cards">'
+        + planCardHtml("Order", bases.order, ordAdv)
+        + planCardHtml("Chaos", bases.chaos, chaAdv)
+        + '</div>';
+    }
+
+    var legend = '<div class="gr-plan-legend">'
+      + '<span class="vpill vp-reset">Cut &amp; reset</span><span>open value ≥ 20k — cut, and reset if it lands low</span>'
+      + '<span class="vpill vp-cut">Cut</span><span>open value &gt; 0</span>'
+      + '<span class="vpill vp-fuse">Fuse</span><span>a rarity upgrade beats cutting</span>'
+      + '<span class="vpill vp-throw">Throw</span><span>not worth cutting</span>'
+      + '</div>';
+
+    return '<div class="gr-plan">'
+      + '<h2>What to do with your astrogems '
+      + '<span class="pl-sub">NRB · per-rarity action plan at your loadout’s baselines</span></h2>'
+      + '<div class="gr-gpd"><span class="lab">Gold per 1% damage</span>' + gpdBtns + '</div>'
+      + body
+      + legend
+      + '</div>';
+  }
+
+  // Recompute just the two cards (gpd change / pipeline-ready) without re-rendering
+  // the whole loadout. Reads the cached loadout for the current baselines.
+  function refreshPlanCards() {
+    var host = document.getElementById("gr-plan-cards");
+    if (!host) return;
+    var gems = (lastLoadout && lastLoadout.gems) || [];
+    var bases = { order: typeBaseline(gems, "order"), chaos: typeBaseline(gems, "chaos") };
+    var ready = (typeof window.pipelineAdvice === "function") && !!window.__grPipelineReady;
+    if (!ready) return;   // still loading; the ready-callback re-renders the section
+    var ordAdv = bases.order ? window.pipelineAdvice(bases.order.baseGrade, grGpd) : null;
+    var chaAdv = bases.chaos ? window.pipelineAdvice(bases.chaos.baseGrade, grGpd) : null;
+    var html = planCardHtml("Order", bases.order, ordAdv) + planCardHtml("Chaos", bases.chaos, chaAdv);
+    // host may be the placeholder (a non-grid div) before data arrived; normalize.
+    if (!host.classList.contains("gr-plan-grid")) {
+      host.className = "gr-plan-grid";
+      host.removeAttribute("style");
+    }
+    host.innerHTML = html;
+  }
+
+  // gpd selector handler (wired via inline onclick in planSectionHtml).
+  window.__grSetGpd = function (g) {
+    grGpd = g;
+    var btns = document.querySelectorAll("#tab-grader .gr-gpd .gpd-btn");
+    for (var i = 0; i < btns.length; i++) btns[i].classList.toggle("active", Number(btns[i].getAttribute("data-gpd")) === g);
+    refreshPlanCards();
+  };
+
   function renderLoadout(data) {
     var out = $("gr-result");
     var gems = (data && data.gems) || [];
@@ -410,6 +647,13 @@
     // upgrade priorities: weakest 3 Order + weakest 3 Chaos, side by side, at the top
     html += weakestSectionHtml(gems);
 
+    // "what to do with your astrogems": per-rarity action plan + boxes at the
+    // ORDER/CHAOS baselines (3rd-lowest gem, bumped one rank up). Numbers come from
+    // window.pipelineAdvice; the section paints a "loading…" placeholder first and
+    // fills once pipelineReady fires (so it works even if Pipeline was never opened).
+    var bases = { order: typeBaseline(gems, "order"), chaos: typeBaseline(gems, "chaos") };
+    html += planSectionHtml(bases);
+
     // group by core slot, preserving order of first appearance
     var order = [], groups = {};
     gems.forEach(function (x) {
@@ -429,6 +673,15 @@
     Array.prototype.forEach.call(out.querySelectorAll(".wk-row[data-target]"), function (row) {
       row.addEventListener("click", function () { focusGem(row.getAttribute("data-target")); });
     });
+
+    // Ensure pipeline data is loaded, then (re)fill the action-plan cards. Marks a
+    // global ready flag so re-renders/gpd changes can compute synchronously.
+    if (typeof window.pipelineReady === "function") {
+      window.pipelineReady(function () {
+        window.__grPipelineReady = true;
+        refreshPlanCards();
+      });
+    }
   }
 
   // scroll a loadout gem card into view and flash it (restartable on repeat clicks)

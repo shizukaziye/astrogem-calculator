@@ -1307,6 +1307,116 @@
     if (caret) caret.textContent = hidden ? "▾" : "▸";
   };
 
+  // ===========================================================================
+  // PUBLIC ADVICE API — consumed by the Grader tab's "what to do with your
+  // astrogems" infographic. Reuses the exact economic functions above (gev,
+  // fuseDecisions, computePipeline); changes NO existing behavior. Everything is
+  // computed for the CURRENT REGION + roster 'nrb' (the only roster with a box /
+  // fuse economy; RB gems are always just cut).
+  // ===========================================================================
+
+  // pipelineReady(cb): ensure data/pipeline.json is loaded, then call cb once.
+  // If DATA is already present, cb runs synchronously. Otherwise we kick off (or
+  // join) the in-flight fetch and poll until DATA lands. Lets the Grader call
+  // pipelineAdvice even if the Pipeline tab was never opened.
+  window.pipelineReady = function (cb) {
+    if (typeof cb !== "function") return;
+    if (DATA) { cb(); return; }
+    ensureData();
+    var tries = 0;
+    (function wait() {
+      if (DATA) { cb(); return; }
+      if (++tries > 600) { cb(); return; }   // ~30s safety cap; cb still fires (advice will no-op gracefully)
+      setTimeout(wait, 50);
+    })();
+  };
+
+  // pipelineAdvice(baselineGrade, gpd): the action plan for ONE baseline grade
+  // (a GRADE_ROWS value, e.g. 77) at ONE gpd tier, for the current REGION + NRB.
+  // Returns null if data isn't loaded yet (call inside pipelineReady).
+  //
+  // Shape:
+  //   {
+  //     region, roster:"nrb", grade, baselineScore, gpd,
+  //     plan: [ {                          // 9 entries (rarity × cost)
+  //       rarity, cost,
+  //       openValue,                       // gev() open value, gold (NRB)
+  //       verdict: "fuse"|"cut & reset"|"cut"|"throw",
+  //       recipe,                          // e.g. "3×UC", "1R+2L"  (fuse only, else null)
+  //       steerCost                        // cost to steer the fuse toward (fuse only, else null)
+  //     }, … ],
+  //     boxes: {                           // reuse computePipeline's box logic
+  //       vendor:{buy,cost,max}, mat:{buy,cost,max}, epic:{buy,cost,max},
+  //       boxEV,                           // expected box-gem value (vendor/mat share it)
+  //       list: [ "10×1185", "20×mat", … ] // human "what to buy" chips (empty => none)
+  //     }
+  //   }
+  //
+  // Recipe wording mirrors the Pipeline tab: a UC block fuses 3 same-cost
+  // uncommons ("3×UC", cost held); a Rare block fuses 1 rare + 2 leftover
+  // uncommons ("1R+2L") steered toward steerCost; epics never fuse.
+  window.pipelineAdvice = function (baselineGrade, gpd) {
+    if (!DATA) return null;
+    if (gpd == null) gpd = GPD;
+    var bl = (typeof window.gradeToScore === "function") ? window.gradeToScore(baselineGrade) : baselineGrade;
+    var roster = "nrb";
+
+    var fd = fuseDecisions(bl, gpd, roster);
+
+    var plan = [];
+    for (var ri = 0; ri < RARITIES.length; ri++) {
+      for (var ci = 0; ci < COSTS.length; ci++) {
+        var rarity = RARITIES[ri], cost = COSTS[ci];
+        var ov = gev(rarity, cost, bl, gpd, roster);
+        var doFuse = (rarity === "uncommon") ? !!fd.uc[cost]
+          : (rarity === "rare") ? !!fd.rare[cost]
+            : false;   // epic never fuses pre-cut
+        var verdict, recipe = null, steerCost = null;
+        if (doFuse) {
+          verdict = "fuse";
+          if (rarity === "uncommon") { recipe = "3×UC"; steerCost = cost; }
+          else { recipe = "1R+2L"; steerCost = fd.rareUcCost[cost]; }
+        } else if (ov >= CONST.RESET_THRESHOLD) {
+          verdict = "cut & reset";
+        } else if (ov > 0) {
+          verdict = "cut";
+        } else {
+          verdict = "throw";
+        }
+        plan.push({
+          rarity: rarity, cost: cost,
+          openValue: ov, verdict: verdict, recipe: recipe, steerCost: steerCost
+        });
+      }
+    }
+
+    // Box decisions: reuse computePipeline's logic (it returns buyVendor/buyMat/
+    // buyEpic + boxEV). The grade only affects avg/cp columns there, not the box
+    // buy flags (those are pure gev-vs-cost), so any grade gives the same boxes;
+    // we pass the actual baselineGrade for completeness.
+    var p = computePipeline(baselineGrade, bl, gpd);
+    var boxes = {
+      vendor: { buy: !!p.buyVendor, cost: CONST.BOX_VENDOR.cost, max: CONST.BOX_VENDOR.max },
+      mat: { buy: !!p.buyMat, cost: CONST.BOX_MAT.cost, max: CONST.BOX_MAT.max },
+      epic: { buy: !!p.buyEpic, cost: CONST.BOX_EPIC.cost, max: CONST.BOX_EPIC.max },
+      boxEV: p.boxEV,
+      list: []
+    };
+    if (p.buyVendor) boxes.list.push(CONST.BOX_VENDOR.max + "×1185");
+    if (p.buyMat) boxes.list.push(CONST.BOX_MAT.max + "×mat");
+    if (p.buyEpic) boxes.list.push(CONST.BOX_EPIC.max + "×43k");
+
+    return {
+      region: REGION, roster: roster,
+      grade: baselineGrade, baselineScore: bl, gpd: gpd,
+      plan: plan, boxes: boxes
+    };
+  };
+
+  // The gpd tiers present in the bake (for the Grader's gpd selector). Returns []
+  // until data loads; the Grader reads it inside pipelineReady.
+  window.pipelineGpds = function () { return gpdsInData(); };
+
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", render);
   else render();
 })();
