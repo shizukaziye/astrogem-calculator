@@ -77,6 +77,7 @@
     "Paladin": "Paladin.svg",
     "Slayer": "Slayer.svg",
     "Valkyrie": "Valkyrie.svg",
+    "Artist": "Artist.svg",
     "Arcanist": "Arcanist.svg",
     "Summoner": "Summoner.svg",
     "Bard": "Bard.svg",
@@ -171,7 +172,9 @@
     var gems = (char && char.gems) || [];
     var sum = 0, n = 0;
     for (var i = 0; i < gems.length; i++) {
-      if (validateConfig(gems[i]).valid) { sum += supportRelValue(gems[i]); n++; }
+      // ÷3: supportRelValue carries the ×3 party multiplier (grading/gold); the displayed
+      // "Party dmg%" is the per-ally number, so divide by 3 here.
+      if (validateConfig(gems[i]).valid) { sum += supportRelValue(gems[i]) / 3; n++; }
     }
     return n ? sum : null;
   }
@@ -219,6 +222,7 @@
 '  #tab-leaderboard .lb-modebtn{background:none;border:none;cursor:pointer;color:var(--dim);font-family:inherit;font-weight:700;font-size:12px;padding:5px 16px;line-height:1.4;transition:background .12s,color .12s}' +
 '  #tab-leaderboard .lb-modebtn:hover{color:var(--text)}' +
 '  #tab-leaderboard .lb-modebtn.on{background:var(--accent);color:#0c0e12}' +
+'  #tab-leaderboard #lb-mode-dps.on{background:#d9534f;color:#fff}' +
 // ---- pagination controls (shown only when >PAGE_SIZE characters) ----
 '  #tab-leaderboard .lb-pager{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap;color:var(--dim);font-size:12px}' +
 '  #tab-leaderboard .lb-pager .lb-pagebtn{background:var(--panel2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-weight:700;font-size:12px;padding:5px 12px;cursor:pointer}' +

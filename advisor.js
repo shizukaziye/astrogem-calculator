@@ -115,7 +115,9 @@
 '  #tab-advisor .rank-badge{display:inline-block;padding:1px 9px;border-radius:99px;font-size:15px;font-weight:800;line-height:1.5;vertical-align:middle;font-variant-numeric:tabular-nums}' +
 '  #tab-advisor .av-bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:8px;display:none}' +
 '  #tab-advisor .av-bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .1s}' +
+'  #tab-advisor .av-wip{background:rgba(217,83,79,.14);border:1px solid #d9534f;color:#ff9b97;border-radius:8px;padding:11px 14px;font-weight:800;letter-spacing:.05em;text-align:center;margin-bottom:14px}' +
 '</style>' +
+'<div class="av-wip">⚠ DO NOT USE — WORK IN PROGRESS</div>' +
 // ---- INPUT: screenshot + engine ----
 '<div class="inputs" id="av-inputs">' +
 '  <div class="ihdr"><span>Advisor — live cut advice</span><span class="tgl" id="av-caret-wrap" onclick="window.__avToggleInputs()"><span id="av-caret">▾</span></span></div>' +

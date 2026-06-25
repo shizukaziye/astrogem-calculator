@@ -79,7 +79,9 @@
   function isSupport() { return grMode === "support"; }
   function gGrade(cfg) { return isSupport() ? supportGrade(cfg) : grade(cfg); }
   function gRank(cfg) { return isSupport() ? supportRank(cfg) : gemRank(cfg); }
-  function gRel(cfg) { return isSupport() ? supportRelValue(cfg) : relDamage(cfg); }
+  // Support shows the per-ALLY party-damage %: supportRelValue has the ×3 (3 DPS in the
+  // party) baked in for grading/gold, so divide by 3 for the human-facing display number.
+  function gRel(cfg) { return isSupport() ? supportRelValue(cfg) / 3 : relDamage(cfg); }
 
   // Support classes that CAN play support (gate for the support-default auto-detect).
   var SUPPORT_CLASSES = { Bard: 1, Paladin: 1, Artist: 1, Valkyrie: 1 };
@@ -361,6 +363,7 @@
 '  #tab-grader .gr-axis .gr-axispill:not(:last-child){border-right:1px solid var(--border)}' +
 '  #tab-grader .gr-axis .gr-axispill:hover:not(.active){color:var(--text)}' +
 '  #tab-grader .gr-axis .gr-axispill.active{background:var(--accent);color:#fff}' +
+'  #tab-grader .gr-axis .gr-axispill-dps.active{background:#d9534f}' +
 '  #tab-grader .gr-axis .gr-axisnote{font-size:11px;color:var(--dim)}' +
 // support-mode replacement for the (DPS-only) cut/fuse infographic.
 '  #tab-grader .gr-plan-note{margin-top:18px;padding:14px 16px;border:1px dashed var(--border);border-radius:10px;background:var(--panel2);font-size:12.5px;color:var(--dim)}' +
@@ -454,6 +457,10 @@
 '  #tab-grader .gr-favs .gr-favbtn .nm{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
 '  #tab-grader .gr-favs .gr-favbtn .rg{font-size:9.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;flex:0 0 auto;transition:color .12s,opacity .12s}' +
 '  #tab-grader .gr-favs .gr-favbtn:hover .rg{color:var(--accent);opacity:.6}' +
+'  #tab-grader .gr-favs .gr-favrow{display:flex;align-items:stretch;gap:5px}' +
+'  #tab-grader .gr-favs .gr-favrow .gr-favbtn{flex:1 1 auto;min-width:0}' +
+'  #tab-grader .gr-favs .gr-favstar{flex:0 0 auto;background:none;border:none;color:var(--high);cursor:pointer;font-size:15px;line-height:1;padding:2px 5px;font-family:inherit;transition:transform .08s,color .12s}' +
+'  #tab-grader .gr-favs .gr-favstar:hover{transform:scale(1.15);color:#fff}' +
 '  #tab-grader .gr-favs .gr-favempty{display:block;font-size:11px;color:var(--dim);font-style:italic;margin-top:2px}' +
 // ---- star toggle on the loadout header ----
 '  #tab-grader .gr-star{background:none;border:none;cursor:pointer;font-size:24px;line-height:1;padding:0 2px;color:var(--none);font-family:inherit;vertical-align:middle;transition:color .12s,transform .08s}' +
@@ -652,7 +659,7 @@
   function axisToggleHtml() {
     if (!supportAxisAvailable()) return "";
     function pill(mode, label) {
-      return '<button type="button" class="gr-axispill' + (grMode === mode ? " active" : "") +
+      return '<button type="button" class="gr-axispill gr-axispill-' + mode + (grMode === mode ? " active" : "") +
         '" data-axis="' + mode + '">' + label + '</button>';
     }
     var note = isSupport()
@@ -1097,11 +1104,14 @@ axisToggleHtml() +
 
     // Baseline ◀ ▶ arrows: delegated on `out` so they survive the baseline-host re-render
     // that refreshPlanCards does on each nudge. (Bound once per loadout render.)
-    out.addEventListener("click", function (e) {
+    // ASSIGN (not addEventListener): renderLoadout re-runs on every DPS/Support toggle,
+    // and #gr-result persists, so addEventListener would STACK handlers -> one arrow
+    // click fires N times -> the baseline jumps by N ranks. onclick replaces -> exactly 1.
+    out.onclick = function (e) {
       var t = e.target.closest ? e.target.closest(".gr-basearrow") : null;
       if (!t || t.disabled) return;
       window.__grNudgeBaseline(t.id === "gr-base-up" ? +1 : -1);
-    });
+    };
 
     // Favorite star: toggles this loadout's character (region+name from lastLoadout).
     var star = $("gr-fav-star");
@@ -1170,22 +1180,24 @@ axisToggleHtml() +
     var host = $("gr-favs");
     if (!host) return; // only present in pull mode markup
     var favs = Favs ? Favs.list() : [];
-    var lab = '<span class="lab"><span class="lab-star">&#9733;</span>Saved</span>';
     if (!favs.length) {
-      host.innerHTML = lab + '<span class="gr-favempty">No saved characters yet — grade one and tap its ★.</span>';
+      host.innerHTML = '<span class="gr-favempty">No saved characters yet — grade one and tap its ★.</span>';
       return;
     }
-    var html = lab + '<div class="gr-favlist">' + favs.map(function (f, i) {
-      return '<button type="button" class="gr-favbtn" data-fi="' + i + '" title="Load ' +
-        esc(f.name) + ' (' + esc(f.region) + ')">' +
+    // Each saved character is a row: a ★ to UNSAVE (frees the old "★ Saved" header space)
+    // + the name button to LOAD it.
+    host.innerHTML = '<div class="gr-favlist">' + favs.map(function (f, i) {
+      return '<div class="gr-favrow" data-fi="' + i + '">' +
+        '<button type="button" class="gr-favstar" title="Unsave ' + esc(f.name) + '" aria-label="Unsave ' + esc(f.name) + '">&#9733;</button>' +
+        '<button type="button" class="gr-favbtn" title="Load ' + esc(f.name) + ' (' + esc(f.region) + ')">' +
         '<span class="nm">' + esc(f.name) + '</span>' +
-        '<span class="rg">' + esc(f.region) + '</span></button>';
+        '<span class="rg">' + esc(f.region) + '</span></button>' +
+        '</div>';
     }).join("") + '</div>';
-    host.innerHTML = html;
-    Array.prototype.forEach.call(host.querySelectorAll(".gr-favbtn"), function (btn) {
-      btn.addEventListener("click", function () {
-        var f = favs[parseInt(btn.getAttribute("data-fi"), 10)];
-        if (!f) return;
+    Array.prototype.forEach.call(host.querySelectorAll(".gr-favrow"), function (rowEl) {
+      var f = favs[parseInt(rowEl.getAttribute("data-fi"), 10)];
+      if (!f) return;
+      rowEl.querySelector(".gr-favbtn").addEventListener("click", function () {
         if ($("gr-region")) {
           var r = String(f.region).toUpperCase();
           if (REGIONS.indexOf(r) !== -1) $("gr-region").value = r;
@@ -1193,6 +1205,9 @@ axisToggleHtml() +
         if ($("gr-name")) $("gr-name").value = f.name;
         var go = $("gr-pull-go");
         if (go) go.click(); // triggers the pull exactly like a manual Grade
+      });
+      rowEl.querySelector(".gr-favstar").addEventListener("click", function () {
+        if (Favs) Favs.remove(f.region, f.name); // Favorites.onChange re-renders this row + the loadout star
       });
     });
   }
