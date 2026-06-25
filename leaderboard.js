@@ -100,6 +100,9 @@
 '  #tab-leaderboard .lb-dmg{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}' +
 '  #tab-leaderboard .lb-region{color:var(--dim);font-weight:600;font-size:11px;margin-left:6px}' +
 '  #tab-leaderboard .lb-grade{font-variant-numeric:tabular-nums;font-weight:700}' +
+'  #tab-leaderboard .lb-class{color:var(--text);font-weight:600}' +
+'  #tab-leaderboard .lb-ilvl{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}' +
+'  #tab-leaderboard .lb-dash{color:var(--dim)}' +
 '  #tab-leaderboard .lb-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-weight:800;line-height:1.4;font-variant-numeric:tabular-nums;margin-left:8px;font-size:12px}' +
 '  #tab-leaderboard .lb-age,#tab-leaderboard .lb-count{font-variant-numeric:tabular-nums;color:var(--dim)}' +
 '  #tab-leaderboard .lb-hint{color:var(--dim);font-size:11px;margin-top:10px}' +
@@ -152,6 +155,8 @@
         '<td class="lb-rank">#' + (i + 1) + '</td>' +
         '<td><a class="lb-name" href="' + bibleUrl(c.region, c.name) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + esc(c.name || "—") + '</a>' +
           '<span class="lb-region">' + esc(c.region || "") + '</span></td>' +
+        '<td class="lb-class">' + (c.class ? esc(c.class) : '<span class="lb-dash">—</span>') + '</td>' +
+        '<td class="lb-ilvl">' + (c.itemLevel ? Number(c.itemLevel).toLocaleString() : '<span class="lb-dash">—</span>') + '</td>' +
         '<td><span class="lb-grade">' + gradeTxt + '</span>' + badge + '</td>' +
         '<td class="lb-dmg">' + dmgTxt + '</td>' +
         '<td class="lb-age">' + esc(ageLabel(c.pulledAt)) + '</td>' +
@@ -161,7 +166,7 @@
     var body = $("lb-body");
     body.innerHTML =
 '<table>' +
-'  <thead><tr><th>Rank</th><th>Character</th><th>Avg grade</th><th>Total dmg%</th><th>Last pulled</th></tr></thead>' +
+'  <thead><tr><th>Rank</th><th>Character</th><th>Class</th><th>iLvl</th><th>Avg grade</th><th>Total dmg%</th><th>Last pulled</th></tr></thead>' +
 '  <tbody id="lb-rows">' + rows + '</tbody>' +
 '</table>' +
 '<div class="lb-hint">Click a character to open its loadout in the Grader.</div>';

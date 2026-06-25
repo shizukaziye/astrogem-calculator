@@ -272,6 +272,30 @@ function parseLopecGems(html) {
   return { gems: gems, warnings: warnings };
 }
 
+// Known advanced classes — lostark.bible renders the English class name as a profile badge.
+const CLASS_NAMES = ["Berserker","Destroyer","Gunlancer","Paladin","Slayer","Arcanist","Summoner","Bard","Sorceress","Wardancer","Scrapper","Soulfist","Glaivier","Striker","Breaker","Deathblade","Shadowhunter","Reaper","Souleater","Sharpshooter","Deadeye","Artillerist","Machinist","Gunslinger","Aeromancer","Wildsoul","Artist"];
+
+// Item level + class from the page. lostark.bible: ilvl in the SvelteKit blob + the class
+// as a profile badge. lopec.kr: per-piece "itemLevel" averaged (~= character level); its
+// class isn't exposed in a parseable field, so it's left null for now.
+function parseMeta(html, isKR) {
+  let itemLevel = null, klass = null;
+  if (isKR) {
+    const u = html.replace(/\\"/g, '"'); // lopec.kr RSC escapes its quotes
+    const lvls = []; const re = /"itemLevel":\s*(\d+)/g; let m;
+    while ((m = re.exec(u)) !== null) lvls.push(parseInt(m[1], 10));
+    if (lvls.length) itemLevel = Math.round(lvls.reduce((a, b) => a + b, 0) / lvls.length);
+  } else {
+    const im = html.match(/ilvl:(\d+)/);
+    if (im) itemLevel = parseInt(im[1], 10);
+    const re = /bg-neutral-900 px-2 py-1 text-sm">([^<]+)<\/p>/g; let m;
+    while ((m = re.exec(html)) !== null) {
+      if (CLASS_NAMES.indexOf(m[1]) !== -1) { klass = m[1]; break; }
+    }
+  }
+  return { itemLevel: itemLevel, klass: klass };
+}
+
 // Fetch a character page (lostark.bible, or lopec.kr when region is KR) and parse it
 // into the stored gem shape. Returns { ok:true, data } or { ok:false, status, body }.
 async function fetchCharacterData(region, name) {
@@ -336,11 +360,14 @@ async function fetchCharacterData(region, name) {
     }
   }
 
+  const meta = parseMeta(html, isKR);
   return { ok: true, data: {
     region: region,
     name: name,
     source: site,
     url: url,
+    itemLevel: meta.itemLevel,
+    class: meta.klass,
     coreCount: coreCount,
     gemCount: gems.length,
     gems: gems,
@@ -390,7 +417,7 @@ async function handleList(env) {
   const characters = [];
   for (const c of records) {
     if (c && Array.isArray(c.gems)) {
-      characters.push({ region: c.region, name: c.name, gems: c.gems, pulledAt: c.pulledAt });
+      characters.push({ region: c.region, name: c.name, gems: c.gems, pulledAt: c.pulledAt, itemLevel: c.itemLevel, class: c.class });
     }
   }
   return json({ characters: characters }, 200);
