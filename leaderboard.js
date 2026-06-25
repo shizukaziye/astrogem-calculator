@@ -42,6 +42,9 @@
     return fn ? fn(cfg) : 0;
   }
 
+  var Favs = (typeof window !== "undefined" && window.Favorites) || null;
+  var allChars = [];   // the full ranked list (each tagged with _rank = overall #)
+
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 
@@ -155,6 +158,20 @@
 '  #tab-leaderboard .lb-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-weight:800;line-height:1.4;font-variant-numeric:tabular-nums;margin-left:8px;font-size:12px}' +
 '  #tab-leaderboard .lb-age,#tab-leaderboard .lb-count{font-variant-numeric:tabular-nums;color:var(--dim)}' +
 '  #tab-leaderboard .lb-hint{color:var(--dim);font-size:11px;margin-top:10px}' +
+// ---- favorite star cell (both tables) ----
+'  #tab-leaderboard th.lb-star,#tab-leaderboard td.lb-star{width:30px;text-align:center;padding-left:4px;padding-right:4px}' +
+'  #tab-leaderboard .lb-starbtn{background:none;border:none;cursor:pointer;font-size:17px;line-height:1;padding:2px 3px;color:var(--none);font-family:inherit;transition:color .12s,transform .08s}' +
+'  #tab-leaderboard .lb-starbtn:hover{transform:scale(1.18);color:var(--high)}' +
+'  #tab-leaderboard .lb-starbtn.on{color:var(--high)}' +
+'  #tab-leaderboard .lb-starbtn[disabled]{cursor:not-allowed;opacity:.4}' +
+'  #tab-leaderboard .lb-starbtn[disabled]:hover{transform:none;color:var(--none)}' +
+// ---- "★ Favorites" section above the main table ----
+'  #tab-leaderboard .lb-favsec{margin:2px 0 18px}' +
+'  #tab-leaderboard .lb-favsec h3{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--high);margin:0 0 8px;font-weight:700;display:flex;align-items:center;gap:8px}' +
+'  #tab-leaderboard .lb-favsec h3 .st{font-size:15px}' +
+'  #tab-leaderboard .lb-favsec h3 .ct{color:var(--dim);font-weight:600;letter-spacing:.02em;font-size:11px;text-transform:none}' +
+'  #tab-leaderboard .lb-favsec table{border:1px solid var(--border);border-radius:10px;overflow:hidden}' +
+'  #tab-leaderboard .lb-mainhdr{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin:0 0 8px;font-weight:700}' +
 '</style>';
 
   function shell() {
@@ -194,46 +211,114 @@
     return "https://lostark.bible/character/" + encodeURIComponent(region || "") + "/" + encodeURIComponent(name || "");
   }
 
-  function renderTable(chars) {
-    var rows = chars.map(function (c, i) {
-      var avg = c._avg;
-      var gradeTxt = avg == null ? "—" : avg.toFixed(1);
-      var badge = avg == null ? "" : rankBadge(rankFromGrade(avg));
-      var dmgTxt = c._dmg == null ? "—" : c._dmg.toFixed(2) + "%";
-      return '<tr data-i="' + i + '">' +
-        '<td class="lb-rank">#' + (i + 1) + '</td>' +
-        '<td><a class="lb-name" href="' + bibleUrl(c.region, c.name) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + esc(c.name || "—") + '</a>' +
-          '<span class="lb-region">' + esc(c.region || "") + '</span></td>' +
-        '<td class="lb-class">' + classCell(c.class) + '</td>' +
-        '<td class="lb-ilvl">' + (c.itemLevel ? Number(c.itemLevel).toLocaleString() : '<span class="lb-dash">—</span>') + '</td>' +
-        '<td><span class="lb-grade">' + gradeTxt + '</span>' + badge + '</td>' +
-        '<td class="lb-dmg">' + dmgTxt + '</td>' +
-        '<td class="lb-age">' + esc(ageLabel(c.pulledAt)) + '</td>' +
-        '</tr>';
-    }).join("");
+  // The star <button> cell for a character. `data-i` indexes into allChars so a
+  // delegated handler can toggle it. Disabled (☆, dimmed) when adding it would
+  // exceed the 12-favorite cap and it isn't already saved.
+  function starCell(c, i) {
+    if (!Favs) return '';
+    var on = Favs.has(c.region, c.name);
+    var disabled = !on && Favs.isFull();
+    return '<td class="lb-star">' +
+      '<button type="button" class="lb-starbtn' + (on ? " on" : "") + '" data-star="' + i + '"' +
+      (disabled ? ' disabled title="Max 12 favorites"' : ' title="' + (on ? "Remove from favorites" : "Add to favorites") + '"') +
+      ' aria-pressed="' + (on ? "true" : "false") + '">' + (on ? "&#9733;" : "&#9734;") + '</button></td>';
+  }
 
-    var body = $("lb-body");
-    body.innerHTML =
-'<table>' +
-'  <thead><tr><th>Rank</th><th>Character</th><th>Class</th><th>iLvl</th><th>Avg grade</th><th>Total dmg%</th><th>Last pulled</th></tr></thead>' +
-'  <tbody id="lb-rows">' + rows + '</tbody>' +
-'</table>' +
-'<div class="lb-hint">Click a character to open its loadout in the Grader.</div>';
+  // One <tr> for a character. `i` is its index in allChars; `rankNum` is the overall
+  // rank to show (#) — for the Favorites table this is the character's ORIGINAL rank,
+  // so a favorite that's #3 overall still reads "#3".
+  function charRow(c, i, rankNum) {
+    var avg = c._avg;
+    var gradeTxt = avg == null ? "—" : avg.toFixed(1);
+    var badge = avg == null ? "" : rankBadge(rankFromGrade(avg));
+    var dmgTxt = c._dmg == null ? "—" : c._dmg.toFixed(2) + "%";
+    return '<tr data-i="' + i + '">' +
+      starCell(c, i) +
+      '<td class="lb-rank">#' + rankNum + '</td>' +
+      '<td><a class="lb-name" href="' + bibleUrl(c.region, c.name) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + esc(c.name || "—") + '</a>' +
+        '<span class="lb-region">' + esc(c.region || "") + '</span></td>' +
+      '<td class="lb-class">' + classCell(c.class) + '</td>' +
+      '<td class="lb-ilvl">' + (c.itemLevel ? Number(c.itemLevel).toLocaleString() : '<span class="lb-dash">—</span>') + '</td>' +
+      '<td><span class="lb-grade">' + gradeTxt + '</span>' + badge + '</td>' +
+      '<td class="lb-dmg">' + dmgTxt + '</td>' +
+      '<td class="lb-age">' + esc(ageLabel(c.pulledAt)) + '</td>' +
+      '</tr>';
+  }
 
-    // Row click -> open in Grader. We pass the FULL stored record so the Grader can
-    // render without re-fetching.
-    var tbody = $("lb-rows");
+  function headRow() {
+    return '<thead><tr>' +
+      (Favs ? '<th class="lb-star" aria-label="Favorite"></th>' : '') +
+      '<th>Rank</th><th>Character</th><th>Class</th><th>iLvl</th><th>Avg grade</th><th>Total dmg%</th><th>Last pulled</th>' +
+      '</tr></thead>';
+  }
+
+  // The "★ Favorites" filtered view: ONLY the favorited characters, in overall-rank
+  // order, each showing its ORIGINAL overall rank (_rank). Returns "" when none are
+  // favorited (the section is hidden entirely).
+  function favSectionHtml() {
+    if (!Favs) return '';
+    var rows = '';
+    var n = 0;
+    for (var i = 0; i < allChars.length; i++) {
+      var c = allChars[i];
+      if (Favs.has(c.region, c.name)) { rows += charRow(c, i, c._rank); n++; }
+    }
+    if (!n) return ''; // no favorites -> hide the whole section
+    return '<div class="lb-favsec" id="lb-favsec">' +
+      '<h3><span class="st">&#9733;</span> Favorites <span class="ct">' + n + ' saved &middot; shown with their overall rank</span></h3>' +
+      '<table>' + headRow() + '<tbody id="lb-fav-rows">' + rows + '</tbody></table>' +
+      '</div>';
+  }
+
+  function mainTableHtml() {
+    var rows = allChars.map(function (c, i) { return charRow(c, i, c._rank); }).join("");
+    return (Favs ? '<div class="lb-mainhdr">All characters</div>' : '') +
+      '<table>' + headRow() + '<tbody id="lb-rows">' + rows + '</tbody></table>' +
+      '<div class="lb-hint">Click a character to open its loadout in the Grader' +
+      (Favs ? '; tap the ★ to save it.' : '.') + '</div>';
+  }
+
+  // Delegated handler for a tbody: a star click toggles the favorite (and must NOT
+  // open the loadout); any other click on the row opens it in the Grader.
+  function wireTbody(tbody) {
+    if (!tbody) return;
     tbody.addEventListener("click", function (e) {
+      var starBtn = e.target.closest ? e.target.closest(".lb-starbtn") : null;
+      if (starBtn) {
+        e.stopPropagation(); // do NOT fall through to the row's show-loadout click
+        if (starBtn.disabled) return;
+        var si = parseInt(starBtn.getAttribute("data-star"), 10);
+        var sc = allChars[si];
+        if (sc && Favs) { Favs.toggle(sc.region, sc.name); } // notify -> repaint()
+        return;
+      }
       var tr = e.target.closest ? e.target.closest("tr[data-i]") : null;
       if (!tr) return;
       var idx = parseInt(tr.getAttribute("data-i"), 10);
-      var ch = chars[idx];
+      var ch = allChars[idx];
       if (ch && typeof window.graderShowLoadout === "function") {
         window.graderShowLoadout(ch);
       } else if (typeof window.selectTab === "function") {
         window.selectTab("grader");
       }
     });
+  }
+
+  // Full render: Favorites section (if any) above the main table. Called on load and
+  // on every Favorites change (so stars and the Favorites view stay current).
+  function renderTable(chars) {
+    allChars = chars;
+    // tag each char with its overall rank (1..N) in the already-sorted list
+    for (var i = 0; i < allChars.length; i++) allChars[i]._rank = i + 1;
+    repaint();
+  }
+
+  function repaint() {
+    var body = $("lb-body");
+    if (!body) return;
+    body.innerHTML = favSectionHtml() + mainTableHtml();
+    wireTbody($("lb-fav-rows"));
+    wireTbody($("lb-rows"));
   }
 
   var loadedOnce = false;
@@ -282,6 +367,12 @@
     if (!el) return;
     el.innerHTML = shell();
     $("lb-refresh").addEventListener("click", load);
+
+    // Re-render when favorites change anywhere (this tab or the Grader). Only repaint
+    // if we've actually loaded the list (otherwise there's nothing to show yet).
+    if (Favs) {
+      Favs.onChange(function () { if (allChars.length) repaint(); });
+    }
 
     // Lazy-load the first time the tab is activated (and refresh on each activation
     // only if it hasn't loaded yet — manual Refresh re-pulls thereafter).

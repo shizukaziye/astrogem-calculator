@@ -255,6 +255,19 @@
 '  #tab-grader .mbtn:disabled{opacity:.45;cursor:not-allowed}' +
 '  #tab-grader .gr-cache{display:inline-block;margin-left:10px;font-size:10px;font-weight:700;text-transform:none;letter-spacing:.02em;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:2px 9px;vertical-align:middle}' +
 '  #tab-grader .gr-cache.fresh{color:var(--good)}' +
+// ---- saved-characters quick-pick row (pull mode) ----
+'  #tab-grader .gr-favs{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:10px 0 2px}' +
+'  #tab-grader .gr-favs .lab{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700;margin-right:2px}' +
+'  #tab-grader .gr-favs .gr-favbtn{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--border);border-radius:99px;padding:4px 11px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;color:var(--text);line-height:1.3}' +
+'  #tab-grader .gr-favs .gr-favbtn:hover{border-color:var(--accent);color:var(--accent)}' +
+'  #tab-grader .gr-favs .gr-favbtn .rg{font-size:9.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:0 5px;line-height:1.6}' +
+'  #tab-grader .gr-favs .gr-favbtn .st{color:var(--high)}' +
+'  #tab-grader .gr-favs .gr-favempty{font-size:11px;color:var(--dim);font-style:italic}' +
+// ---- star toggle on the loadout header ----
+'  #tab-grader .gr-star{background:none;border:none;cursor:pointer;font-size:24px;line-height:1;padding:0 2px;color:var(--none);font-family:inherit;vertical-align:middle;transition:color .12s,transform .08s}' +
+'  #tab-grader .gr-star:hover{transform:scale(1.12)}' +
+'  #tab-grader .gr-star.on{color:var(--high)}' +
+'  #tab-grader .gr-star-note{font-size:11px;color:var(--high);margin-left:8px;vertical-align:middle}' +
 // ---- "what to do with your astrogems" infographic ----
 '  #tab-grader .gr-plan{margin-top:18px}' +
 '  #tab-grader .gr-plan > h2{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px}' +
@@ -322,6 +335,7 @@
 '        <div class="fld"><label>Region</label><select id="gr-region">' + opts(REGIONS, "NA") + '</select></div>' +
 '        <div class="fld" style="grid-column:span 2"><label>Character name</label><input id="gr-name" type="text" placeholder="e.g. Paroxysmal" autocomplete="off"></div>' +
 '      </div>' +
+'      <div class="gr-favs" id="gr-favs"></div>' +
 '      <div class="barrow">' +
 '        <button class="primary" id="gr-pull-go" type="button">Grade loadout</button>' +
 '        <button class="mbtn" id="gr-pull-refresh" type="button" style="display:none">Re-pull from lostark.bible</button>' +
@@ -632,8 +646,8 @@
 
     var html = '' +
 '<div class="panel">' +
-'  <h2>Loadout &mdash; <a class="bible-link" href="' + bibleUrl(data.region, data.name) + '" target="_blank" rel="noopener">' + esc(data.name || "") + '</a> <span class="note" style="text-transform:none">(' + esc(data.region || "") + ')</span>' +
-     cacheNoteHtml(data) + '</h2>' +
+'  <h2><button type="button" class="gr-star" id="gr-fav-star"></button> Loadout &mdash; <a class="bible-link" href="' + bibleUrl(data.region, data.name) + '" target="_blank" rel="noopener">' + esc(data.name || "") + '</a> <span class="note" style="text-transform:none">(' + esc(data.region || "") + ')</span>' +
+     cacheNoteHtml(data) + '<span class="gr-star-note" id="gr-fav-note" style="display:none"></span></h2>' +
 '  <div class="gr-sum">' +
 '    <div class="stat"><span class="k">Avg grade</span><span class="v ' + rankClass(avgRank) + '">' + avgGrade.toFixed(1) + '</span></div>' +
 '    <div class="stat"><span class="k">Avg rank</span><span class="v">' + rankBadge(avgRank) + '</span></div>' +
@@ -674,6 +688,26 @@
       row.addEventListener("click", function () { focusGem(row.getAttribute("data-target")); });
     });
 
+    // Favorite star: toggles this loadout's character (region+name from lastLoadout).
+    var star = $("gr-fav-star");
+    if (star && Favs) {
+      var favRegion = data.region, favName = data.name;
+      paintStar(star, favRegion, favName);
+      star.addEventListener("click", function () {
+        var note = $("gr-fav-note");
+        // Block the 13th add: if we'd be ADDING and the store is full, warn instead.
+        if (!Favs.has(favRegion, favName) && Favs.isFull()) {
+          if (note) { note.textContent = "max 12 favorites"; note.style.display = ""; }
+          return;
+        }
+        Favs.toggle(favRegion, favName);          // persists + notifies (re-renders fav row)
+        paintStar(star, favRegion, favName);
+        if (note) { note.textContent = ""; note.style.display = "none"; }
+      });
+    } else if (star) {
+      star.style.display = "none"; // Favorites store unavailable
+    }
+
     // Ensure pipeline data is loaded, then (re)fill the action-plan cards. Marks a
     // global ready flag so re-renders/gpd changes can compute synchronously.
     if (typeof window.pipelineReady === "function") {
@@ -699,6 +733,52 @@
     var el = $("gr-pull-status");
     el.textContent = msg || "";
     el.className = "gr-status" + (kind ? " " + kind : "");
+  }
+
+  // ---------------- saved-characters quick-pick ----------------
+  var Favs = (typeof window !== "undefined" && window.Favorites) || null;
+
+  // Render the row of quick-pick buttons (one per saved character) in pull mode.
+  // Clicking a button loads that character; empty -> a faint hint. Re-run on
+  // Favorites.onChange and whenever pull mode is (re)entered.
+  function renderFavRow() {
+    var host = $("gr-favs");
+    if (!host) return; // only present in pull mode markup
+    var favs = Favs ? Favs.list() : [];
+    if (!favs.length) {
+      host.innerHTML = '<span class="gr-favempty">No saved characters yet — grade one and tap its ★.</span>';
+      return;
+    }
+    var html = '<span class="lab">Saved</span>';
+    html += favs.map(function (f, i) {
+      return '<button type="button" class="gr-favbtn" data-fi="' + i + '" title="Load ' +
+        esc(f.name) + ' (' + esc(f.region) + ')">' +
+        '<span class="st">&#9733;</span>' + esc(f.name) +
+        '<span class="rg">' + esc(f.region) + '</span></button>';
+    }).join("");
+    host.innerHTML = html;
+    Array.prototype.forEach.call(host.querySelectorAll(".gr-favbtn"), function (btn) {
+      btn.addEventListener("click", function () {
+        var f = favs[parseInt(btn.getAttribute("data-fi"), 10)];
+        if (!f) return;
+        if ($("gr-region")) {
+          var r = String(f.region).toUpperCase();
+          if (REGIONS.indexOf(r) !== -1) $("gr-region").value = r;
+        }
+        if ($("gr-name")) $("gr-name").value = f.name;
+        var go = $("gr-pull-go");
+        if (go) go.click(); // triggers the pull exactly like a manual Grade
+      });
+    });
+  }
+
+  // Update the loadout-header star to reflect the current favorited state.
+  function paintStar(btn, region, name) {
+    var on = Favs ? Favs.has(region, name) : false;
+    btn.classList.toggle("on", on);
+    btn.innerHTML = on ? "&#9733;" : "&#9734;"; // ★ / ☆
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.title = on ? "Remove from saved characters" : "Save this character";
   }
 
   function runPull(refresh) {
@@ -747,6 +827,7 @@
     $("gr-mode-pull").classList.toggle("active", !custom);
     $("gr-body-custom").style.display = custom ? "" : "none";
     $("gr-body-pull").style.display = custom ? "none" : "";
+    if (!custom) renderFavRow(); // refresh the saved-characters quick-pick row
     if (custom) {
       renderCustom();
     } else if (lastLoadout) {
@@ -792,6 +873,16 @@
     // mode buttons
     $("gr-mode-custom").addEventListener("click", function () { selectMode("custom"); });
     $("gr-mode-pull").addEventListener("click", function () { selectMode("pull"); });
+
+    // Keep the quick-pick row and the loadout star in sync when favorites change
+    // anywhere (here OR on the Leaderboard tab).
+    if (Favs) {
+      Favs.onChange(function () {
+        renderFavRow();
+        var star = $("gr-fav-star");
+        if (star && lastLoadout) paintStar(star, lastLoadout.region, lastLoadout.name);
+      });
+    }
 
     // pull mode (wrap so the click Event isn't passed as the refresh flag)
     $("gr-pull-go").addEventListener("click", function () { runPull(false); });
