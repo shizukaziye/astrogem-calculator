@@ -45,6 +45,53 @@
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 
+  // Class-icon files live in assets/class-icons/<ClassName>.svg (extracted from
+  // lostark.bible's class silhouettes — see assets note). Repo-relative paths so
+  // GitHub Pages serves them. Keys are the English class names the Worker returns.
+  // SVGs use fill="currentColor", so they inherit the cell's text color.
+  var CLASS_ICON = {
+    "Berserker": "Berserker.svg",
+    "Destroyer": "Destroyer.svg",
+    "Gunlancer": "Gunlancer.svg",
+    "Paladin": "Paladin.svg",
+    "Slayer": "Slayer.svg",
+    "Valkyrie": "Valkyrie.svg",
+    "Arcanist": "Arcanist.svg",
+    "Summoner": "Summoner.svg",
+    "Bard": "Bard.svg",
+    "Sorceress": "Sorceress.svg",
+    "Wardancer": "Wardancer.svg",
+    "Scrapper": "Scrapper.svg",
+    "Soulfist": "Soulfist.svg",
+    "Glaivier": "Glaivier.svg",
+    "Striker": "Striker.svg",
+    "Breaker": "Breaker.svg",
+    "Deathblade": "Deathblade.svg",
+    "Shadowhunter": "Shadowhunter.svg",
+    "Reaper": "Reaper.svg",
+    "Souleater": "Souleater.svg",
+    "Sharpshooter": "Sharpshooter.svg",
+    "Deadeye": "Deadeye.svg",
+    "Artillerist": "Artillerist.svg",
+    "Machinist": "Machinist.svg",
+    "Gunslinger": "Gunslinger.svg",
+    "Aeromancer": "Aeromancer.svg",
+    "Wildsoul": "Wildsoul.svg"
+  };
+
+  // The cell contents for the Class column: icon (if we have one) + the class name,
+  // or a dash when the character has no class (KR characters: c.class === null).
+  // Graceful: a missing icon file degrades to text only (onerror hides the <img>).
+  function classCell(className) {
+    if (!className) return '<span class="lb-dash">—</span>';
+    var file = CLASS_ICON[className];
+    var img = file
+      ? '<img class="lb-class-icon" src="assets/class-icons/' + encodeURIComponent(file) +
+        '" alt="" aria-hidden="true" loading="lazy" onerror="this.style.display=\'none\'">'
+      : '';
+    return img + '<span class="lb-class-name">' + esc(className) + '</span>';
+  }
+
   function rankBadge(rank) {
     var c = rankColorOf(rank);
     return '<span class="lb-badge" style="background:' + c.bg + ';color:' + c.fg + '">' + esc(rank) + '</span>';
@@ -101,6 +148,8 @@
 '  #tab-leaderboard .lb-region{color:var(--dim);font-weight:600;font-size:11px;margin-left:6px}' +
 '  #tab-leaderboard .lb-grade{font-variant-numeric:tabular-nums;font-weight:700}' +
 '  #tab-leaderboard .lb-class{color:var(--text);font-weight:600}' +
+'  #tab-leaderboard .lb-class .lb-class-name{vertical-align:middle}' +
+'  #tab-leaderboard .lb-class img.lb-class-icon{width:20px;height:20px;vertical-align:middle;margin-right:7px;object-fit:contain;opacity:.9;flex:0 0 auto;filter:brightness(0) invert(.82)}' +
 '  #tab-leaderboard .lb-ilvl{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}' +
 '  #tab-leaderboard .lb-dash{color:var(--dim)}' +
 '  #tab-leaderboard .lb-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-weight:800;line-height:1.4;font-variant-numeric:tabular-nums;margin-left:8px;font-size:12px}' +
@@ -155,7 +204,7 @@
         '<td class="lb-rank">#' + (i + 1) + '</td>' +
         '<td><a class="lb-name" href="' + bibleUrl(c.region, c.name) + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + esc(c.name || "—") + '</a>' +
           '<span class="lb-region">' + esc(c.region || "") + '</span></td>' +
-        '<td class="lb-class">' + (c.class ? esc(c.class) : '<span class="lb-dash">—</span>') + '</td>' +
+        '<td class="lb-class">' + classCell(c.class) + '</td>' +
         '<td class="lb-ilvl">' + (c.itemLevel ? Number(c.itemLevel).toLocaleString() : '<span class="lb-dash">—</span>') + '</td>' +
         '<td><span class="lb-grade">' + gradeTxt + '</span>' + badge + '</td>' +
         '<td class="lb-dmg">' + dmgTxt + '</td>' +
