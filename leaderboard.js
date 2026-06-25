@@ -90,7 +90,7 @@
     if (!className) return '';
     var file = CLASS_ICON[className];
     if (!file) return '';
-    return '<img class="lb-class-icon" src="assets/class-icons/' + encodeURIComponent(file) +
+    return '<img class="lb-class-icon" width="20" height="20" src="assets/class-icons/' + encodeURIComponent(file) +
       '" alt="" aria-hidden="true" loading="lazy" onerror="this.style.display=\'none\'">';
   }
 
