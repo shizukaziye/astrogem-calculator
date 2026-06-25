@@ -77,6 +77,14 @@
   // every loadout-rendering helper calls gGrade/gRank/gRel instead of grade/gemRank/relDamage.
   var grMode = "dps"; // "dps" | "support"
   function isSupport() { return grMode === "support"; }
+  // Apply the DPS(red)/Support(blue) theme by toggling a mode class on #tab-grader,
+  // which flips the scoped --accent (see CSS). Rank badges keep their rankColor.
+  function applyAxisTheme() {
+    var t = document.getElementById("tab-grader");
+    if (!t) return;
+    t.classList.toggle("axis-dps", grMode !== "support");
+    t.classList.toggle("axis-support", grMode === "support");
+  }
   function gGrade(cfg) { return isSupport() ? supportGrade(cfg) : grade(cfg); }
   function gRank(cfg) { return isSupport() ? supportRank(cfg) : gemRank(cfg); }
   // Support shows the per-ALLY party-damage %: supportRelValue has the ×3 (3 DPS in the
@@ -342,6 +350,12 @@
 '  #tab-grader .gr-status{font-size:12px;color:var(--dim);margin-top:8px;min-height:16px}' +
 '  #tab-grader .gr-status.working{color:var(--accent)}' +
 '  #tab-grader .gr-status.err{color:var(--bad)}' +
+// DPS = red theme, Support = blue. A mode-scoped --accent override recolors ALL the
+// accent (blue) text in the grader — avg grade, totals, per-gem dmg, order/chaos +
+// grading text, hovers — to red in DPS. Rank BADGES use fixed rankColor hex, so they
+// are untouched (B stays blue, etc.).
+'  #tab-grader.axis-dps{--accent:#d9534f}' +
+'  #tab-grader.axis-support{--accent:#66c7ff}' +
 // pull mode: saved-character chips sit at the TOP (right under the mode toggle); the
 // region + name controls go on ONE short row below — no dead space, no side column.
 '  #tab-grader .gr-pullgrid{display:grid;grid-template-columns:auto 1fr;gap:14px 32px;align-items:start}' +
@@ -677,6 +691,7 @@
     mode = (mode === "support") ? "support" : "dps";
     if (mode === grMode) return;
     grMode = mode;
+    applyAxisTheme();
     if (lastLoadout) renderLoadout(lastLoadout);
   }
 
@@ -1010,6 +1025,7 @@
   };
 
   function renderLoadout(data) {
+    applyAxisTheme();
     var out = $("gr-result");
     var gems = (data && data.gems) || [];
     grBaseShift = 0;   // fresh loadout: drop any manual ◀▶ baseline nudge from the last one
@@ -1058,7 +1074,7 @@ axisToggleHtml() +
 '    </div>' +
 '  </div>' +
 '  <div class="gr-sum">' +
-'    <div class="stat"><span class="k">Avg grade</span><span class="v ' + rankClass(avgRank) + '">' + avgGrade.toFixed(1) + '</span></div>' +
+'    <div class="stat"><span class="k">Avg grade</span><span class="v" style="color:var(--accent)">' + avgGrade.toFixed(1) + '</span></div>' +
 '    <div class="stat"><span class="k">Avg rank</span><span class="v">' + rankBadge(avgRank) + '</span></div>' +
 '    <div class="stat"><span class="k">' + totalLabel + '</span><span class="v" style="color:var(--accent)">' + sumDmg.toFixed(2) + '%</span></div>' +
 '  </div>';

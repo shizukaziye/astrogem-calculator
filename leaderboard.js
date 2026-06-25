@@ -200,8 +200,22 @@
 '  #tab-leaderboard .lb-name:hover{color:var(--accent);border-bottom-color:var(--accent)}' +
 '  #tab-leaderboard .lb-dmg{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}' +
 '  #tab-leaderboard .lb-region{color:var(--dim);font-weight:600;font-size:11px;margin-left:6px;flex:0 0 auto}' +
-'  #tab-leaderboard .lb-grade{font-variant-numeric:tabular-nums;font-weight:700}' +
+'  #tab-leaderboard .lb-grade{font-variant-numeric:tabular-nums;font-weight:700;color:var(--accent)}' +
 '  #tab-leaderboard img.lb-class-icon{width:20px;height:20px;vertical-align:middle;margin-right:7px;object-fit:contain;opacity:.9;flex:0 0 auto;filter:brightness(0) invert(.82)}' +
+// MOBILE: the fixed columns (≈442px) overflow a phone, squeezing the flexible Character
+// column to ~0 so the NAME vanishes. Hide "Last pulled" + shrink the rest so the name fits.
+'  @media(max-width:600px){' +
+// Make room for the NAME on phones: drop Last-pulled + iLvl + the per-row region, shrink
+// the rest, smaller icon, tighter padding. !important beats the <col> inline width=. The
+// iLvl CELL stays (zeroed) — display:none on a MIDDLE cell shifts the others off their cols.
+'    #tab-leaderboard .panel{padding-left:6px;padding-right:6px}' +
+'    #tab-leaderboard .lc-age{width:0 !important}#tab-leaderboard .lb-age{display:none}' +
+'    #tab-leaderboard .lc-ilvl{width:0 !important}#tab-leaderboard .lb-ilvl{padding-left:0 !important;padding-right:0 !important}' +
+'    #tab-leaderboard .lb-region{display:none}' +
+'    #tab-leaderboard img.lb-class-icon{width:16px;height:16px;margin-right:4px}' +
+'    #tab-leaderboard .lc-star{width:26px !important}#tab-leaderboard .lc-rank{width:28px !important}#tab-leaderboard .lc-grade{width:54px !important}#tab-leaderboard .lc-dmg{width:40px !important}' +
+'    #tab-leaderboard td,#tab-leaderboard th{padding-left:3px;padding-right:3px}' +
+'  }' +
 '  #tab-leaderboard .lb-ilvl{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}' +
 '  #tab-leaderboard .lb-dash{color:var(--dim)}' +
 '  #tab-leaderboard .lb-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-weight:800;line-height:1.4;font-variant-numeric:tabular-nums;margin-left:8px;font-size:12px}' +
@@ -225,6 +239,10 @@
 '  #tab-leaderboard .lb-modebtn:hover{color:var(--text)}' +
 '  #tab-leaderboard .lb-modebtn.on{background:var(--accent);color:#0c0e12}' +
 '  #tab-leaderboard #lb-mode-dps.on{background:#d9534f;color:#fff}' +
+// DPS = red theme, Support = blue: mode-scoped --accent recolors avg grade, dmg, etc.
+// Rank badges use fixed rankColor hex, so they are untouched.
+'  #tab-leaderboard.axis-dps{--accent:#d9534f}' +
+'  #tab-leaderboard.axis-support{--accent:#66c7ff}' +
 '  #tab-leaderboard .lb-regs{display:inline-flex;gap:0;border:1px solid var(--border);border-radius:99px;overflow:hidden}' +
 '  #tab-leaderboard .lb-regbtn{background:none;border:none;cursor:pointer;color:var(--dim);font-family:inherit;font-weight:700;font-size:12px;padding:5px 13px;line-height:1.4;transition:background .12s,color .12s}' +
 '  #tab-leaderboard .lb-regbtn + .lb-regbtn{border-left:1px solid var(--border)}' +
@@ -329,13 +347,13 @@
   // space identically in both tables; everything else is pinned.
   function colGroup() {
     return '<colgroup>' +
-      (Favs ? '<col style="width:30px">' : '') +  // star
-      '<col style="width:48px">' +                // Rank
-      '<col style="width:64px">' +                // iLvl
-      '<col>' +                                   // Character (flexible)
-      '<col style="width:112px">' +               // Avg grade (number + badge)
-      '<col style="width:92px">' +                // Total dmg%
-      '<col style="width:96px">' +                // Last pulled
+      (Favs ? '<col class="lc-star" style="width:30px">' : '') +  // star
+      '<col class="lc-rank" style="width:48px">' +                // Rank
+      '<col class="lc-ilvl" style="width:64px">' +                // iLvl
+      '<col class="lc-char">' +                                   // Character (flexible)
+      '<col class="lc-grade" style="width:112px">' +              // Avg grade (number + badge)
+      '<col class="lc-dmg" style="width:92px">' +                 // Total dmg%
+      '<col class="lc-age" style="width:96px">' +                 // Last pulled
       '</colgroup>';
   }
 
@@ -343,7 +361,7 @@
     var dmgHdr = mode === "support" ? "Party dmg%" : "Total dmg%";
     return '<thead><tr>' +
       (Favs ? '<th class="lb-star" aria-label="Favorite"></th>' : '') +
-      '<th>Rank</th><th>iLvl</th><th>Character</th><th>Avg grade</th><th>' + dmgHdr + '</th><th>Last pulled</th>' +
+      '<th>Rank</th><th class="lb-ilvl">iLvl</th><th>Character</th><th>Avg grade</th><th>' + dmgHdr + '</th><th class="lb-age">Last pulled</th>' +
       '</tr></thead>';
   }
 
@@ -541,6 +559,7 @@
     var el = $("tab-leaderboard");
     if (!el) return;
     el.innerHTML = shell();
+    el.classList.add("axis-dps");   // default DPS = red theme
     $("lb-refresh").addEventListener("click", load);
 
     // DPS / Support toggle: re-filter, re-rank, and reset to page 1. The Favorites
@@ -551,6 +570,7 @@
       var dpsBtn = $("lb-mode-dps"), supBtn = $("lb-mode-support");
       if (dpsBtn) { dpsBtn.classList.toggle("on", m === "dps"); dpsBtn.setAttribute("aria-pressed", m === "dps" ? "true" : "false"); }
       if (supBtn) { supBtn.classList.toggle("on", m === "support"); supBtn.setAttribute("aria-pressed", m === "support" ? "true" : "false"); }
+      el.classList.toggle("axis-dps", m !== "support"); el.classList.toggle("axis-support", m === "support");
       page = 1;
       if (rawChars.length) rebuild();
     }
