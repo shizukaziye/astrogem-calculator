@@ -375,7 +375,7 @@
 '  #tab-grader .gr-favs{margin:0}' +
 '  #tab-grader .gr-favs .lab{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);font-weight:700;margin:0 0 8px}' +
 '  #tab-grader .gr-favs .lab .lab-star{color:var(--high);margin-right:3px}' +
-'  #tab-grader .gr-favs .gr-favlist{display:flex;flex-direction:column;gap:5px}' +
+'  #tab-grader .gr-favs .gr-favlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}' +
 '  #tab-grader .gr-favs .gr-favbtn{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--text);line-height:1.3;transition:border-color .12s,background .12s,color .12s}' +
 '  #tab-grader .gr-favs .gr-favbtn:hover{border-color:var(--accent);background:var(--panel);color:var(--accent)}' +
 '  #tab-grader .gr-favs .gr-favbtn .nm{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
@@ -411,7 +411,7 @@
 '  #tab-grader table.gr-ptab .rar .c{color:var(--dim);font-weight:600;font-variant-numeric:tabular-nums}' +
 '  #tab-grader table.gr-ptab .ov{font-variant-numeric:tabular-nums;color:var(--dim)}' +
 '  #tab-grader table.gr-ptab th.bh,#tab-grader table.gr-ptab td.bktd{text-align:center}' +
-'  #tab-grader table.gr-ptab td.fusetd{text-align:left}' +
+'  #tab-grader table.gr-ptab td.fusetd{text-align:center}' +
 '  #tab-grader .vpill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:800;line-height:1.4;white-space:nowrap}' +
 '  #tab-grader .vpill .rcp{font-weight:600;opacity:.85;font-variant-numeric:tabular-nums}' +
 '  #tab-grader .vp-reset{background:#1f6b3e;color:#d6ffe6}' +
