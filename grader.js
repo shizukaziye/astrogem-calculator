@@ -353,8 +353,8 @@
 // DPS = GOLD, Support = GREEN — a mode-scoped --axis var applied ONLY to the key figures
 // (avg grade, totals, per-gem dmg, order/chaos + grading text, the toggle). Everything
 // else keeps the generic blue --accent; rank badges use fixed rankColor (untouched).
-'  #tab-grader.axis-dps{--axis:#e3b13a}' +
-'  #tab-grader.axis-support{--axis:#46c074}' +
+'  #tab-grader.axis-dps{--axis:#e8a334}' +
+'  #tab-grader.axis-support{--axis:#3fc1cf}' +
 // pull mode: saved-character chips sit at the TOP (right under the mode toggle); the
 // region + name controls go on ONE short row below — no dead space, no side column.
 '  #tab-grader .gr-pullgrid{display:grid;grid-template-columns:auto 1fr;gap:14px 32px;align-items:start}' +
