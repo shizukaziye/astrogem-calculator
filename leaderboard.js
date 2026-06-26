@@ -207,18 +207,13 @@
   // (the floor is constant across full 24-gem grids). DPS: Σ(gemDamage − order 4.25 floor).
   function totalDmgOf(char) {
     var g = validGemsOf(char); if (!g.length) return null;
-    if (A && A.gridDamage && A.orderScore) return A.gridDamage(g, "dps") - g.length * A.orderScore(4.25);
+    if (A && A.gridDamage) return A.gridDamage(g, "dps");          // true lvl-0 grid damage
     var s = 0; for (var i = 0; i < g.length; i++) s += relDamage(g[i]); return s; // old-model fallback
   }
-  // SUPPORT total: Σ(supportDamage at each gem's PER-CORE order − that core's order 4.25
-  // floor), ÷3 (per-ally party damage).
+  // SUPPORT total: the lvl-0 grid party damage, ÷3 (per-ally).
   function totalPartyDmgOf(char) {
     var g = validGemsOf(char); if (!g.length) return null;
-    if (A && A.gridDamage && A.supportOrderValueForCore) {
-      var base = 0;
-      for (var i = 0; i < g.length; i++) base += 4.25 * A.supportOrderValueForCore(g[i].coreBase);
-      return (A.gridDamage(g, "support") - base) / 3;
-    }
+    if (A && A.gridDamage) return A.gridDamage(g, "support") / 3;
     var s = 0; for (var i = 0; i < g.length; i++) s += supportRelValue(g[i]) / 3; return s; // fallback
   }
   // "Quality" grade (0-100): the PAIRING-INVARIANT cost-fair quality — the geometric

@@ -1106,8 +1106,13 @@
     // switches to the support axis (party-damage value above a neutral support gem).
     var sup = isSupport();
     var valid = gems.filter(function (x) { return validateConfig(x).valid; });
-    var sumGrade = 0, sumDmg = 0;
-    valid.forEach(function (x) { sumGrade += gGrade(x); sumDmg += gRel(x); });
+    var sumGrade = 0;
+    valid.forEach(function (x) { sumGrade += gGrade(x); });
+    // loadout TOTAL = the true lvl-0 grid damage (diminishing returns + the per-core order
+    // floor), NOT Σ per-gem — per-gem figures are standalone and won't sum to it exactly.
+    var sumDmg = (A && A.gridDamage)
+      ? (sup ? A.gridDamage(valid, "support") / 3 : A.gridDamage(valid, "dps"))
+      : valid.reduce(function (s, x) { return s + gRel(x); }, 0);
     var avgGrade = valid.length ? sumGrade / valid.length : 0;
     var avgRank = rankFromGrade(avgGrade);
     var totalLabel = sup ? "Total % party dmg" : "Total % dmg";

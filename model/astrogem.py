@@ -41,12 +41,15 @@ STAT_BASELINES = {
 
 
 def _per_level_d(b):
-    return 100 * math.log((1 + b["other"] + b["gridAdd"]) / (1 + b["other"])) / b["levels"]
+    # marginal D of ONE more level on top of a full lvl-30 grid (the standalone yardstick):
+    # (1 + other + gridAdd + gridAdd/levels) / (1 + other + gridAdd).
+    base = 1 + b["other"] + b["gridAdd"]
+    return 100 * math.log((base + b["gridAdd"] / b["levels"]) / base)
 
 
-D_ATTACK_PER_LEVEL = _per_level_d(STAT_BASELINES["attackPower"])       # ~ 0.032549
-D_ADDDMG_PER_LEVEL = _per_level_d(STAT_BASELINES["additionalDamage"])  # ~ 0.059839
-D_BOSS_PER_LEVEL = _per_level_d(STAT_BASELINES["bossDamage"])          # ~ 0.082309
+D_ATTACK_PER_LEVEL = _per_level_d(STAT_BASELINES["attackPower"])       # ~ 0.03239
+D_ADDDMG_PER_LEVEL = _per_level_d(STAT_BASELINES["additionalDamage"])  # ~ 0.05929
+D_BOSS_PER_LEVEL = _per_level_d(STAT_BASELINES["bossDamage"])          # ~ 0.08127
 D_ORDER_PER_POINT = 100 * math.log(1 + STAT_BASELINES["order"]["perPoint"])  # ~ 0.159872
 WILLPOWER_OVER_ATTACK_RATIO = 2.4
 D_WILLPOWER_PER_COSTLEVEL = WILLPOWER_OVER_ATTACK_RATIO * D_ATTACK_PER_LEVEL  # ~ 0.078119

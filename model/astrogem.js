@@ -99,11 +99,15 @@
   // Per-line D (% damage) derived from the baselines above. Computed in code so
   // the assumptions stay visible/editable; these equal the numbers in the comment.
   function _perLevelD(b) {
-    return 100 * Math.log((1 + b.other + b.gridAdd) / (1 + b.other)) / b.levels;
+    // Marginal D of ONE more level on top of a full lvl-30 grid — the standalone yardstick
+    // each gem is rated against (a single gem can't see the rest of the grid):
+    //   (1 + other + gridAdd + gridAdd/levels) / (1 + other + gridAdd).
+    var base = 1 + b.other + b.gridAdd;
+    return 100 * Math.log((base + b.gridAdd / b.levels) / base);
   }
-  var D_ATTACK_PER_LEVEL  = _perLevelD(STAT_BASELINES.attackPower);      // ≈ 0.032549
-  var D_ADDDMG_PER_LEVEL  = _perLevelD(STAT_BASELINES.additionalDamage); // ≈ 0.059839
-  var D_BOSS_PER_LEVEL    = _perLevelD(STAT_BASELINES.bossDamage);       // ≈ 0.082309
+  var D_ATTACK_PER_LEVEL  = _perLevelD(STAT_BASELINES.attackPower);      // ≈ 0.03239
+  var D_ADDDMG_PER_LEVEL  = _perLevelD(STAT_BASELINES.additionalDamage); // ≈ 0.05929
+  var D_BOSS_PER_LEVEL    = _perLevelD(STAT_BASELINES.bossDamage);       // ≈ 0.08127
   var D_ORDER_PER_POINT   = 100 * Math.log(1 + STAT_BASELINES.order.perPoint); // ≈ 0.159872
   // Willpower keeps the old willpower:attack weight ratio (2.4 : 1.0) in D units.
   var WILLPOWER_OVER_ATTACK_RATIO = 2.4;
@@ -403,19 +407,45 @@
   }
   function gemRank(config) { return rankFromGrade(grade(config)); }
 
-  // ---- Whole-character (grid) aggregates ----  axis = "dps" (default) | "support"
-  // Raw absolute power = Σ each gem's actual damage (additive in log space). This is
-  // the LEADERBOARD total. DPS order is uniform; SUPPORT uses the PER-CORE order value
-  // (gem.coreBase 10001-10006), so a support grid is scored core-by-core.
+  // ---- Whole-character (grid) TOTAL damage — lvl-0, multiplicative ----  axis "dps" | "support"
+  // The true damage the whole grid adds over having NO grid. Effects accumulate ADDITIVELY
+  // into stat buckets (your per-level grid %), then each bucket is a multiplicative gain over
+  // your other gear: 100·ln[ Π_bucket (1+other+grid%)/(1+other) ]. Order/chaos is per-CORE —
+  // 0.0016 × points-above-17 — and the 6 cores MULTIPLY (1.0048⁶≈2.9% for a maxed grid).
+  // Diminishing returns + the 17-point core floor fall out naturally. NOTE: per-gem grades use
+  // the lvl-30 marginal yardstick, so the per-gem numbers do NOT sum to this — by design.
   function gridDamage(gems, axis) {
-    var s = 0;
+    if (axis === "support") return supportGridDamage(gems);
+    var B = STAT_BASELINES;
+    var lv = { "Attack Power": 0, "Additional Damage": 0, "Boss Damage": 0 }, core = {};
     for (var i = 0; i < gems.length; i++) {
       var g = gems[i];
-      s += (axis === "support")
-        ? supportDamage(g, supportOrderValueForCore(g.coreBase))
-        : gemDamage(g);
+      if (lv[g.effect1] != null) lv[g.effect1] += g.effect1Level || 0;
+      if (lv[g.effect2] != null) lv[g.effect2] += g.effect2Level || 0;
+      var cb = g.coreBase || 0; core[cb] = (core[cb] || 0) + (g.orderLevel || 0);
     }
-    return s;
+    function buk(s, lvl) { return Math.log((1 + s.other + lvl * (s.gridAdd / s.levels)) / (1 + s.other)); }
+    var d = buk(B.attackPower, lv["Attack Power"]) + buk(B.additionalDamage, lv["Additional Damage"]) + buk(B.bossDamage, lv["Boss Damage"]);
+    // order/chaos: per core, 0.0016 × (points − 17 floor), the 6 cores multiply
+    for (var k in core) d += Math.log(1 + B.order.perPoint * Math.max(0, core[k] - 17));
+    return 100 * d;
+  }
+  // SUPPORT grid total — same shape as the DPS total. Support EFFECTS stay linear (the
+  // support per-level party values are flat — no bucket diminishing in this model), and
+  // ORDER/chaos is per-CORE with the 17-point floor, the 6 cores MULTIPLYING (each core
+  // carries its own per-point party rate). Party scale; the UI shows ÷3 (per-ally).
+  function supportGridDamage(gems) {
+    var eff = 0, core = {};
+    for (var i = 0; i < gems.length; i++) {
+      var g = gems[i];
+      eff += supportEffectScore(g.effect1, g.effect1Level) + supportEffectScore(g.effect2, g.effect2Level);
+      var cb = g.coreBase || 0;
+      if (!core[cb]) core[cb] = { pts: 0, rate: Math.exp(supportOrderValueForCore(cb) / 100) - 1 };
+      core[cb].pts += g.orderLevel || 0;
+    }
+    var ord = 0;
+    for (var k in core) ord += 100 * Math.log(1 + core[k].rate * Math.max(0, core[k].pts - 17));
+    return eff + ord;
   }
   // Cost-fair quality = Σ ln(value) = log of the product of gem values. Pairing-
   // invariant (equivalent builds tie); the per-gem grades roll up into this. axis-aware.
