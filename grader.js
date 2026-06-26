@@ -1315,6 +1315,12 @@ presetToggleHtml(data) +
     var region = $("gr-region").value;
     var name = ($("gr-name").value || "").trim();
     if (!name) { setPullStatus("Enter a character name.", "err"); return; }
+    // For a refresh of the CURRENTLY-shown character, remember its pulledAt so the queue poll waits
+    // for genuinely NEWER data instead of re-rendering the same stale cache the refresh is replacing.
+    var since = (refresh && lastLoadout && lastLoadout.pulledAt &&
+                 lastLoadout.region === region &&
+                 String(lastLoadout.name || "").toLowerCase() === name.toLowerCase())
+                ? lastLoadout.pulledAt : 0;
 
     setPullStatus((refresh ? "Re-pulling " : "Fetching ") + name + " (" + region + ")…", "working");
     $("gr-pull-go").disabled = true;
@@ -1344,9 +1350,9 @@ presetToggleHtml(data) +
       }
       // Not cached -> queued. Show the queued panel and poll until the drain caches it.
       if (d.queued) {
-        setPullStatus("Queued — fetching " + name + "…", "");
+        setPullStatus((refresh ? "Re-queued — refreshing " : "Queued — fetching ") + name + "…", "");
         showQueued(region, name, d);
-        startPoll(region, name);
+        startPoll(region, name, since);
         return;
       }
       // Anything else: an error / rate-limit / busy / monthly-budget message.
@@ -1382,8 +1388,9 @@ presetToggleHtml(data) +
       '<div class="gr-queued-sub">Fetching it now — this updates automatically when it’s ready. <span id="gr-queued-timer">checking…</span></div></div>' +
       '</div></div>';
   }
-  function startPoll(region, name) {
+  function startPoll(region, name, since) {
     stopPoll();
+    since = since || 0;
     var started = Date.now(), MAX_MS = 5 * 60 * 1000;
     grPollTimer = setInterval(function () {
       if (Date.now() - started > MAX_MS) {
@@ -1395,16 +1402,21 @@ presetToggleHtml(data) +
       var url = WORKER_URL.replace(/\/+$/, "") + "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) + "&queue=1" + (k ? "&k=" + encodeURIComponent(k) : "");
       fetch(url).then(function (resp) { return resp.json().then(function (data) { return { ok: resp.ok, data: data }; }); }).then(function (r) {
         var d = r.data || {};
-        if (d.cached || (Array.isArray(d.gems) && d.gems.length)) {
+        var hasGems = Array.isArray(d.gems) && d.gems.length;
+        // Done only when the cache is genuinely NEWER than what we're replacing. A refresh of a
+        // cached character returns the STALE cache on this poll until the drain re-fetches it —
+        // rendering that would look like the refresh did nothing, so we keep waiting instead.
+        if ((d.cached || hasGems) && (d.pulledAt || 0) > since) {
           stopPoll();
           lastLoadout = d; grPreset = "raid"; grMode = defaultModeFor(d);
           var rb = $("gr-pull-refresh"); if (rb) rb.style.display = "";
           setPullStatus("Graded " + ((d.gems || []).length) + " gems.", "");
           renderLoadout(d);
-        } else if (d.queued) {
-          var p = $("gr-queued-pos"); if (p) p.innerHTML = queueLine(d);
+        } else if (d.queued || d.cached || hasGems) {
+          // still working: genuinely queued (show live position) OR a stale-cache hit mid-refresh
+          if (d.queued) { var p = $("gr-queued-pos"); if (p) p.innerHTML = queueLine(d); }
           var t = $("gr-queued-timer"); if (t) t.innerHTML = "checking… (" + Math.round((Date.now() - started) / 1000) + "s)";
-        } else if (!r.ok || (d.error && !d.gems)) {
+        } else if (!r.ok || (d.error && !hasGems)) {
           stopPoll();
           setPullStatus(d.error || "Lookup failed.", "err");
           $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(d.error || "Lookup failed.") + '</div></div>';

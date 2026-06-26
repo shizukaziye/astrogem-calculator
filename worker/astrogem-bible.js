@@ -220,10 +220,11 @@ const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent 
 const BUILTAT_KEY = "lb:builtat";            // ms timestamp the snapshot was last rebuilt by the cron.
 const QP = "q:p:";                           // premium lookup-queue key prefix (region+name ride in KV metadata).
 const QF = "q:f:";                           // free lookup-queue key prefix.
-const DRAIN_PER_RUN = 10;                     // characters cached per cron run (~10/min ≈ 14400/day); the monthly guard below caps the total.
+const DRAIN_PER_RUN = 20;                     // max characters cached per cron run (~20/min) — kept ABOVE the 10/min enqueue gate so a backlog actually drains instead of just holding. Time-budgeted below so it never overruns the 60s cron; monthly guard caps the total.
 const MONTHLY_CHAR_BUDGET = 300000;          // hard cap on characters cached per calendar month (~2 writes each ≈ 66% of the 1M/mo write budget → no overage, ever).
 const USAGE_KEY = "usage:drained";           // {month:"YYYY-MM", count} — characters cached this month (the budget guard).
-const DRAIN_DELAY_MS = 2000;                 // pause between lostark.bible fetches within a drain run (gentle on the upstream).
+const DRAIN_DELAY_MS = 1500;                 // pause between lostark.bible fetches within a drain run (gentle on the upstream).
+const DRAIN_BUDGET_MS = 50000;               // stop a drain run after ~50s no matter the count, so it never overruns the 60s cron (margin for the snapshot rebuild + no overlapping runs).
 const QUEUE_TTL_S = 7 * 24 * 60 * 60;        // a queued request expires after 7 days if never drained.
 const SNAPSHOT_MIN_INTERVAL_MS = 30 * 60 * 1000; // rebuild the leaderboard snapshot at most every ~30 min (the read-heavy part).
 // Access token the GATED client appends as ?k= (== gate.js's salted hash). Requests without it
@@ -523,12 +524,13 @@ async function drainQueue(env) {
   let used = (usage && usage.month === month) ? (usage.count | 0) : 0;
   if (used >= MONTHLY_CHAR_BUDGET) return;
   let processed = 0, cached = 0, stop = false;
+  const t0 = Date.now();
   for (const prefix of [QP, QF]) {
     if (stop || processed >= DRAIN_PER_RUN) break;
     let list;
     try { list = await env.CHARS.list({ prefix: prefix, limit: DRAIN_PER_RUN }); } catch (e) { break; }
     for (const k of list.keys) {
-      if (processed >= DRAIN_PER_RUN) break;
+      if (processed >= DRAIN_PER_RUN || Date.now() - t0 > DRAIN_BUDGET_MS) { stop = true; break; }
       const md = k.metadata || {};
       if (!md.region || !md.name) { await env.CHARS.delete(k.name); continue; } // malformed -> drop
       let res;
