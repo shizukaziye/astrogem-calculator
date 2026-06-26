@@ -151,6 +151,52 @@ def order_score(order_level):
     return order_level * SCORING["orderPerPoint"]
 
 
+# ---- Willpower as a MULTIPLIER on damage (the grading model) ----
+# Mirrors astrogem.js: M(cost) calibrated so the 3 perfect gems (wp5, order5, top-2
+# effects @5) tie exactly; cost 6+ linear at the cost4->5 slope.
+def _perfect_damage(base_cost):
+    pool = EFFECT_POOLS[base_cost]
+    v = sorted((effect_score(e, 5) for e in pool), reverse=True)
+    return v[0] + v[1] + order_score(5)
+
+
+def _build_wp_mult():
+    m = {3: _perfect_damage(10) / _perfect_damage(8),
+         4: _perfect_damage(10) / _perfect_damage(9),
+         5: 1.0}
+    slope = m[4] - m[5]
+    for c in range(6, 10):
+        m[c] = 1 - slope * (c - 5)
+    return m
+
+
+_WP_MULT = _build_wp_mult()
+
+
+def willpower_multiplier(cost):
+    if cost <= 3:
+        return _WP_MULT[3]
+    if cost >= 9:
+        return _WP_MULT[9]
+    if cost in _WP_MULT:
+        return _WP_MULT[cost]
+    lo = int(math.floor(cost))
+    return _WP_MULT[lo] + (_WP_MULT[lo + 1] - _WP_MULT[lo]) * (cost - lo)
+
+
+def gem_damage(config):
+    # Damage only (effects + order), NO willpower.
+    return (effect_score(config["effect1"], config["effect1Level"])
+            + effect_score(config["effect2"], config["effect2Level"])
+            + order_score(config["orderLevel"]))
+
+
+def gem_value(config):
+    # Grading value = damage x willpower multiplier.
+    return gem_damage(config) * willpower_multiplier(
+        willpower_cost(config["baseCost"], config["willpowerLevel"]))
+
+
 def score(config):
     wpc = willpower_cost(config["baseCost"], config["willpowerLevel"])
     return (
@@ -162,8 +208,8 @@ def score(config):
 
 
 def damage_percent(config):
-    """Exact multiplicative % damage of the gem: (e^(D/100) - 1) * 100, D = score."""
-    return (math.exp(score(config) / 100.0) - 1) * 100
+    """Actual % damage (no willpower): (e^(gem_damage/100) - 1) * 100."""
+    return (math.exp(gem_damage(config) / 100.0) - 1) * 100
 
 
 # -------------------- 0-100 grade + letter rank --------------------
@@ -206,16 +252,45 @@ def grade_bounds():
     return _GRADE_BOUNDS
 
 
+_VALUE_BOUNDS = None
+
+
+def value_bounds():
+    global _VALUE_BOUNDS
+    if _VALUE_BOUNDS is not None:
+        return _VALUE_BOUNDS
+    lo, hi = float("inf"), float("-inf")
+    for cost in (8, 9, 10):
+        pool = EFFECT_POOLS[cost]
+        for i in range(len(pool)):
+            for j in range(i + 1, len(pool)):
+                for wp in range(1, 6):
+                    for o in range(1, 6):
+                        for a in range(1, 6):
+                            for b in range(1, 6):
+                                v = gem_value({
+                                    "baseCost": cost, "willpowerLevel": wp, "orderLevel": o,
+                                    "effect1": pool[i], "effect1Level": a,
+                                    "effect2": pool[j], "effect2Level": b,
+                                })
+                                if v < lo:
+                                    lo = v
+                                if v > hi:
+                                    hi = v
+    _VALUE_BOUNDS = {"min": lo, "max": hi}
+    return _VALUE_BOUNDS
+
+
 def grade(config):
-    bounds = grade_bounds()
-    b = bounds.get(config["baseCost"], bounds["all"])  # grade vs the perfect gem of THIS type
-    g = 100 * (score(config) - b["min"]) / (b["max"] - b["min"])
+    # GLOBAL value-normalization: every perfect gem ties at 100.
+    b = value_bounds()
+    g = 100 * (gem_value(config) - b["min"]) / (b["max"] - b["min"])
     return round(max(0.0, min(100.0, g)) * 10) / 10
 
 
 def grade_to_score(g, base_cost=None):
-    bounds = grade_bounds()
-    b = bounds[base_cost] if (base_cost is not None and base_cost in bounds) else bounds["all"]
+    # Inverts the global value-grade -> the gemValue threshold (base_cost kept for sig).
+    b = value_bounds()
     return b["min"] + (max(0.0, min(100.0, g)) / 100) * (b["max"] - b["min"])
 
 
@@ -298,6 +373,93 @@ def support_rel_value(config):
     return support_score(config) - support_baseline(config["baseCost"])
 
 
+# ---- SUPPORT multiplicative grading (parallel to the DPS gem_value model) ----
+SUPPORT_ORDER_PER_CORE = {
+    10001: 0.0694,  # Order Sun   (Ally Attack)
+    10002: 0.0640,  # Order Moon  (Ally Damage)
+    10003: 0.0486,  # Order Star  (serenade)
+    10004: 0.0753,  # Chaos Sun   (Ally Damage)
+    10005: 0.1044,  # Chaos Moon  (Brand - strongest)
+    10006: 0.0869,  # Chaos Star  (Weapon Power)
+}
+
+
+def support_order_value_for_core(core_base):
+    v = SUPPORT_ORDER_PER_CORE.get(core_base)
+    return SUPPORT_SCORING["orderPerPoint"] if v is None else v
+
+
+def support_damage(config, order_val=None):
+    ov = SUPPORT_SCORING["orderPerPoint"] if order_val is None else order_val
+    return (support_effect_score(config["effect1"], config["effect1Level"])
+            + support_effect_score(config["effect2"], config["effect2Level"])
+            + config["orderLevel"] * ov)
+
+
+def _sup_perfect_damage(base_cost):
+    pool = EFFECT_POOLS[base_cost]
+    v = sorted((support_effect_score(e, 5) for e in pool), reverse=True)
+    return v[0] + v[1] + 5 * SUPPORT_SCORING["orderPerPoint"]
+
+
+def _build_sup_wp_mult():
+    m = {3: _sup_perfect_damage(10) / _sup_perfect_damage(8),
+         4: _sup_perfect_damage(10) / _sup_perfect_damage(9),
+         5: 1.0}
+    slope = m[4] - m[5]
+    for c in range(6, 10):
+        m[c] = 1 - slope * (c - 5)
+    return m
+
+
+_SUP_WP_MULT = _build_sup_wp_mult()
+
+
+def support_willpower_multiplier(cost):
+    if cost <= 3:
+        return _SUP_WP_MULT[3]
+    if cost >= 9:
+        return _SUP_WP_MULT[9]
+    if cost in _SUP_WP_MULT:
+        return _SUP_WP_MULT[cost]
+    lo = int(math.floor(cost))
+    return _SUP_WP_MULT[lo] + (_SUP_WP_MULT[lo + 1] - _SUP_WP_MULT[lo]) * (cost - lo)
+
+
+def support_value(config):
+    return support_damage(config) * support_willpower_multiplier(
+        willpower_cost(config["baseCost"], config["willpowerLevel"]))
+
+
+_SUPPORT_VALUE_BOUNDS = None
+
+
+def support_value_bounds():
+    global _SUPPORT_VALUE_BOUNDS
+    if _SUPPORT_VALUE_BOUNDS is not None:
+        return _SUPPORT_VALUE_BOUNDS
+    lo, hi = float("inf"), float("-inf")
+    for cost in (8, 9, 10):
+        pool = EFFECT_POOLS[cost]
+        for i in range(len(pool)):
+            for j in range(i + 1, len(pool)):
+                for wp in range(1, 6):
+                    for o in range(1, 6):
+                        for a in range(1, 6):
+                            for b in range(1, 6):
+                                v = support_value({
+                                    "baseCost": cost, "willpowerLevel": wp, "orderLevel": o,
+                                    "effect1": pool[i], "effect1Level": a,
+                                    "effect2": pool[j], "effect2Level": b,
+                                })
+                                if v < lo:
+                                    lo = v
+                                if v > hi:
+                                    hi = v
+    _SUPPORT_VALUE_BOUNDS = {"min": lo, "max": hi}
+    return _SUPPORT_VALUE_BOUNDS
+
+
 _SUPPORT_GRADE_BOUNDS = None
 
 
@@ -330,8 +492,9 @@ def support_grade_bounds():
 
 
 def support_grade(config):
-    b = support_grade_bounds()
-    g = 100 * (support_score(config) - b["min"]) / (b["max"] - b["min"])
+    # GLOBAL value-normalization over support_value (perfect support gems read 100).
+    b = support_value_bounds()
+    g = 100 * (support_value(config) - b["min"]) / (b["max"] - b["min"])
     return round(max(0.0, min(100.0, g)) * 10) / 10
 
 
@@ -341,11 +504,8 @@ def support_rank(config):
 
 
 def support_grade_to_score(g):
-    # Inverse of support_grade(): the support score at a 0-100 support grade.
-    # Mirror of grade_to_score using support_grade_bounds (parallel to JS
-    # supportGradeToScore). Turns a grade-based baseline into the support-score
-    # threshold the support value/verdict logic uses.
-    b = support_grade_bounds()
+    # Value-based inverse, parallel to grade_to_score (support_value distribution).
+    b = support_value_bounds()
     return b["min"] + (max(0.0, min(100.0, g)) / 100) * (b["max"] - b["min"])
 
 
@@ -555,14 +715,13 @@ def score_distribution_for_tier(base_cost, tier, axis="dps"):
         parts = _partitions_of_sum(s)
         part_w = 1.0 / len(parts)
         for (wp, ordv, lv_a, lv_b) in parts:
-            if support:
-                base_score = (support_willpower_score(willpower_cost(base_cost, wp))
-                              + support_order_score(ordv))
-            else:
-                base_score = willpower_score(willpower_cost(base_cost, wp)) + order_score(ordv)
+            # NEW multiplicative model: value = (order damage + effects) x M(cost).
+            cost = willpower_cost(base_cost, wp)
+            ord_d = support_order_score(ordv) if support else order_score(ordv)
+            mw = support_willpower_multiplier(cost) if support else willpower_multiplier(cost)
             for (e_a, e_b) in pairs:
-                sc1 = base_score + es_fn(e_a, lv_a) + es_fn(e_b, lv_b)
-                sc2 = base_score + es_fn(e_a, lv_b) + es_fn(e_b, lv_a)
+                sc1 = (ord_d + es_fn(e_a, lv_a) + es_fn(e_b, lv_b)) * mw
+                sc2 = (ord_d + es_fn(e_a, lv_b) + es_fn(e_b, lv_a)) * mw
                 w = p_sum * part_w * pair_w * 0.5
                 k1 = _round_key(sc1)
                 k2 = _round_key(sc2)
