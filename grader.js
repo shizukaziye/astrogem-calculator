@@ -397,6 +397,12 @@
 '  #tab-grader .gr-queued-pos{font-size:13px;font-weight:600;color:var(--axis,var(--accent));margin-top:5px}' +
 '  #tab-grader .gr-queued-sub{font-size:12px;color:var(--dim);margin-top:4px}' +
 '  #tab-grader #gr-queued-timer{color:var(--axis,var(--accent))}' +
+'  #tab-grader #gr-refresh-banner:empty{display:none}' +
+'  #tab-grader .gr-refresh-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px;padding:9px 13px;border-radius:9px;background:rgba(127,127,127,0.10);border:1px solid var(--axis,var(--accent));font-size:13px}' +
+'  #tab-grader .gr-refresh-bar b{color:var(--axis,var(--accent))}' +
+'  #tab-grader .gr-rb-dim{color:var(--dim)}' +
+'  #tab-grader .gr-rb-spin{display:inline-block;animation:gr-rb-spin 1.1s linear infinite}' +
+'  @keyframes gr-rb-spin{to{transform:rotate(360deg)}}' +
 '  #tab-grader .gr-freenote .gr-unlock{color:var(--axis,var(--accent));cursor:pointer;white-space:nowrap}' +
 '  #tab-grader .gr-freenote .gr-unlock:hover{text-decoration:underline}' +
 '  @media(max-width:520px){#tab-grader .gr-pullctl .fld-name{flex:1 1 160px;width:auto}}' +
@@ -617,6 +623,7 @@
 '</div>' +
 
 // ---- RESULTS ----
+'<div id="gr-refresh-banner"></div>' +
 '<section id="gr-result"></section>' +
 
 // ---- methodology ----
@@ -1317,17 +1324,19 @@ presetToggleHtml(data) +
     if (!name) { setPullStatus("Enter a character name.", "err"); return; }
     // For a refresh of the CURRENTLY-shown character, remember its pulledAt so the queue poll waits
     // for genuinely NEWER data instead of re-rendering the same stale cache the refresh is replacing.
-    var since = (refresh && lastLoadout && lastLoadout.pulledAt &&
+    // Refreshing the character that's CURRENTLY shown (cached)? Keep its loadout on screen with a
+    // queue banner over it, instead of blanking it for the "queued" panel.
+    var refreshingCached = !!(refresh && lastLoadout && Array.isArray(lastLoadout.gems) && lastLoadout.gems.length &&
                  lastLoadout.region === region &&
-                 String(lastLoadout.name || "").toLowerCase() === name.toLowerCase())
-                ? lastLoadout.pulledAt : 0;
+                 String(lastLoadout.name || "").toLowerCase() === name.toLowerCase());
+    var since = refreshingCached ? (lastLoadout.pulledAt || 0) : 0;
 
     setPullStatus((refresh ? "Re-pulling " : "Fetching ") + name + " (" + region + ")…", "working");
     $("gr-pull-go").disabled = true;
     var refreshBtn = $("gr-pull-refresh");
     if (refreshBtn) refreshBtn.disabled = true;
 
-    stopPoll(); // cancel any in-flight queue poll from a previous lookup
+    stopPoll(); clearRefreshBanner(); // cancel any in-flight queue poll + clear a prior refresh banner
     var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
     var url = WORKER_URL.replace(/\/+$/, "") +
       "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) +
@@ -1348,11 +1357,18 @@ presetToggleHtml(data) +
         renderLoadout(r.data);
         return;
       }
-      // Not cached -> queued. Show the queued panel and poll until the drain caches it.
+      // Not cached -> queued. A refresh of the shown character keeps the cached loadout visible
+      // under a queue banner; a first-time lookup shows the full "queued" panel.
       if (d.queued) {
-        setPullStatus((refresh ? "Re-queued — refreshing " : "Queued — fetching ") + name + "…", "");
-        showQueued(region, name, d);
-        startPoll(region, name, since);
+        if (refreshingCached) {
+          setPullStatus("Re-pulling " + name + "… (showing cached for now)", "working");
+          renderLoadout(lastLoadout);
+          showRefreshBanner(region, name, d);
+        } else {
+          setPullStatus((refresh ? "Re-queued — refreshing " : "Queued — fetching ") + name + "…", "");
+          showQueued(region, name, d);
+        }
+        startPoll(region, name, since, refreshingCached);
         return;
       }
       // Anything else: an error / rate-limit / busy / monthly-budget message.
@@ -1377,6 +1393,19 @@ presetToggleHtml(data) +
     var eta = (d.etaMinutes > 0) ? (" · ~" + d.etaMinutes + " min") : "";
     return (d.position === 1 ? "Next up" : ("Position " + d.position + " of " + d.total)) + eta;
   }
+  function clearRefreshBanner() { var b = $("gr-refresh-banner"); if (b) b.innerHTML = ""; }
+  // Refresh of a CACHED character: a thin bar ABOVE the (still-shown) cached loadout carrying the
+  // live queue position/ETA, so the user sees the cached grades AND the refresh progress at once.
+  function showRefreshBanner(region, name, d) {
+    var b = $("gr-refresh-banner"); if (!b) return;
+    var ql = queueLine(d);
+    b.innerHTML =
+      '<div class="gr-refresh-bar"><span class="gr-rb-spin">🔄</span><span>' +
+      '<b>Refreshing ' + esc((d && d.name) || name) + '</b>' +
+      (ql ? ' — <span id="gr-rb-pos">' + ql + '</span>' : '') +
+      ' <span class="gr-rb-dim">· cached grades shown below · <span id="gr-rb-timer">checking…</span></span>' +
+      '</span></div>';
+  }
   function showQueued(region, name, d) {
     var disp = (d && d.name) || name;
     var tier = (d && d.tier === "premium") ? "priority queue" : "queue";
@@ -1388,14 +1417,16 @@ presetToggleHtml(data) +
       '<div class="gr-queued-sub">Fetching it now — this updates automatically when it’s ready. <span id="gr-queued-timer">checking…</span></div></div>' +
       '</div></div>';
   }
-  function startPoll(region, name, since) {
+  function startPoll(region, name, since, cachedRefresh) {
     stopPoll();
     since = since || 0;
     var started = Date.now(), MAX_MS = 5 * 60 * 1000;
+    // update whichever progress line is on screen (the refresh banner's, or the queued panel's)
+    function tick(html) { var t = $(cachedRefresh ? "gr-rb-timer" : "gr-queued-timer"); if (t) t.innerHTML = html; }
     grPollTimer = setInterval(function () {
       if (Date.now() - started > MAX_MS) {
         stopPoll();
-        var t0 = $("gr-queued-timer"); if (t0) t0.innerHTML = "still queued — check back in a bit, or search again.";
+        tick(cachedRefresh ? "still refreshing — try again in a bit." : "still queued — check back in a bit, or search again.");
         return;
       }
       var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
@@ -1407,19 +1438,21 @@ presetToggleHtml(data) +
         // cached character returns the STALE cache on this poll until the drain re-fetches it —
         // rendering that would look like the refresh did nothing, so we keep waiting instead.
         if ((d.cached || hasGems) && (d.pulledAt || 0) > since) {
-          stopPoll();
+          stopPoll(); clearRefreshBanner();
           lastLoadout = d; grPreset = "raid"; grMode = defaultModeFor(d);
           var rb = $("gr-pull-refresh"); if (rb) rb.style.display = "";
           setPullStatus("Graded " + ((d.gems || []).length) + " gems.", "");
           renderLoadout(d);
         } else if (d.queued || d.cached || hasGems) {
-          // still working: genuinely queued (show live position) OR a stale-cache hit mid-refresh
-          if (d.queued && d.position) { var p = $("gr-queued-pos"); if (p) p.innerHTML = queueLine(d); } // cheap poll omits position; keep the one shown on enqueue
-          var t = $("gr-queued-timer"); if (t) t.innerHTML = "checking… (" + Math.round((Date.now() - started) / 1000) + "s)";
+          // still working: genuinely queued (show live position) OR a stale-cache hit mid-refresh.
+          // cheap poll omits position; keep the one shown on enqueue.
+          if (d.queued && d.position) { var p = $(cachedRefresh ? "gr-rb-pos" : "gr-queued-pos"); if (p) p.innerHTML = queueLine(d); }
+          tick("checking… (" + Math.round((Date.now() - started) / 1000) + "s)");
         } else if (!r.ok || (d.error && !hasGems)) {
-          stopPoll();
+          stopPoll(); clearRefreshBanner();
           setPullStatus(d.error || "Lookup failed.", "err");
-          $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(d.error || "Lookup failed.") + '</div></div>';
+          // on a cached refresh keep the cached loadout on screen; only the full panel shows the error
+          if (!cachedRefresh) $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(d.error || "Lookup failed.") + '</div></div>';
         }
       }).catch(function () { /* transient — keep polling */ });
     }, 8000);
