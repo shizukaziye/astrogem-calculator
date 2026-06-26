@@ -1329,7 +1329,6 @@ presetToggleHtml(data) +
       if (d.queued) {
         setPullStatus("Queued — fetching " + name + "…", "");
         showQueued(region, name, d);
-        if (typeof d.remaining === "number") setFreeStatus(d.remaining);
         startPoll(region, name);
         return;
       }
@@ -1337,7 +1336,7 @@ presetToggleHtml(data) +
       var msg = d.error || "Worker returned an error.";
       setPullStatus(msg, "err");
       $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(msg) + '</div></div>';
-      if (d.hourlyLimit || d.monthlyBudget) setFreeStatus(0);
+      if (d.degraded) setFreeStatus(true);
     }).catch(function (e) {
       setPullStatus("Request failed: " + (e && e.message || e), "err");
     }).then(function () {
@@ -1389,26 +1388,21 @@ presetToggleHtml(data) +
     }, 8000);
   }
 
-  // The "X/5 free pulls left today" note under the pull buttons (hidden for password-holders,
-  // who are unlimited). Pass a number to update the remembered count; call with none to re-render.
-  var grFreeRemaining = null;
-  function setFreeStatus(remaining, premium, degraded) {
-    if (typeof remaining === "number") grFreeRemaining = remaining;
+  // The note under the pull buttons. Cached lookups are free & unlimited; NEW characters are paced to
+  // ~1 lookup / 5s per IP for everyone (no hourly cap). The password only adds queue priority + access
+  // while the site is degraded. Call setFreeStatus(true) for the "site busy" state; setFreeStatus() re-renders.
+  function setFreeStatus(degraded) {
     var el = $("gr-free-note");
     if (!el) return;
     if (degraded) {
       el.innerHTML = '<span class="gr-cap">The site is very busy — new-character lookups are paused. Cached characters still work.</span>';
       return;
     }
-    if (premium || (window.astrogemGate && window.astrogemGate.isUnlocked())) {
-      el.innerHTML = '<span class="gr-prem">&#10003; Password access · priority queue + faster lookups</span>';
+    if (window.astrogemGate && window.astrogemGate.isUnlocked()) {
+      el.innerHTML = '<span class="gr-prem">&#10003; Password access · priority queue + access while the site is busy</span>';
       return;
     }
-    var left = (grFreeRemaining == null) ? 10 : grFreeRemaining;
-    var head = (left <= 0)
-      ? '<span class="gr-cap">No new-character lookups left this hour.</span> Cached characters are still free'
-      : '<b>' + left + '</b> of 10 new-character lookups left this hour · cached are free';
-    el.innerHTML = head + ' · <a class="gr-unlock" onclick="window.__grUnlock()">Have the password? Unlock for priority &rarr;</a>';
+    el.innerHTML = 'Cached characters are free &amp; instant · new characters: <b>~1 lookup / 5s</b> · <a class="gr-unlock" onclick="window.__grUnlock()">Have the password? Unlock for priority &rarr;</a>';
   }
   window.__grUnlock = function () {
     if (window.astrogemGate) window.astrogemGate.ensureUnlocked().then(function () { setFreeStatus(); });

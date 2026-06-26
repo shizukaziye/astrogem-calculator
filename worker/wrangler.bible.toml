@@ -39,17 +39,11 @@ namespace_id = "1000"
 limit = 60
 period = 60
 
-# Free (non-password) pulls: 1 per minute (the 10-per-hour cap is enforced in KV behind this).
+# Per-IP lookup throttle for EVERYONE: ~1 new-character lookup per 5s (2 per 10s; period must be 10 or 60).
+# Cached lookups bypass this entirely — it only paces fresh lostark.bible fetches/enqueues. The password
+# no longer changes this rate (it only adds queue priority + access while the site is degraded).
 [[ratelimits]]
-name = "FREE_THROTTLE"
-namespace_id = "1001"
-[ratelimits.simple]
-limit = 1
-period = 60
-
-# Password pulls: ~1 per 5s (2 per 10s, since period must be 10 or 60).
-[[ratelimits]]
-name = "PREMIUM_THROTTLE"
+name = "LOOKUP_THROTTLE"
 namespace_id = "1002"
 [ratelimits.simple]
 limit = 2
@@ -64,7 +58,7 @@ limit = 3
 period = 60
 
 # GLOBAL overload gate: ONE shared counter across all requests (fixed key in code, not per-IP).
-# ~167/min ≈ 10k/hour; when tripped the worker degrades (free cut off, password -> free rate).
+# When tripped (limit below) the worker degrades: free (no-password) lookups are cut off; password lookups keep working at their normal 1/5s.
 # period max is 60s, so this is a rolling per-minute proxy for "10k/hour" that auto-recovers.
 [[ratelimits]]
 name = "GLOBAL_GATE"
@@ -73,7 +67,7 @@ namespace_id = "1004"
 limit = 1000
 period = 60
 
-# Global enqueue cap: ~2 NEW characters queued per minute site-wide, matching the drain rate so the
+# Global enqueue cap: ~10 NEW characters queued per minute site-wide, matching the drain rate so the
 # queue (and thus monthly writes) can never grow faster than we empty it. period must be 10 or 60.
 [[ratelimits]]
 name = "ENQUEUE_GATE"

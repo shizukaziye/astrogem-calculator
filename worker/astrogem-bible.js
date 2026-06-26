@@ -218,7 +218,6 @@ const INDEX_KEY = "__index__";               // KV key holding a JSON array of a
 const SNAPSHOT_KEY = "lb:snapshot";          // single KV key holding the whole leaderboard list (?list=1 serves it).
 const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent character write (plain overwrite, race-free).
 const BUILTAT_KEY = "lb:builtat";            // ms timestamp the snapshot was last rebuilt by the cron.
-const FREE_HOURLY_CAP = 10;                  // free (un-gated) pulls per HOUR per IP; the edge throttle paces them to 1/min.
 const QP = "q:p:";                           // premium lookup-queue key prefix (region+name ride in KV metadata).
 const QF = "q:f:";                           // free lookup-queue key prefix.
 const DRAIN_PER_RUN = 10;                     // characters cached per cron run (~10/min ≈ 14400/day); the monthly guard below caps the total.
@@ -555,7 +554,7 @@ async function drainQueue(env) {
 // Add a not-yet-cached character to the premium/free queue, gated by a GLOBAL enqueue rate so the
 // queue can't be filled faster than the drain empties it (keeps monthly writes bounded). region+name
 // stored as KV metadata (the drain reads them from list() without an extra get).
-async function enqueueChar(env, region, name, premium, remaining) {
+async function enqueueChar(env, region, name, premium) {
   if (env.ENQUEUE_GATE) {
     const g = await env.ENQUEUE_GATE.limit({ key: "enqueue" });
     if (!g.success) return json({ error: "The lookup queue is busy right now — please try again in a moment.", queueBusy: true, rateLimited: true, retryAfterMs: 30000 }, 429);
@@ -567,26 +566,7 @@ async function enqueueChar(env, region, name, premium, remaining) {
     }
     try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
   }
-  return json({ queued: true, justQueued: true, tier: premium ? "premium" : "free", region: region, name: normalizeName(name), remaining: remaining }, 200);
-}
-
-// Reserve one of a NON-password client's free HOURLY pulls (by IP, UTC hour bucket). The 1/min
-// edge throttle gates this so it's read at most ~1x/min/IP. Records expire after 2h. -> {ok, remaining}.
-async function reserveFreeHourly(env, ip) {
-  if (!env || !env.CHARS) return { ok: true, remaining: FREE_HOURLY_CAP };
-  const hour = Math.floor(Date.now() / 3600000); // UTC hour bucket
-  const k = "rl:" + (await sha256Hex(ip));
-  const cur = await kvGetJson(env, k);
-  let count = (cur && cur.hour === hour) ? (cur.count | 0) : 0;
-  if (count >= FREE_HOURLY_CAP) return { ok: false, remaining: 0 };
-  count += 1;
-  try { await env.CHARS.put(k, JSON.stringify({ hour: hour, count: count }), { expirationTtl: 7200 }); } catch (e) {}
-  return { ok: true, remaining: FREE_HOURLY_CAP - count };
-}
-
-async function sha256Hex(str) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
-  return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+  return json({ queued: true, justQueued: true, tier: premium ? "premium" : "free", region: region, name: normalizeName(name) }, 200);
 }
 
 export default {
@@ -668,26 +648,17 @@ export default {
       }
     }
 
-    // Rate-limit the fetch/enqueue. While degraded, free clients get nothing; password = ~1/5s; free = 1/min + 10/hr.
+    // Rate-limit the fetch/enqueue. EVERYONE (password or not) gets one lookup per ~5s per IP. The
+    // password no longer buys a faster rate — it only (a) keeps working while the site is degraded
+    // and (b) enqueues into the PRIORITY queue (drained first). Cached lookups already returned above
+    // with no limit; the ENQUEUE_GATE + monthly budget guard bound total fill site-wide.
     if (degraded && !premium) return json({ error: busyMsg, rateLimited: true, degraded: true }, 429);
-    if (premium && !degraded) {
-      if (env.PREMIUM_THROTTLE) {
-        const p = await env.PREMIUM_THROTTLE.limit({ key: ip });
-        if (!p.success) return json({ error: "Please wait a few seconds between requests.", rateLimited: true, retryAfterMs: 5000, premiumThrottle: true }, 429);
-      }
-      if (wantQueue) return enqueueChar(env, region, name, true);
-      return handleCharacter(env, region, name, refresh, { premium: true, nextMs: 5000 });
+    if (env.LOOKUP_THROTTLE) {
+      const t = await env.LOOKUP_THROTTLE.limit({ key: ip });
+      if (!t.success) return json({ error: "One new-character lookup every 5 seconds — please wait a moment (cached characters are unlimited).", rateLimited: true, retryAfterMs: 5000, throttled: true }, 429);
     }
-    if (env.FREE_THROTTLE) {
-      const f = await env.FREE_THROTTLE.limit({ key: ip });
-      if (!f.success) return json({ error: "Free requests are limited to one per minute — please wait, or log in for faster access.", rateLimited: true, retryAfterMs: 60000, freeThrottle: true }, 429);
-    }
-    const cap = await reserveFreeHourly(env, ip);
-    if (!cap.ok) {
-      return json({ error: "Free hourly limit reached (" + FREE_HOURLY_CAP + "/hour). Please wait, or log in for faster access.", rateLimited: true, hourlyLimit: true, remaining: 0 }, 429);
-    }
-    if (wantQueue) return enqueueChar(env, region, name, false, cap.remaining);
-    return handleCharacter(env, region, name, refresh, { free: true, remaining: cap.remaining, nextMs: 60000, degraded: degraded });
+    if (wantQueue) return enqueueChar(env, region, name, premium);
+    return handleCharacter(env, region, name, refresh, { premium: premium, nextMs: 5000 });
   },
 
   async scheduled(controller, env, ctx) {
