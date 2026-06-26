@@ -540,7 +540,7 @@ export default {
     }
 
     // GLOBAL overload gate: one shared counter across ALL requests (fixed key, not the IP). When
-    // the site-wide rate trips ~167/min (≈10k/hour) we enter "degraded" mode — free clients are
+    // the site-wide rate trips ~1000/min we enter "degraded" mode — free clients are
     // cut off and password clients drop to the free rate. period max 60s, so it's a rolling
     // per-minute proxy for "10k/hour" that auto-recovers when traffic falls.
     const premium = gated(u);

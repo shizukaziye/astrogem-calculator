@@ -70,7 +70,7 @@ period = 60
 name = "GLOBAL_GATE"
 namespace_id = "1004"
 [ratelimits.simple]
-limit = 167
+limit = 1000
 period = 60
 
 # Observability (logs) — optional, handy while validating the parser.
