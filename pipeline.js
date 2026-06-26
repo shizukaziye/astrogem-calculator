@@ -95,7 +95,16 @@
   // ---------------------------------------------------------------------------
   var COND_SCORE = /*__COND_SCORE__*/ null;
 
-  var DATA = null;          // baked data/pipeline.json (lazy-fetched)
+  var AXIS = "dps";         // 'dps' | 'support' — which bake to display (toggle in the bar)
+  // The Support axis is fully wired (toggle + bake + pipelineAdvice forcing), but its lvl-0
+  // value scale isn't reconciled with the DPS scale yet — support cut-EVs come out orders of
+  // magnitude smaller, so a shipped Support tab would look broken and disagree with the
+  // (new-model) Grader. Keep the toggle hidden until the support model is recalibrated and
+  // re-baked into a healthy data/pipeline-support.json, then flip this to true.
+  var SUPPORT_ENABLED = false;
+  var DATA = null;          // the CURRENT axis's baked grid (data/pipeline[-support].json)
+  var DATA_CACHE = {};      // axis -> baked grid (cached, so toggling back never re-fetches)
+  var DATA_LOADING = {};    // axis -> in-flight flag
   var ROSTER = "nrb";       // 'nrb' | 'rb' (Global only; KR has no roster-bound gems)
   var REGION = "global";    // 'global' | 'kr'
   var KR_FLOOR = { 8: 20000, 9: 30000, 10: 40000 };  // KR: tradable-epic floor sale value by cost
@@ -179,6 +188,16 @@
       if (d < bestD) { bestD = d; best = list[i]; }
     }
     return (best != null && bestD <= 1e-6) ? best : null;
+  }
+  // The EXACT baseline the active bake solved grade-row `bi` at. Use THIS for baked-cell
+  // lookups instead of recomputing window.gradeToScore(grade) at render time: gradeToScore
+  // shifts whenever the scoring model changes, and a baseline that drifts even ~1e-3 from
+  // the baked key silently misses every cell (→ a null cut → an all-red "dismantle" table).
+  // meta.bakedBaselines[bi] is gradeToScore(GRADE_ROWS[bi]) captured AT bake time, so the
+  // lookup is exact regardless of later model drift. (Falls back to live for older bakes.)
+  function bakedBaselineForRow(bi, grade) {
+    var b = DATA && DATA.meta && DATA.meta.bakedBaselines;
+    return (b && b[bi] != null) ? b[bi] : window.gradeToScore(grade);
   }
   function bakedCell(rarity, cost, bucket, baseline, gpd) {
     if (!DATA || !DATA.cells) return null;
@@ -782,13 +801,13 @@
       + '<th class="sep">8-cost</th><th>9-cost</th><th>10-cost</th>'
       + '<th class="sep">8-cost</th><th>9-cost</th><th>10-cost</th>'
       + '<th class="sep">Boxes</th><th>Direct<br>/wk</th><th>Fuse<br>/wk</th>'
-      + '<th>Total<br>/wk</th><th>Weeks</th><th>Gold</th><th>Avg<br>%dmg</th><th>Total<br>%dmg</th><th>cp%</th>'
+      + '<th>Total<br>/wk</th><th>Weeks</th><th>Gold</th><th>Avg<br>' + (AXIS === "support" ? "party%" : "%dmg") + '</th><th>Total<br>' + (AXIS === "support" ? "party%" : "%dmg") + '</th><th>cp%</th>'
       + '</tr></thead><tbody>';
 
     var body = "";
     for (var bi = 0; bi < GRADE_ROWS.length; bi++) {
       var grade = GRADE_ROWS[bi];
-      var blPct = window.gradeToScore(grade);
+      var blPct = bakedBaselineForRow(bi, grade);
       var rank = window.rankFromGrade(grade);
       var row = '<tr><td class="pipe blcell"><b>' + grade + '</b> ' + rankBadge(rank) + '</td>';
 
@@ -858,7 +877,7 @@
     var body = "";
     for (var bi = 0; bi < GRADE_ROWS.length; bi++) {
       var grade = GRADE_ROWS[bi];
-      var bl = window.gradeToScore(grade);
+      var bl = bakedBaselineForRow(bi, grade);
       var rank = window.rankFromGrade(grade);
       var fodL = 0, fodR = 0, fodA = 0, evL = 0, evR = 0, evA = 0;
       for (var ci = 0; ci < COSTS.length; ci++) {
@@ -1008,6 +1027,13 @@
       : '';
     return '<div class="inputs" id="pl-inputs">'
       + '<div class="pl-bar">'
+      + (SUPPORT_ENABLED
+        ? '<span class="pl-axis">'
+          + '<span class="mbtn ' + (AXIS === "dps" ? "active" : "") + '" id="pl-ax-dps" onclick="window.__plSetAxis(\'dps\')">DPS</span>'
+          + '<span class="mbtn ' + (AXIS === "support" ? "active" : "") + '" id="pl-ax-sup" onclick="window.__plSetAxis(\'support\')">Support</span>'
+          + '</span>'
+          + '<span class="pl-sep"></span>'
+        : '')
       + '<span class="pl-region">'
       + '<span class="mbtn ' + (REGION === "global" ? "active" : "") + '" id="pl-rg-global" onclick="window.__plSetRegion(\'global\')">Global</span>'
       + '<span class="mbtn ' + (REGION === "kr" ? "active" : "") + '" id="pl-rg-kr" onclick="window.__plSetRegion(\'kr\')">KR</span>'
@@ -1017,7 +1043,7 @@
       + rosterToggle
       + '</div>'
       + '<div class="pl-handles">'
-      + '<div class="pl-handle pl-handle-rg" role="button" tabindex="0" onclick="window.__plToggleBar()">region / gpd &#9662;</div>'
+      + '<div class="pl-handle pl-handle-rg" role="button" tabindex="0" onclick="window.__plToggleBar()">axis / region / gpd &#9662;</div>'
       + '<div class="pl-handle pl-handle-legend" role="button" tabindex="0" onclick="window.__plToggleLegend()">how to read &#9662;</div>'
       + '</div>'
       + '</div>';
@@ -1123,7 +1149,7 @@
       + '#tab-pipeline #pl-inputs:has(.pl-handle-rg:hover,.pl-bar:hover) .pl-handle-rg,#tab-pipeline #pl-inputs.pl-open .pl-handle-rg{color:var(--accent);border-color:var(--accent)}'
       + '#tab-pipeline #pl-inputs .pl-gpd{display:inline-flex;flex-wrap:wrap;gap:7px}'
       + '#tab-pipeline #pl-inputs .pl-sep{width:1px;align-self:stretch;background:var(--border);margin:2px 4px}'
-      + '#tab-pipeline #pl-inputs .pl-region{display:inline-flex;flex-wrap:wrap;gap:7px}'
+      + '#tab-pipeline #pl-inputs .pl-region,#tab-pipeline #pl-inputs .pl-axis{display:inline-flex;flex-wrap:wrap;gap:7px}'
       + '#tab-pipeline .tablewrap{overflow-x:auto;max-width:100%}'
       // ---- hover popover (appended to <body>, so NOT scoped under #tab-pipeline) ----
       + '.pl-pop{position:absolute;z-index:9999;max-width:420px;min-width:330px;background:#10131c;'
@@ -1266,29 +1292,47 @@
     }
   }
 
-  function ensureData() {
-    if (DATA || ensureData._loading) return;
-    ensureData._loading = true;
-    fetch("data/pipeline.json", { cache: "no-cache" })  // revalidate so re-bakes show without a hard-refresh (304 when unchanged)
+  // Load (or reuse a cached) baked grid for `axis`; runs after(grid) on success. The DPS
+  // and Support grids are cached separately so the toggle never re-fetches.
+  function loadAxis(axis, after) {
+    axis = (axis === "support") ? "support" : "dps";
+    if (DATA_CACHE[axis]) { if (after) after(DATA_CACHE[axis]); return; }
+    if (DATA_LOADING[axis]) {                       // a fetch is already in flight — poll for it
+      var t = 0;
+      (function w() {
+        if (DATA_CACHE[axis]) { if (after) after(DATA_CACHE[axis]); return; }
+        if (++t > 600) return;
+        setTimeout(w, 50);
+      })();
+      return;
+    }
+    DATA_LOADING[axis] = true;
+    var url = (axis === "support") ? "data/pipeline-support.json" : "data/pipeline.json";
+    fetch(url, { cache: "no-cache" })  // revalidate so re-bakes show without a hard-refresh (304 when unchanged)
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then(function (j) {
-        DATA = j; ensureData._loading = false;
-        GPD_LIST = gpdsInData();
-        if (GPD == null && GPD_LIST.length) {
-          // default to 1.5M if present, else the middle tier
-          GPD = GPD_LIST.indexOf(1500000) >= 0 ? 1500000 : GPD_LIST[Math.floor(GPD_LIST.length / 2)];
-        }
-        refreshInputs();
-        renderBody();
-      })
+      .then(function (j) { DATA_CACHE[axis] = j; DATA_LOADING[axis] = false; if (after) after(j); })
       .catch(function (e) {
-        ensureData._loading = false;
+        DATA_LOADING[axis] = false;
         var host = document.getElementById("pl-results");
-        if (host) {
-          host.innerHTML = '<div class="placeholder"><b>Could not load data/pipeline.json</b>'
+        if (host && axis === AXIS) {
+          host.innerHTML = '<div class="placeholder"><b>Could not load ' + url + '</b>'
             + '<div class="note">Serve over http (static server). ' + e.message + '</div></div>';
         }
       });
+  }
+
+  // Ensure the CURRENT axis's grid is loaded, then refresh the inputs + body.
+  function ensureData() {
+    loadAxis(AXIS, function (j) {
+      DATA = j;
+      GPD_LIST = gpdsInData();
+      if (GPD == null && GPD_LIST.length) {
+        // default to 1.5M if present, else the middle tier
+        GPD = GPD_LIST.indexOf(1500000) >= 0 ? 1500000 : GPD_LIST[Math.floor(GPD_LIST.length / 2)];
+      }
+      refreshInputs();
+      renderBody();
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1308,6 +1352,16 @@
     var note = document.getElementById("pl-mode-note");
     if (note) note.textContent = modeNote();
     renderBody();
+  };
+  window.__plSetAxis = function (ax) {
+    var inp0 = document.getElementById("pl-inputs");
+    var wasOpen = !!(inp0 && inp0.classList.contains("pl-open"));   // keep the bar open across the rebuild (mobile)
+    AXIS = (ax === "support") ? "support" : "dps";
+    DATA = DATA_CACHE[AXIS] || null;   // switch to the cached grid (or null while it loads)
+    refreshInputs();                   // flip the DPS/Support active state in the bar
+    renderBody();                      // clear stale table (loading note if not cached yet)
+    ensureData();                      // fetch this axis if needed, then re-render
+    if (wasOpen) { var inp1 = document.getElementById("pl-inputs"); if (inp1) inp1.classList.add("pl-open"); }
   };
   window.__plSetRegion = function (rg) {
     var inp0 = document.getElementById("pl-inputs");
@@ -1352,14 +1406,7 @@
   // pipelineAdvice even if the Pipeline tab was never opened.
   window.pipelineReady = function (cb) {
     if (typeof cb !== "function") return;
-    if (DATA) { cb(); return; }
-    ensureData();
-    var tries = 0;
-    (function wait() {
-      if (DATA) { cb(); return; }
-      if (++tries > 600) { cb(); return; }   // ~30s safety cap; cb still fires (advice will no-op gracefully)
-      setTimeout(wait, 50);
-    })();
+    loadAxis("dps", function () { cb(); });   // the Grader's infographic is DPS-only — always load the DPS grid
   };
 
   // pipelineAdvice(baselineGrade, gpd, region): the action plan for ONE baseline grade
@@ -1408,17 +1455,26 @@
   // Legendary/Relic/Ancient processed-fusion tiers — do not conflate the two.
   // The Grader renders this as "fuse + 2× <addCost>-cost Uncommon" (the 2 you add).
   window.pipelineAdvice = function (baselineGrade, gpd, region) {
-    if (!DATA) return null;
+    var dpsData = DATA_CACHE.dps;
+    if (!dpsData) return null;            // the Grader's infographic is DPS-only
     if (gpd == null) gpd = GPD;
-    var bl = (typeof window.gradeToScore === "function") ? window.gradeToScore(baselineGrade) : baselineGrade;
+    // baselineGrade is an on-grid GRADE_ROWS anchor (the grader bumps to one), so use the DPS
+    // bake's EXACT baseline for it (positional) — recomputing gradeToScore here would drift off
+    // the baked keys and miss every cell, same failure mode bakedBaselineForRow guards against.
+    // (DATA isn't swapped to the DPS grid until below, so read dpsData's baselines directly.)
+    var bi = GRADE_ROWS.indexOf(baselineGrade);
+    var dpsBL = dpsData.meta && dpsData.meta.bakedBaselines;
+    var bl = (bi >= 0 && dpsBL && dpsBL[bi] != null)
+      ? dpsBL[bi]
+      : ((typeof window.gradeToScore === "function") ? window.gradeToScore(baselineGrade) : baselineGrade);
     var roster = "nrb";
 
     // Compute for the requested region (defaults to the tab's current REGION). Swap the
     // module REGION so every helper (gev/fuseDecisions/computePipeline via secondHalfGev)
     // honors it, then ALWAYS restore — the Pipeline tab's toggle must be untouched.
     var wantRegion = (region === "kr") ? "kr" : (region === "global") ? "global" : REGION;
-    var savedRegion = REGION;
-    REGION = wantRegion;
+    var savedRegion = REGION, savedData = DATA, savedAxis = AXIS;
+    REGION = wantRegion; DATA = dpsData; AXIS = "dps";   // force the DPS grid; restored in finally
     try {
       var fd = fuseDecisions(bl, gpd, roster);
 
@@ -1526,7 +1582,7 @@
         plan: plan, boxes: boxes, processed: processed
       };
     } finally {
-      REGION = savedRegion;   // restore the Pipeline tab's region no matter what
+      REGION = savedRegion; DATA = savedData; AXIS = savedAxis;   // restore the Pipeline tab's state no matter what
     }
   };
 
