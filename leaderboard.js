@@ -57,18 +57,18 @@
   var rawChars = [];   // every character as fetched (unfiltered, unsorted by mode)
   // Region filter chips. Default to NA only; the selection is remembered in a cookie (ag_lb_regions).
   var LB_REGION_COOKIE = "ag_lb_regions";
-  function readRegionCookie() {
+  function readCookieVal(name) {
     if (typeof document === "undefined" || !document.cookie) return null;
     var all = document.cookie.split("; ");
     for (var i = 0; i < all.length; i++) {
       var eq = all[i].indexOf("=");
-      if (eq > 0 && all[i].slice(0, eq) === LB_REGION_COOKIE) return decodeURIComponent(all[i].slice(eq + 1));
+      if (eq > 0 && all[i].slice(0, eq) === name) return decodeURIComponent(all[i].slice(eq + 1));
     }
     return null;
   }
   function loadRegions() {
     var def = { NA: true, EU: false, KR: false };
-    var raw = readRegionCookie();
+    var raw = readCookieVal(LB_REGION_COOKIE);
     if (raw == null) return def;
     var on = { NA: false, EU: false, KR: false };
     raw.split(",").forEach(function (r) { r = (r || "").trim().toUpperCase(); if (r === "NA" || r === "EU" || r === "KR") on[r] = true; });
@@ -81,6 +81,14 @@
     document.cookie = LB_REGION_COOKIE + "=" + encodeURIComponent(on.join(",")) + "; path=/; max-age=31536000; SameSite=Lax";
   }
   var regions = loadRegions();  // {NA,EU,KR} bools — from cookie, else NA-only
+
+  // Class filter (single-select dropdown). "" = all classes; the choice is remembered in a cookie.
+  var LB_CLASS_COOKIE = "ag_lb_class";
+  function writeClass(cls) {
+    if (typeof document === "undefined") return;
+    document.cookie = LB_CLASS_COOKIE + "=" + encodeURIComponent(cls || "") + "; path=/; max-age=31536000; SameSite=Lax";
+  }
+  var classFilter = readCookieVal(LB_CLASS_COOKIE) || "";  // selected class name, or "" for all
   var MIN_GRADE = 65;  // hide anything ranked C+ or below — B- starts at grade 65
 
   // (just for laughs) the entire "Buff" crew made some... questionable gem choices,
@@ -293,6 +301,8 @@
 '  #tab-leaderboard .lb-search{background:var(--panel2);border:1px solid var(--border);border-radius:99px;color:var(--text);font-family:inherit;font-size:12px;padding:6px 14px;width:150px;outline:none}' +
 '  #tab-leaderboard .lb-search:focus{border-color:var(--axis,var(--accent))}' +
 '  #tab-leaderboard .lb-search::placeholder{color:var(--dim)}' +
+'  #tab-leaderboard .lb-classsel{background:var(--panel2);border:1px solid var(--border);border-radius:99px;color:var(--text);font-family:inherit;font-weight:700;font-size:12px;padding:6px 12px;outline:none;cursor:pointer;max-width:170px}' +
+'  #tab-leaderboard .lb-classsel:focus{border-color:var(--axis,var(--accent))}' +
 '  #tab-leaderboard .lb-regbtn:hover:not(.on){color:var(--text)}' +
 '  #tab-leaderboard .lb-regbtn.on{background:#4b5563;color:#fff}' +
 // ---- pagination controls (shown only when >PAGE_SIZE characters) ----
@@ -317,6 +327,7 @@
 '      <button class="lb-regbtn" id="lb-reg-EU" type="button" aria-pressed="false">EU</button>' +
 '      <button class="lb-regbtn" id="lb-reg-KR" type="button" aria-pressed="false">KR</button>' +
 '    </div>' +
+'    <select class="lb-classsel" id="lb-class" aria-label="Filter by class"><option value="">All classes</option></select>' +
 '    <input class="lb-search" id="lb-search" type="search" placeholder="Search name&hellip;" autocomplete="off" aria-label="Search characters by name">' +
 '    <span class="lb-status" id="lb-status"></span>' +
 '  </div>' +
@@ -520,6 +531,7 @@
     var base = (mode === "support")
       ? rawChars.filter(isSupportClass)
       : rawChars.slice();
+    if (classFilter) base = base.filter(function (c) { return c.class === classFilter; });
     var q = (searchQuery || "").trim().toLowerCase();
     var list;
     if (q) {
@@ -547,6 +559,21 @@
     repaint();
   }
 
+  // Populate the class dropdown from the distinct classes present in the data (sorted),
+  // preserving the saved/active selection. Called after each fetch.
+  function populateClassOptions() {
+    var sel = $("lb-class");
+    if (!sel) return;
+    var set = {};
+    for (var i = 0; i < rawChars.length; i++) { var cl = rawChars[i].class; if (cl) set[cl] = true; }
+    if (classFilter) set[classFilter] = true; // keep the saved choice selectable even if none are loaded
+    var classes = Object.keys(set).sort();
+    var html = '<option value="">All classes</option>';
+    for (var j = 0; j < classes.length; j++) html += '<option value="' + esc(classes[j]) + '">' + esc(classes[j]) + '</option>';
+    sel.innerHTML = html;
+    sel.value = classFilter;
+  }
+
   // Full render entry point: stash the fetched list, reset to page 1, build for the
   // active mode. Called on load (DPS by default) and after a fresh fetch.
   function renderTable(chars) {
@@ -557,6 +584,7 @@
       c._avg = avgGradeOf(c); c._dmg = totalDmgOf(c);
       c._savg = avgSupportGradeOf(c); c._pdmg = totalPartyDmgOf(c);
     });
+    populateClassOptions();
     page = 1;
     rebuild();
   }
@@ -671,6 +699,15 @@
         page = 1;
         if (rawChars.length) rebuild();
       });
+    });
+
+    // Class dropdown: filter to a single class (or all). Remembered in a cookie.
+    var classSel = $("lb-class");
+    if (classSel) classSel.addEventListener("change", function () {
+      classFilter = classSel.value || "";
+      writeClass(classFilter);
+      page = 1;
+      if (rawChars.length) rebuild();
     });
 
     // Re-render when favorites change anywhere (this tab or the Grader). Only repaint
