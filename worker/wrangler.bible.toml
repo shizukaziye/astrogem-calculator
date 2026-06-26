@@ -28,7 +28,7 @@ id = "0f51c3b5ac6d45a59186375d62879ad7"
 # Rebuild the leaderboard snapshot server-side every 10 minutes (the worker only does the
 # expensive full re-read when a character actually changed since the last build).
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["* * * * *"]
 
 # Edge rate-limit bindings (keyed by IP in code; NO KV touched on a blocked hit). period must
 # be 10 or 60 seconds. HARD_CAP is the absolute backstop on EVERY request to stop scripted abuse.
@@ -71,6 +71,15 @@ name = "GLOBAL_GATE"
 namespace_id = "1004"
 [ratelimits.simple]
 limit = 1000
+period = 60
+
+# Global enqueue cap: ~2 NEW characters queued per minute site-wide, matching the drain rate so the
+# queue (and thus monthly writes) can never grow faster than we empty it. period must be 10 or 60.
+[[ratelimits]]
+name = "ENQUEUE_GATE"
+namespace_id = "1005"
+[ratelimits.simple]
+limit = 2
 period = 60
 
 # Observability (logs) — optional, handy while validating the parser.

@@ -219,6 +219,12 @@ const SNAPSHOT_KEY = "lb:snapshot";          // single KV key holding the whole 
 const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent character write (plain overwrite, race-free).
 const BUILTAT_KEY = "lb:builtat";            // ms timestamp the snapshot was last rebuilt by the cron.
 const FREE_HOURLY_CAP = 10;                  // free (un-gated) pulls per HOUR per IP; the edge throttle paces them to 1/min.
+const QP = "q:p:";                           // premium lookup-queue key prefix (region+name ride in KV metadata).
+const QF = "q:f:";                           // free lookup-queue key prefix.
+const DRAIN_PER_RUN = 2;                      // characters cached per cron run (~2/min ≈ 2880/day ≈ 22% of the monthly write budget).
+const DRAIN_DELAY_MS = 2000;                 // pause between lostark.bible fetches within a drain run (gentle on the upstream).
+const QUEUE_TTL_S = 7 * 24 * 60 * 60;        // a queued request expires after 7 days if never drained.
+const SNAPSHOT_MIN_INTERVAL_MS = 30 * 60 * 1000; // rebuild the leaderboard snapshot at most every ~30 min (the read-heavy part).
 // Access token the GATED client appends as ?k= (== gate.js's salted hash). Requests without it
 // are un-refreshed pre-gate clients -> 403'd before any KV work, so they stop draining the quota.
 // Not the password (a one-way hash); a stale client just needs to refresh the page.
@@ -494,11 +500,59 @@ async function rebuildSnapshotIfChanged(env) {
   const lastWrite = parseInt((await env.CHARS.get(LASTWRITE_KEY)) || "0", 10);
   const builtAt = parseInt((await env.CHARS.get(BUILTAT_KEY)) || "0", 10);
   if (builtAt > 0 && lastWrite <= builtAt) return; // nothing changed since the last build
+  if (builtAt > 0 && (Date.now() - builtAt) < SNAPSHOT_MIN_INTERVAL_MS) return; // throttle: rebuild at most ~every 30 min
   const startedAt = Date.now();
   const characters = await buildCharacterList(env);
   if (!characters.length) return;
   await env.CHARS.put(SNAPSHOT_KEY, JSON.stringify({ builtAt: startedAt, characters: characters }));
   await env.CHARS.put(BUILTAT_KEY, String(startedAt));
+}
+
+// Cron drain: cache up to DRAIN_PER_RUN queued characters per run, PREMIUM queue first then FREE,
+// paced ~DRAIN_DELAY_MS apart so we never trip lostark.bible. region+name ride in the key metadata,
+// so listing needs no per-key read. A transient upstream error (5xx / upstream 429) stops the run
+// and leaves the item queued for next time; a 4xx (not found) drops it. Bumps LASTWRITE so the
+// throttled snapshot rebuild picks the new characters up.
+async function drainQueue(env) {
+  if (!env || !env.CHARS) return;
+  let processed = 0, any = false, stop = false;
+  for (const prefix of [QP, QF]) {
+    if (stop || processed >= DRAIN_PER_RUN) break;
+    let list;
+    try { list = await env.CHARS.list({ prefix: prefix, limit: DRAIN_PER_RUN }); } catch (e) { break; }
+    for (const k of list.keys) {
+      if (processed >= DRAIN_PER_RUN) break;
+      const md = k.metadata || {};
+      if (!md.region || !md.name) { await env.CHARS.delete(k.name); continue; } // malformed -> drop
+      let res;
+      try { res = await fetchCharacterData(md.region, md.name); } catch (e) { stop = true; break; }
+      if (res.ok) {
+        const record = Object.assign({}, res.data, { pulledAt: Date.now() });
+        try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(record)); await env.CHARS.delete(k.name); any = true; } catch (e) {}
+      } else if (res.status >= 400 && res.status < 500) {
+        await env.CHARS.delete(k.name); // not found / bad request -> drop from queue
+      } else {
+        stop = true; break; // 5xx / upstream rate-limit -> leave queued, stop this run
+      }
+      processed++;
+      if (processed < DRAIN_PER_RUN) await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
+    }
+  }
+  if (any) { try { await env.CHARS.put(LASTWRITE_KEY, String(Date.now())); } catch (e) {} }
+}
+
+// Add a not-yet-cached character to the premium/free queue, gated by a GLOBAL enqueue rate so the
+// queue can't be filled faster than the drain empties it (keeps monthly writes bounded). region+name
+// stored as KV metadata (the drain reads them from list() without an extra get).
+async function enqueueChar(env, region, name, premium, remaining) {
+  if (env.ENQUEUE_GATE) {
+    const g = await env.ENQUEUE_GATE.limit({ key: "enqueue" });
+    if (!g.success) return json({ error: "The lookup queue is busy right now — please try again in a moment.", queueBusy: true, rateLimited: true, retryAfterMs: 30000 }, 429);
+  }
+  if (env.CHARS) {
+    try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
+  }
+  return json({ queued: true, justQueued: true, tier: premium ? "premium" : "free", region: region, name: normalizeName(name), remaining: remaining }, 200);
 }
 
 // Reserve one of a NON-password client's free HOURLY pulls (by IP, UTC hour bucket). The 1/min
@@ -583,31 +637,48 @@ export default {
       }
     }
 
-    // While degraded, free clients get nothing (password clients fall through to the free rate).
-    if (degraded && !premium) return json({ error: busyMsg, rateLimited: true, degraded: true }, 429);
+    // MISS. New clients send &queue=1 -> the character is QUEUED (cached later by the drain).
+    // Old clients (no &queue=1) keep the legacy synchronous fetch so nothing breaks mid-migration.
+    const wantQueue = u.searchParams.get("queue") === "1";
 
-    // Full password tier: ~1 per 5s. Skipped while degraded so the pull drops to the free rate below.
+    // Already in the queue? Return its status for free (no rate limit) — this is also the poll path.
+    if (wantQueue && env.CHARS) {
+      if ((await env.CHARS.get(QP + key)) !== null) return json({ queued: true, tier: "premium", region: region, name: normalizeName(name) }, 200);
+      if ((await env.CHARS.get(QF + key)) !== null) {
+        if (premium) { // a password lookup of a free-queued character bumps it to the premium queue
+          try { await env.CHARS.put(QP + key, "", { metadata: { region: region, name: name }, expirationTtl: QUEUE_TTL_S }); await env.CHARS.delete(QF + key); } catch (e) {}
+          return json({ queued: true, tier: "premium", upgraded: true, region: region, name: normalizeName(name) }, 200);
+        }
+        return json({ queued: true, tier: "free", region: region, name: normalizeName(name) }, 200);
+      }
+    }
+
+    // Rate-limit the fetch/enqueue. While degraded, free clients get nothing; password = ~1/5s; free = 1/min + 10/hr.
+    if (degraded && !premium) return json({ error: busyMsg, rateLimited: true, degraded: true }, 429);
     if (premium && !degraded) {
       if (env.PREMIUM_THROTTLE) {
         const p = await env.PREMIUM_THROTTLE.limit({ key: ip });
-        if (!p.success) return json({ error: "Please wait a few seconds between pulls.", rateLimited: true, retryAfterMs: 5000, premiumThrottle: true }, 429);
+        if (!p.success) return json({ error: "Please wait a few seconds between requests.", rateLimited: true, retryAfterMs: 5000, premiumThrottle: true }, 429);
       }
+      if (wantQueue) return enqueueChar(env, region, name, true);
       return handleCharacter(env, region, name, refresh, { premium: true, nextMs: 5000 });
     }
-    // Free tier (and password clients while degraded): 1 per minute + 10 per hour (by IP).
     if (env.FREE_THROTTLE) {
       const f = await env.FREE_THROTTLE.limit({ key: ip });
-      if (!f.success) return json({ error: "Free pulls are limited to one per minute — please wait, or enter the password for faster access.", rateLimited: true, retryAfterMs: 60000, freeThrottle: true }, 429);
+      if (!f.success) return json({ error: "Free requests are limited to one per minute — please wait, or log in for faster access.", rateLimited: true, retryAfterMs: 60000, freeThrottle: true }, 429);
     }
     const cap = await reserveFreeHourly(env, ip);
     if (!cap.ok) {
-      return json({ error: "Free hourly limit reached (" + FREE_HOURLY_CAP + "/hour). Please wait, or enter the password for faster access.", rateLimited: true, hourlyLimit: true, remaining: 0 }, 429);
+      return json({ error: "Free hourly limit reached (" + FREE_HOURLY_CAP + "/hour). Please wait, or log in for faster access.", rateLimited: true, hourlyLimit: true, remaining: 0 }, 429);
     }
+    if (wantQueue) return enqueueChar(env, region, name, false, cap.remaining);
     return handleCharacter(env, region, name, refresh, { free: true, remaining: cap.remaining, nextMs: 60000, degraded: degraded });
   },
 
   async scheduled(controller, env, ctx) {
-    // Runs on the cron schedule (every 10 min): refresh the leaderboard snapshot if anything changed.
+    // Every minute: drain a few queued characters (paced), then refresh the leaderboard snapshot
+    // if it's due (rebuildSnapshotIfChanged self-throttles to ~every 30 min so reads stay low).
+    await drainQueue(env);
     await rebuildSnapshotIfChanged(env);
   }
 };
