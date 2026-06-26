@@ -36,7 +36,7 @@ crons = ["*/10 * * * *"]
 name = "HARD_CAP"
 namespace_id = "1000"
 [ratelimits.simple]
-limit = 10
+limit = 60
 period = 60
 
 # Free (non-password) pulls: 1 per minute (the 10-per-hour cap is enforced in KV behind this).

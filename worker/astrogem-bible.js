@@ -571,6 +571,18 @@ export default {
     if (!region || !name) {
       return json({ error: "Both ?region= and ?name= are required (e.g. ?region=NA&name=Paroxysmal)." }, 400);
     }
+    const key = charKey(region, name);
+
+    // FREE + UNLIMITED: a cached character returns immediately (just a KV read) with NO rate
+    // limit — look up as many stored characters as you like. The limits below apply only to a
+    // MISS (a fresh lostark.bible fetch + DB write), which is the part that actually costs us.
+    if (!refresh && env.CHARS) {
+      const cached = await kvGetJson(env, key);
+      if (cached && Array.isArray(cached.gems) && typeof cached.pulledAt === "number" && (Date.now() - cached.pulledAt) < CACHE_TTL_MS) {
+        return json(Object.assign({}, cached, { cached: true }), 200);
+      }
+    }
+
     // While degraded, free clients get nothing (password clients fall through to the free rate).
     if (degraded && !premium) return json({ error: busyMsg, rateLimited: true, degraded: true }, 429);
 
