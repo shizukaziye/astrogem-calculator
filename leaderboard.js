@@ -89,7 +89,6 @@
     document.cookie = LB_CLASS_COOKIE + "=" + encodeURIComponent(cls || "") + "; path=/; max-age=31536000; SameSite=Lax";
   }
   var classFilter = readCookieVal(LB_CLASS_COOKIE) || "";  // selected class name, or "" for all
-  var MIN_GRADE = 55;  // hide anything ranked C+ or below — B- starts at grade 55 (the B cutoff)
 
   // (just for laughs) the entire "Buff" crew made some... questionable gem choices,
   // and is shown on the board no matter how bad it gets.
@@ -117,6 +116,14 @@
   // (even DPS-built ones), filtered by c.class, never by build.
   var SUPPORT_CLASSES = { "Bard": 1, "Paladin": 1, "Artist": 1, "Valkyrie": 1 };
   function isSupportClass(c) { return !!(c && c.class && SUPPORT_CLASSES[c.class]); }
+  // A "support MAIN" — their SUPPORT build outranks their DPS build by >= 2 sub-ranks (e.g. B- DPS
+  // but B+ support). The DPS board drops these (they belong on the Support board). Sub-ranks number
+  // every +/- step: F-=0 .. B-=9, B=10, B+=11 .. S+=17, so "2 ranks higher" is an ordinal gap >= 2.
+  var SUBRANK_ORDINAL = { "F-": 0, "F": 1, "F+": 2, "D-": 3, "D": 4, "D+": 5, "C-": 6, "C": 7, "C+": 8, "B-": 9, "B": 10, "B+": 11, "A-": 12, "A": 13, "A+": 14, "S-": 15, "S": 16, "S+": 17 };
+  function isSupportMain(c) {
+    if (c._avg == null || c._savg == null) return false;
+    return SUBRANK_ORDINAL[rankFromGrade(c._savg)] - SUBRANK_ORDINAL[rankFromGrade(c._avg)] >= 2;
+  }
 
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
@@ -335,7 +342,7 @@
 '<details class="method">' +
 '  <summary>How the leaderboard ranks characters</summary>' +
 '  <p>Every character pulled in the Grader is cached server-side (a Cloudflare Worker + KV). This tab lists them all and ranks each by its <b>average grade</b> — the mean of every equipped gem’s 0–100 grade (the same grade the Grader shows). Click a row to open that loadout in the Grader.</p>' +
-'  <p>The <b>DPS</b> / <b>Support</b> toggle switches the scoring axis. DPS ranks all characters by average DPS grade (Total dmg%). Support keeps only the four support classes — Bard, Paladin, Artist, Valkyrie (every one of them, even DPS-built) — and ranks them by average <b>support</b> grade, with a Party dmg% column.</p>' +
+'  <p>The <b>DPS</b> / <b>Support</b> toggle switches the scoring axis. DPS ranks <b>every</b> character by Total dmg% — at any grade — except support mains (a support class whose support build outranks its DPS build by 2+ ranks, e.g. B- DPS but B+ support). Support keeps only the four support classes — Bard, Paladin, Artist, Valkyrie (every one of them, even DPS-built) — and ranks them by average <b>support</b> grade, with a Party dmg% column.</p>' +
 '  <p>At most 100 characters show per page; use Prev / Next or the jump box to page through the rest. Favorites are listed in full above the table.</p>' +
 '  <p class="note">The list reflects whatever characters have been pulled so far; pull a new one in the Grader and it appears here after a refresh.</p>' +
 '</details>';
@@ -542,13 +549,19 @@
       for (var i = 0; i < list.length; i++) list[i]._rank = i + 1;
       list = list.filter(function (c) { return (c.name || "").toLowerCase().indexOf(q) !== -1; });
     } else {
-      // Normal board: region chips + hide anything ranked C+ or below (< B-) on the active
-      // axis (troll targets excepted — always on the board, however bad it gets).
+      // Normal board: region chips, then per-axis membership (troll targets excepted — always on
+      // the DPS board, however bad it gets). BOTH boards are floorless now; the DPS board also
+      // drops support mains — a support class whose support build is >=2 sub-ranks above its DPS.
       list = base.filter(function (c) {
         if (!regions[c.region]) return false;
         if (isTrollTarget(c)) return true;
-        var avg = (mode === "support") ? c._savg : c._avg;
-        return avg != null && avg >= MIN_GRADE;
+        if (mode === "support") return c._savg != null;
+        // DPS board: show all grades, but drop a support main — a support-class character whose
+        // SUPPORT build outranks their DPS build by >=2 sub-ranks (e.g. B- DPS but B+ support).
+        // They're really playing support, so their DPS gems would just clutter the board.
+        if (c._avg == null) return false;
+        if (isSupportClass(c) && isSupportMain(c)) return false;
+        return true;
       });
       list.sort(byActiveTotalDesc);
       for (var k = 0; k < list.length; k++) list[k]._rank = k + 1;
