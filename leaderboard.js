@@ -55,7 +55,32 @@
   var allChars = [];   // current DISPLAY list (search matches, or the ranked board); tagged _rank/_idx
   var searchQuery = ""; // leaderboard name-search ("" = normal board; non-empty filters by name, any grade)
   var rawChars = [];   // every character as fetched (unfiltered, unsorted by mode)
-  var regions = { NA: true, EU: true, KR: true };  // region filter chips (all on; click to toggle off)
+  // Region filter chips. Default to NA only; the selection is remembered in a cookie (ag_lb_regions).
+  var LB_REGION_COOKIE = "ag_lb_regions";
+  function readRegionCookie() {
+    if (typeof document === "undefined" || !document.cookie) return null;
+    var all = document.cookie.split("; ");
+    for (var i = 0; i < all.length; i++) {
+      var eq = all[i].indexOf("=");
+      if (eq > 0 && all[i].slice(0, eq) === LB_REGION_COOKIE) return decodeURIComponent(all[i].slice(eq + 1));
+    }
+    return null;
+  }
+  function loadRegions() {
+    var def = { NA: true, EU: false, KR: false };
+    var raw = readRegionCookie();
+    if (raw == null) return def;
+    var on = { NA: false, EU: false, KR: false };
+    raw.split(",").forEach(function (r) { r = (r || "").trim().toUpperCase(); if (r === "NA" || r === "EU" || r === "KR") on[r] = true; });
+    return (on.NA || on.EU || on.KR) ? on : def; // never persist an all-off trap
+  }
+  function writeRegions(regs) {
+    if (typeof document === "undefined") return;
+    var on = [];
+    ["NA", "EU", "KR"].forEach(function (r) { if (regs[r]) on.push(r); });
+    document.cookie = LB_REGION_COOKIE + "=" + encodeURIComponent(on.join(",")) + "; path=/; max-age=31536000; SameSite=Lax";
+  }
+  var regions = loadRegions();  // {NA,EU,KR} bools — from cookie, else NA-only
   var MIN_GRADE = 65;  // hide anything ranked C+ or below — B- starts at grade 65
 
   // (just for laughs) the entire "Buff" crew made some... questionable gem choices,
@@ -289,8 +314,8 @@
 '    </div>' +
 '    <div class="lb-regs" role="group" aria-label="Filter by region">' +
 '      <button class="lb-regbtn on" id="lb-reg-NA" type="button" aria-pressed="true">NA</button>' +
-'      <button class="lb-regbtn on" id="lb-reg-EU" type="button" aria-pressed="true">EU</button>' +
-'      <button class="lb-regbtn on" id="lb-reg-KR" type="button" aria-pressed="true">KR</button>' +
+'      <button class="lb-regbtn" id="lb-reg-EU" type="button" aria-pressed="false">EU</button>' +
+'      <button class="lb-regbtn" id="lb-reg-KR" type="button" aria-pressed="false">KR</button>' +
 '    </div>' +
 '    <input class="lb-search" id="lb-search" type="search" placeholder="Search name&hellip;" autocomplete="off" aria-label="Search characters by name">' +
 '    <span class="lb-status" id="lb-status"></span>' +
@@ -631,14 +656,18 @@
     $("lb-mode-dps").addEventListener("click", function () { setMode("dps"); });
     $("lb-mode-support").addEventListener("click", function () { setMode("support"); });
 
-    // Region chips: independently toggle NA / EU / KR (all on by default). Re-filter + page 1.
+    // Region chips: independently toggle NA / EU / KR (default NA only, remembered in a cookie).
+    // Sync each chip to the loaded `regions` first (the cookie may differ from the static template).
     ["NA", "EU", "KR"].forEach(function (rg) {
       var btn = $("lb-reg-" + rg);
       if (!btn) return;
+      btn.classList.toggle("on", !!regions[rg]);
+      btn.setAttribute("aria-pressed", regions[rg] ? "true" : "false");
       btn.addEventListener("click", function () {
         regions[rg] = !regions[rg];
         btn.classList.toggle("on", regions[rg]);
         btn.setAttribute("aria-pressed", regions[rg] ? "true" : "false");
+        writeRegions(regions);
         page = 1;
         if (rawChars.length) rebuild();
       });
