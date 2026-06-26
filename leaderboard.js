@@ -188,50 +188,47 @@
     return days + "d ago";
   }
 
-  // Average grade over a character's VALID gems (mean of A.grade). Returns null when
-  // the character has no valid gems (so it sorts to the bottom / shows "—").
-  function avgGradeOf(char) {
-    var gems = (char && char.gems) || [];
-    var sum = 0, n = 0;
-    for (var i = 0; i < gems.length; i++) {
-      if (validateConfig(gems[i]).valid) { sum += grade(gems[i]); n++; }
-    }
-    return n ? sum / n : null;
+  // Valid gems of a character (the ones we score).
+  function validGemsOf(char) {
+    var gems = (char && char.gems) || [], out = [];
+    for (var i = 0; i < gems.length; i++) if (validateConfig(gems[i]).valid) out.push(gems[i]);
+    return out;
+  }
+  // Map a (geometric-mean) gem value to a 0-100 grade via global value bounds.
+  function valueToGrade(v, bounds) {
+    if (!bounds) return null;
+    var g = 100 * (v - bounds.min) / (bounds.max - bounds.min);
+    return Math.round(Math.max(0, Math.min(100, g)) * 10) / 10;
   }
 
-  // Total damage % over a character's VALID gems — the SAME figure the Grader shows
-  // (sum of relDamage, ~10% for a strong loadout). Null when there are no valid gems.
+  // RAW total damage over a character's VALID gems — the leaderboard's RANKING basis.
+  // DPS: Σ gemDamage (uniform order, no willpower). Null when there are no valid gems.
   function totalDmgOf(char) {
-    var gems = (char && char.gems) || [];
-    var sum = 0, n = 0;
-    for (var i = 0; i < gems.length; i++) {
-      if (validateConfig(gems[i]).valid) { sum += relDamage(gems[i]); n++; }
-    }
-    return n ? sum : null;
+    var g = validGemsOf(char); if (!g.length) return null;
+    if (A && A.gridDamage) return A.gridDamage(g, "dps");
+    var s = 0; for (var i = 0; i < g.length; i++) s += relDamage(g[i]); return s; // old-model fallback
   }
-
-  // SUPPORT analogue of avgGradeOf: mean of supportGrade over a character's VALID
-  // gems. Null when no valid gems (sorts to the bottom / shows "—").
-  function avgSupportGradeOf(char) {
-    var gems = (char && char.gems) || [];
-    var sum = 0, n = 0;
-    for (var i = 0; i < gems.length; i++) {
-      if (validateConfig(gems[i]).valid) { sum += supportGrade(gems[i]); n++; }
-    }
-    return n ? sum / n : null;
-  }
-
-  // SUPPORT analogue of totalDmgOf: Σ supportRelValue over a character's VALID gems
-  // (the "Party dmg%" column). Null when no valid gems.
+  // SUPPORT total: Σ supportDamage with each gem's PER-CORE order value, ÷3 (per-ally).
   function totalPartyDmgOf(char) {
-    var gems = (char && char.gems) || [];
-    var sum = 0, n = 0;
-    for (var i = 0; i < gems.length; i++) {
-      // ÷3: supportRelValue carries the ×3 party multiplier (grading/gold); the displayed
-      // "Party dmg%" is the per-ally number, so divide by 3 here.
-      if (validateConfig(gems[i]).valid) { sum += supportRelValue(gems[i]) / 3; n++; }
-    }
-    return n ? sum : null;
+    var g = validGemsOf(char); if (!g.length) return null;
+    if (A && A.gridDamage) return A.gridDamage(g, "support") / 3;
+    var s = 0; for (var i = 0; i < g.length; i++) s += supportRelValue(g[i]) / 3; return s; // fallback
+  }
+  // "Quality" grade (0-100): the PAIRING-INVARIANT cost-fair quality — the geometric
+  // mean of gem values (exp of mean ln-value) mapped to 0-100. Unlike a plain mean of
+  // grades, equivalent builds tie. Falls back to a plain grade mean on an old model.
+  function avgGradeOf(char) {
+    var g = validGemsOf(char); if (!g.length) return null;
+    if (A && A.gridQuality && A.valueBounds)
+      return valueToGrade(Math.exp(A.gridQuality(g, "dps") / g.length), A.valueBounds());
+    var sum = 0; for (var i = 0; i < g.length; i++) sum += grade(g[i]); return sum / g.length;
+  }
+  // SUPPORT quality grade (parallel to avgGradeOf, support axis + bounds).
+  function avgSupportGradeOf(char) {
+    var g = validGemsOf(char); if (!g.length) return null;
+    if (A && A.gridQuality && A.supportValueBounds)
+      return valueToGrade(Math.exp(A.gridQuality(g, "support") / g.length), A.supportValueBounds());
+    var sum = 0; for (var i = 0; i < g.length; i++) sum += supportGrade(g[i]); return sum / g.length;
   }
 
   var STYLE =
@@ -419,7 +416,7 @@
     var dmgHdr = mode === "support" ? "Party dmg%" : "Total dmg%";
     return '<thead><tr>' +
       (Favs ? '<th class="lb-star" aria-label="Favorite"></th>' : '') +
-      '<th>Rank</th><th class="lb-ilvl">iLvl</th><th>Character</th><th>Avg grade</th><th>' + dmgHdr + '</th><th class="lb-age">Last pulled</th>' +
+      '<th>Rank</th><th class="lb-ilvl">iLvl</th><th>Character</th><th>Quality</th><th>' + dmgHdr + '</th><th class="lb-age">Last pulled</th>' +
       '</tr></thead>';
   }
 
@@ -512,10 +509,11 @@
     });
   }
 
-  // Sort comparator: by the active mode's avg grade, descending, nulls last.
-  function byActiveGradeDesc(a, b) {
-    var av = (mode === "support" ? a._savg : a._avg);
-    var bv = (mode === "support" ? b._savg : b._avg);
+  // Sort comparator: by the active mode's TOTAL DAMAGE (the leaderboard's ranking
+  // basis — raw absolute power), descending, nulls last.
+  function byActiveTotalDesc(a, b) {
+    var av = (mode === "support" ? a._pdmg : a._dmg);
+    var bv = (mode === "support" ? b._pdmg : b._dmg);
     av = av == null ? -Infinity : av;
     bv = bv == null ? -Infinity : bv;
     return bv - av;
@@ -538,7 +536,7 @@
       // Search: rank every region character on the active axis, then keep the name matches —
       // at ANY grade, so even a sub-B- character is findable showing its true overall rank.
       list = base.filter(function (c) { return regions[c.region]; });
-      list.sort(byActiveGradeDesc);
+      list.sort(byActiveTotalDesc);
       for (var i = 0; i < list.length; i++) list[i]._rank = i + 1;
       list = list.filter(function (c) { return (c.name || "").toLowerCase().indexOf(q) !== -1; });
     } else {
@@ -550,7 +548,7 @@
         var avg = (mode === "support") ? c._savg : c._avg;
         return avg != null && avg >= MIN_GRADE;
       });
-      list.sort(byActiveGradeDesc);
+      list.sort(byActiveTotalDesc);
       for (var k = 0; k < list.length; k++) list[k]._rank = k + 1;
     }
     for (var j = 0; j < list.length; j++) list[j]._idx = j;

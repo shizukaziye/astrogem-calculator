@@ -379,8 +379,10 @@
   // Inverse of grade(): the score at grade g. Pass baseCost for the per-type scale; with
   // no baseCost it uses the global (`all`) bounds — the legacy behavior the pipeline relies on.
   function gradeToScore(g, baseCost) {
-    var bounds = gradeBounds();
-    var b = (baseCost != null && bounds[baseCost]) ? bounds[baseCost] : bounds.all;
+    // Inverts the NEW global value-grade -> the gemValue threshold for grade g, so the
+    // pipeline's grade baselines compare against the gemValue distribution. baseCost is
+    // kept for signature compatibility; grading is global now.
+    var b = valueBounds();
     return b.min + (Math.max(0, Math.min(100, g)) / 100) * (b.max - b.min);
   }
 
@@ -401,15 +403,28 @@
   }
   function gemRank(config) { return rankFromGrade(grade(config)); }
 
-  // ---- Whole-character (grid) aggregates ----
-  // Raw absolute power: sum of each gem's actual % damage (additive in log space).
-  function gridDamage(gems) {
-    var s = 0; for (var i = 0; i < gems.length; i++) s += gemDamage(gems[i]); return s;
+  // ---- Whole-character (grid) aggregates ----  axis = "dps" (default) | "support"
+  // Raw absolute power = Σ each gem's actual damage (additive in log space). This is
+  // the LEADERBOARD total. DPS order is uniform; SUPPORT uses the PER-CORE order value
+  // (gem.coreBase 10001-10006), so a support grid is scored core-by-core.
+  function gridDamage(gems, axis) {
+    var s = 0;
+    for (var i = 0; i < gems.length; i++) {
+      var g = gems[i];
+      s += (axis === "support")
+        ? supportDamage(g, supportOrderValueForCore(g.coreBase))
+        : gemDamage(g);
+    }
+    return s;
   }
-  // Cost-fair quality: sum of ln(value) = log of the product of gem values. Pairing-
-  // invariant (equivalent builds tie); the per-gem grades roll up into this.
-  function gridQuality(gems) {
-    var s = 0; for (var i = 0; i < gems.length; i++) s += Math.log(gemValue(gems[i])); return s;
+  // Cost-fair quality = Σ ln(value) = log of the product of gem values. Pairing-
+  // invariant (equivalent builds tie); the per-gem grades roll up into this. axis-aware.
+  function gridQuality(gems, axis) {
+    var s = 0;
+    for (var i = 0; i < gems.length; i++) {
+      s += Math.log((axis === "support") ? supportValue(gems[i]) : gemValue(gems[i]));
+    }
+    return s;
   }
 
   // ==================== SUPPORT SCORING AXIS ====================
@@ -486,6 +501,83 @@
     return supportScore(config) - supportBaseline(config.baseCost);
   }
 
+  // ---- SUPPORT multiplicative grading (parallel to the DPS gemValue model) ----
+  // Per-core order/chaos point values: each core grants a different party-buff stat,
+  // so a support gem's order points are worth different amounts by core. A standalone
+  // gem grade uses the AVERAGE (SUPPORT_SCORING.orderPerPoint ≈ 0.0747); the whole-grid
+  // total (the leaderboard) uses the PER-CORE value (keyed by core base id 10001-10006).
+  var SUPPORT_ORDER_PER_CORE = {
+    10001: 0.0694, // Order Sun   (Ally Attack)
+    10002: 0.0640, // Order Moon  (Ally Damage)
+    10003: 0.0486, // Order Star  (serenade)
+    10004: 0.0753, // Chaos Sun   (Ally Damage)
+    10005: 0.1044, // Chaos Moon  (Brand — strongest)
+    10006: 0.0869  // Chaos Star  (Weapon Power)
+  };
+  function supportOrderValueForCore(coreBase) {
+    var v = SUPPORT_ORDER_PER_CORE[coreBase];
+    return (v == null) ? SUPPORT_SCORING.orderPerPoint : v;
+  }
+
+  // Support DAMAGE (party-damage contribution) = effects + order, NO willpower.
+  // orderVal defaults to the average per-point (standalone gem); pass a per-core value
+  // for a gem in a known core (the grid total).
+  function supportDamage(config, orderVal) {
+    var ov = (orderVal == null) ? SUPPORT_SCORING.orderPerPoint : orderVal;
+    return supportEffectScore(config.effect1, config.effect1Level)
+      + supportEffectScore(config.effect2, config.effect2Level)
+      + config.orderLevel * ov;
+  }
+  // Support willpower MULTIPLIER — its own curve, calibrated so the 3 perfect SUPPORT
+  // gems (top-2 support effects @5, order5 avg, wp5) tie exactly; cost 6+ linear like DPS.
+  function _supPerfectDamage(baseCost) {
+    var pool = EFFECT_POOLS[baseCost], v = [];
+    for (var i = 0; i < pool.length; i++) v.push(supportEffectScore(pool[i], 5));
+    v.sort(function (a, b) { return b - a; });
+    return v[0] + v[1] + 5 * SUPPORT_SCORING.orderPerPoint;
+  }
+  var _SUP_WP_MULT = (function () {
+    var M = { 3: _supPerfectDamage(10) / _supPerfectDamage(8),
+              4: _supPerfectDamage(10) / _supPerfectDamage(9),
+              5: 1 };
+    var slope = M[4] - M[5];
+    for (var c = 6; c <= 9; c++) M[c] = 1 - slope * (c - 5);
+    return M;
+  })();
+  function supportWillpowerMultiplier(cost) {
+    if (cost <= 3) return _SUP_WP_MULT[3];
+    if (cost >= 9) return _SUP_WP_MULT[9];
+    if (_SUP_WP_MULT[cost] != null) return _SUP_WP_MULT[cost];
+    var lo = Math.floor(cost);
+    return _SUP_WP_MULT[lo] + (_SUP_WP_MULT[lo + 1] - _SUP_WP_MULT[lo]) * (cost - lo);
+  }
+  // Support grading value = supportDamage (avg order) × support willpower multiplier.
+  function supportValue(config) {
+    return supportDamage(config) * supportWillpowerMultiplier(willpowerCost(config.baseCost, config.willpowerLevel));
+  }
+  // Global value bounds for the SUPPORT grade (perfect support gems tie at the top).
+  var _supportValueBounds = null;
+  function supportValueBounds() {
+    if (_supportValueBounds) return _supportValueBounds;
+    var costs = [8, 9, 10], min = Infinity, max = -Infinity;
+    for (var ci = 0; ci < costs.length; ci++) {
+      var bc = costs[ci], pool = EFFECT_POOLS[bc];
+      for (var i = 0; i < pool.length; i++)
+        for (var j = i + 1; j < pool.length; j++)
+          for (var wp = 1; wp <= 5; wp++)
+            for (var o = 1; o <= 5; o++)
+              for (var a = 1; a <= 5; a++)
+                for (var b = 1; b <= 5; b++) {
+                  var v = supportValue({ baseCost: bc, willpowerLevel: wp, orderLevel: o,
+                    effect1: pool[i], effect1Level: a, effect2: pool[j], effect2Level: b });
+                  if (v < min) min = v;
+                  if (v > max) max = v;
+                }
+    }
+    _supportValueBounds = { min: min, max: max };
+    return _supportValueBounds;
+  }
+
   // Min-max bounds for the SUPPORT grade, over SUPPORT gems only (parallel to
   // gradeBounds). min = worst support gem, max = the perfect support gem (10-cost
   // Ally Attack Enh Lv5 + Brand Power Lv5, order 5, willpower 5 ≈ 0.836).
@@ -511,10 +603,11 @@
     return _supportGradeBounds;
   }
 
-  // 0-100 SUPPORT grade for a gem (rounded to 1 decimal). Mirrors grade().
+  // 0-100 SUPPORT grade for a gem (rounded to 1 decimal). Mirrors grade(): GLOBAL
+  // value-normalization over supportValue (every perfect support gem reads 100).
   function supportGrade(config) {
-    var b = supportGradeBounds();
-    var g = 100 * (supportScore(config) - b.min) / (b.max - b.min);
+    var b = supportValueBounds();
+    var g = 100 * (supportValue(config) - b.min) / (b.max - b.min);
     return Math.round(Math.max(0, Math.min(100, g)) * 10) / 10;
   }
 
@@ -525,7 +618,8 @@
   // to gradeToScore — turns a grade-based baseline into the support-score threshold
   // the support value/verdict logic uses.
   function supportGradeToScore(g) {
-    var b = supportGradeBounds();
+    // Value-based inverse, parallel to gradeToScore (supportValue distribution).
+    var b = supportValueBounds();
     return b.min + (Math.max(0, Math.min(100, g)) / 100) * (b.max - b.min);
   }
 
@@ -771,14 +865,17 @@
       for (var pi = 0; pi < parts.length; pi++) {
         var part = parts[pi];
         var wp = part[0], ord = part[1], lvA = part[2], lvB = part[3];
-        var baseScore = support
-          ? supportWillpowerScore(willpowerCost(baseCost, wp)) + supportOrderScore(ord)
-          : willpowerScore(willpowerCost(baseCost, wp)) + orderScore(ord);
+        // NEW multiplicative model: per-gem value = (order damage + effects) ×
+        // willpower multiplier M(cost). Mirrors gemValue / supportValue exactly
+        // (willpower is no longer an additive term — it scales the damage).
+        var _cost = willpowerCost(baseCost, wp);
+        var ordD = support ? supportOrderScore(ord) : orderScore(ord);
+        var Mw = support ? supportWillpowerMultiplier(_cost) : willpowerMultiplier(_cost);
         for (var ci = 0; ci < pairs.length; ci++) {
           var eA = pairs[ci][0], eB = pairs[ci][1];
           // Average over the two assignments of (lvA, lvB) to the unordered pair.
-          var sc1 = baseScore + esFn(eA, lvA) + esFn(eB, lvB);
-          var sc2 = baseScore + esFn(eA, lvB) + esFn(eB, lvA);
+          var sc1 = (ordD + esFn(eA, lvA) + esFn(eB, lvB)) * Mw;
+          var sc2 = (ordD + esFn(eA, lvB) + esFn(eB, lvA)) * Mw;
           var w = pSum * partW * pairW * 0.5;
           _addToDist(dist, sc1, w);
           _addToDist(dist, sc2, w);
@@ -1016,6 +1113,12 @@
     supportWillpowerScore: supportWillpowerScore,
     supportEffectScore: supportEffectScore,
     supportOrderScore: supportOrderScore,
+    SUPPORT_ORDER_PER_CORE: SUPPORT_ORDER_PER_CORE,
+    supportOrderValueForCore: supportOrderValueForCore,
+    supportDamage: supportDamage,
+    supportWillpowerMultiplier: supportWillpowerMultiplier,
+    supportValue: supportValue,
+    supportValueBounds: supportValueBounds,
     supportScore: supportScore,
     supportBaseline: supportBaseline,
     supportRelValue: supportRelValue,

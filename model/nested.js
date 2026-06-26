@@ -201,10 +201,10 @@
     if (state.rerollsRemaining <= 0) return false;
     if (state.currentTurn === 1) return false;
     var turnsRemaining = Math.max(1, state.maxTurns - state.currentTurn + 1);
-    var current = A.score(state.config);
+    var current = A.gemValue(state.config);
     var best = -Infinity;
     for (var i = 0; i < outcomes.length; i++) {
-      var sc = A.score(applyOutcome(state.config, outcomes[i]));
+      var sc = A.gemValue(applyOutcome(state.config, outcomes[i]));
       if (sc > best) best = sc;
     }
     var upside = best - current;
@@ -231,7 +231,7 @@
       var pick = outcomes[Math.floor(Math.random() * outcomes.length)];
       _applyProcessStep(cur, pick);
     }
-    var finalScore = A.score(cur.config);
+    var finalScore = A.gemValue(cur.config);
     var finalValue = calculateGemValue(finalScore, baseline, goldPerDamage, cur.config);
     return { finalScore: finalScore, finalValue: finalValue, totalCost: cur.totalGoldSpent - initialGoldSpent, finalConfig: cur.config };
   }
@@ -262,7 +262,7 @@
       }
       _rolloutToCompletion(st, baseline, goldPerDamage, initialGoldSpent);
       var cost = st.totalGoldSpent - initialGoldSpent;
-      total += calculateGemValue(A.score(st.config), baseline, goldPerDamage, st.config) - cost;
+      total += calculateGemValue(A.gemValue(st.config), baseline, goldPerDamage, st.config) - cost;
     }
     return total / numRuns;
   }
@@ -274,7 +274,7 @@
 
     if (firstAction === "process") {
       if (cur.currentTurn > cur.maxTurns) {
-        var sc0 = A.score(cur.config);
+        var sc0 = A.gemValue(cur.config);
         return { finalScore: sc0, finalValue: calculateGemValue(sc0, baseline, goldPerDamage, cur.config), totalCost: cur.totalGoldSpent - initialGoldSpent, finalConfig: cur.config };
       }
       var outs = (currentOutcomes && currentOutcomes.length > 0) ? currentOutcomes : generateOutcomes(_cfgWithState(cur));
@@ -282,7 +282,7 @@
       _applyProcessStep(cur, pick);
     } else if (firstAction === "reroll") {
       if (cur.rerollsRemaining <= 0) {
-        var sc1 = A.score(cur.config);
+        var sc1 = A.gemValue(cur.config);
         return { finalScore: sc1, finalValue: calculateGemValue(sc1, baseline, goldPerDamage, cur.config), totalCost: cur.totalGoldSpent - initialGoldSpent, finalConfig: cur.config };
       }
       var rc = cur.rerollsRemaining === 1 ? A.COSTS.finalReroll : 0;
@@ -301,7 +301,7 @@
         : -Infinity;
 
       if (allowComplete) {
-        var curScore = A.score(cur.config);
+        var curScore = A.gemValue(cur.config);
         var completeValue = calculateGemValue(curScore, baseline, goldPerDamage, cur.config);
         var completeNet = completeValue - (cur.totalGoldSpent - initialGoldSpent);
         if (completeNet >= processValue && completeNet >= rerollValue) {
@@ -319,7 +319,7 @@
       _applyProcessStep(cur, sel);
     }
 
-    var fScore = A.score(cur.config);
+    var fScore = A.gemValue(cur.config);
     return { finalScore: fScore, finalValue: calculateGemValue(fScore, baseline, goldPerDamage, cur.config), totalCost: cur.totalGoldSpent - initialGoldSpent, finalConfig: cur.config };
   }
 
@@ -338,7 +338,7 @@
     var isFirstTurn = state.currentTurn === 1;
 
     // Complete (Turn 1 == Dismantle: value 0; Turn 2+ keep gem).
-    var curScore = A.score(state.config);
+    var curScore = A.gemValue(state.config);
     var delValue = isFirstTurn ? 0 : calculateGemValue(curScore, baseline, goldPerDamage, state.config);
     var delAbove = curScore > baseline ? 1 : 0;
     for (var d = 0; d < numRuns; d++) {
@@ -413,7 +413,7 @@
       expectedValues: { process: processNet, reroll: rerollNet, delete: deleteNet },
       expectedScores: { process: res.process.score, reroll: res.reroll.score, delete: res.delete.score },
       allActions: actions,
-      currentValue: calculateGemValue(A.score(state.config), baseline, goldPerDamage, state.config)
+      currentValue: calculateGemValue(A.gemValue(state.config), baseline, goldPerDamage, state.config)
     };
   }
 

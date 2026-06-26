@@ -215,7 +215,9 @@
     // Scoring axis: "dps" (default) or "support". Selects the score function used for
     // the terminal value, the baseline test, and the memo-key effect canonicalization.
     this.axis = (opts && opts.axis === "support") ? "support" : "dps";
-    this._score = (this.axis === "support") ? A.supportScore : A.score;
+    // NEW model: terminal value + baseline test use the multiplicative gemValue (DPS) /
+    // supportValue (support) — matching the grade and the pipeline EV value distribution.
+    this._score = (this.axis === "support") ? A.supportValue : A.gemValue;
     // Draw model: "wor" (default) = exact without-replacement 4-distinct draw,
     // matching the game (passes the MC gate to ~2%). "iid" = the faster
     // with-replacement approximation (≈2x faster, ~3-5% high on long epic cuts).

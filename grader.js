@@ -88,9 +88,18 @@
   }
   function gGrade(cfg) { return isSupport() ? supportGrade(cfg) : grade(cfg); }
   function gRank(cfg) { return isSupport() ? supportRank(cfg) : gemRank(cfg); }
-  // Support shows the per-ALLY party-damage %: supportRelValue has the ×3 (3 DPS in the
-  // party) baked in for grading/gold, so divide by 3 for the human-facing display number.
-  function gRel(cfg) { return isSupport() ? supportRelValue(cfg) / 3 : relDamage(cfg); }
+  // Per-gem RAW % damage shown in the loadout (these SUM to the grid total = the
+  // leaderboard figure). DPS: gemDamage (effects + order, no willpower). Support: the
+  // per-CORE party-damage contribution (supportDamage with the gem's own core order
+  // value), shown ÷3 as the per-ally number (support coefficients bake in ×3 for 3 DPS).
+  function gRel(cfg) {
+    if (isSupport()) {
+      var ov = (A && A.supportOrderValueForCore) ? A.supportOrderValueForCore(cfg.coreBase) : null;
+      var sd = (A && A.supportDamage) ? A.supportDamage(cfg, ov) : supportRelValue(cfg);
+      return sd / 3;
+    }
+    return (A && A.gemDamage) ? A.gemDamage(cfg) : relDamage(cfg);
+  }
 
   // Support classes that CAN play support (gate for the support-default auto-detect).
   var SUPPORT_CLASSES = { Bard: 1, Paladin: 1, Artist: 1, Valkyrie: 1 };
