@@ -221,7 +221,9 @@ const BUILTAT_KEY = "lb:builtat";            // ms timestamp the snapshot was la
 const FREE_HOURLY_CAP = 10;                  // free (un-gated) pulls per HOUR per IP; the edge throttle paces them to 1/min.
 const QP = "q:p:";                           // premium lookup-queue key prefix (region+name ride in KV metadata).
 const QF = "q:f:";                           // free lookup-queue key prefix.
-const DRAIN_PER_RUN = 2;                      // characters cached per cron run (~2/min ≈ 2880/day ≈ 22% of the monthly write budget).
+const DRAIN_PER_RUN = 10;                     // characters cached per cron run (~10/min ≈ 14400/day); the monthly guard below caps the total.
+const MONTHLY_CHAR_BUDGET = 300000;          // hard cap on characters cached per calendar month (~2 writes each ≈ 66% of the 1M/mo write budget → no overage, ever).
+const USAGE_KEY = "usage:drained";           // {month:"YYYY-MM", count} — characters cached this month (the budget guard).
 const DRAIN_DELAY_MS = 2000;                 // pause between lostark.bible fetches within a drain run (gentle on the upstream).
 const QUEUE_TTL_S = 7 * 24 * 60 * 60;        // a queued request expires after 7 days if never drained.
 const SNAPSHOT_MIN_INTERVAL_MS = 30 * 60 * 1000; // rebuild the leaderboard snapshot at most every ~30 min (the read-heavy part).
@@ -515,7 +517,13 @@ async function rebuildSnapshotIfChanged(env) {
 // throttled snapshot rebuild picks the new characters up.
 async function drainQueue(env) {
   if (!env || !env.CHARS) return;
-  let processed = 0, any = false, stop = false;
+  // Monthly budget guard: once MONTHLY_CHAR_BUDGET characters are cached this calendar month,
+  // pause draining so KV writes can never approach the paid limit (no overage, ever).
+  const month = new Date().toISOString().slice(0, 7);
+  const usage = await kvGetJson(env, USAGE_KEY);
+  let used = (usage && usage.month === month) ? (usage.count | 0) : 0;
+  if (used >= MONTHLY_CHAR_BUDGET) return;
+  let processed = 0, cached = 0, stop = false;
   for (const prefix of [QP, QF]) {
     if (stop || processed >= DRAIN_PER_RUN) break;
     let list;
@@ -528,7 +536,7 @@ async function drainQueue(env) {
       try { res = await fetchCharacterData(md.region, md.name); } catch (e) { stop = true; break; }
       if (res.ok) {
         const record = Object.assign({}, res.data, { pulledAt: Date.now() });
-        try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(record)); await env.CHARS.delete(k.name); any = true; } catch (e) {}
+        try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(record)); await env.CHARS.delete(k.name); cached++; } catch (e) {}
       } else if (res.status >= 400 && res.status < 500) {
         await env.CHARS.delete(k.name); // not found / bad request -> drop from queue
       } else {
@@ -538,7 +546,10 @@ async function drainQueue(env) {
       if (processed < DRAIN_PER_RUN) await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
     }
   }
-  if (any) { try { await env.CHARS.put(LASTWRITE_KEY, String(Date.now())); } catch (e) {} }
+  if (cached > 0) {
+    try { await env.CHARS.put(LASTWRITE_KEY, String(Date.now())); } catch (e) {}
+    try { await env.CHARS.put(USAGE_KEY, JSON.stringify({ month: month, count: used + cached }), { expirationTtl: 40 * 24 * 3600 }); } catch (e) {}
+  }
 }
 
 // Add a not-yet-cached character to the premium/free queue, gated by a GLOBAL enqueue rate so the
@@ -550,6 +561,10 @@ async function enqueueChar(env, region, name, premium, remaining) {
     if (!g.success) return json({ error: "The lookup queue is busy right now — please try again in a moment.", queueBusy: true, rateLimited: true, retryAfterMs: 30000 }, 429);
   }
   if (env.CHARS) {
+    const usage = await kvGetJson(env, USAGE_KEY); // monthly budget guard: stop accepting new characters once the cap is hit
+    if (usage && usage.month === new Date().toISOString().slice(0, 7) && (usage.count | 0) >= MONTHLY_CHAR_BUDGET) {
+      return json({ error: "We've reached this month's character-caching budget — new lookups resume next month. Cached characters and the leaderboard still work normally.", monthlyBudget: true }, 503);
+    }
     try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
   }
   return json({ queued: true, justQueued: true, tier: premium ? "premium" : "free", region: region, name: normalizeName(name), remaining: remaining }, 200);

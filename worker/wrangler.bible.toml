@@ -79,7 +79,7 @@ period = 60
 name = "ENQUEUE_GATE"
 namespace_id = "1005"
 [ratelimits.simple]
-limit = 2
+limit = 10
 period = 60
 
 # Observability (logs) — optional, handy while validating the parser.
