@@ -394,6 +394,7 @@
 '  #tab-grader .gr-queued{display:flex;align-items:center;gap:14px;padding:6px 2px}' +
 '  #tab-grader .gr-queued-icon{font-size:30px;line-height:1}' +
 '  #tab-grader .gr-queued-main{font-size:14px}' +
+'  #tab-grader .gr-queued-pos{font-size:13px;font-weight:600;color:var(--axis,var(--accent));margin-top:5px}' +
 '  #tab-grader .gr-queued-sub{font-size:12px;color:var(--dim);margin-top:4px}' +
 '  #tab-grader #gr-queued-timer{color:var(--axis,var(--accent))}' +
 '  #tab-grader .gr-freenote .gr-unlock{color:var(--axis,var(--accent));cursor:pointer;white-space:nowrap}' +
@@ -1364,6 +1365,12 @@ presetToggleHtml(data) +
   // ---------------- queue: show "queued", poll until the drain caches it ----------------
   var grPollTimer = null;
   function stopPoll() { if (grPollTimer) { clearInterval(grPollTimer); grPollTimer = null; } }
+  // "Position 3 of 12 · ~2 min" from the worker's queue status (empty if not provided).
+  function queueLine(d) {
+    if (!d || !(d.position > 0) || !(d.total > 0)) return "";
+    var eta = (d.etaMinutes > 0) ? (" · ~" + d.etaMinutes + " min") : "";
+    return (d.position === 1 ? "Next up" : ("Position " + d.position + " of " + d.total)) + eta;
+  }
   function showQueued(region, name, d) {
     var disp = (d && d.name) || name;
     var tier = (d && d.tier === "premium") ? "priority queue" : "queue";
@@ -1371,6 +1378,7 @@ presetToggleHtml(data) +
       '<div class="panel"><div class="gr-queued">' +
       '<div class="gr-queued-icon">⏳</div>' +
       '<div class="gr-queued-main"><b>' + esc(disp) + '</b> is in the ' + tier + '.' +
+      '<div class="gr-queued-pos" id="gr-queued-pos">' + queueLine(d) + '</div>' +
       '<div class="gr-queued-sub">Fetching it now — this updates automatically when it’s ready. <span id="gr-queued-timer">checking…</span></div></div>' +
       '</div></div>';
   }
@@ -1394,6 +1402,7 @@ presetToggleHtml(data) +
           setPullStatus("Graded " + ((d.gems || []).length) + " gems.", "");
           renderLoadout(d);
         } else if (d.queued) {
+          var p = $("gr-queued-pos"); if (p) p.innerHTML = queueLine(d);
           var t = $("gr-queued-timer"); if (t) t.innerHTML = "checking… (" + Math.round((Date.now() - started) / 1000) + "s)";
         } else if (!r.ok || (d.error && !d.gems)) {
           stopPoll();

@@ -551,6 +551,36 @@ async function drainQueue(env) {
   }
 }
 
+// Where a queued character sits in the drain order (PREMIUM queue first, then FREE, each
+// alphabetical by key) + the total queued + a rough ETA (~DRAIN_PER_RUN cached per minute).
+// Lists both queues (bounded by the enqueue gate, so well under the 1000-key page limit). A
+// just-enqueued key may not show in list() yet (KV is eventually consistent) — then we report
+// it at the tail (slightly pessimistic), which the next poll corrects.
+async function queueStatus(env, region, name, tier) {
+  const key = charKey(region, name);
+  let premium = [], free = [];
+  try { premium = (await env.CHARS.list({ prefix: QP })).keys.map(function (k) { return k.name; }); } catch (e) {}
+  try { free = (await env.CHARS.list({ prefix: QF })).keys.map(function (k) { return k.name; }); } catch (e) {}
+  let position;
+  if (tier === "premium") {
+    const pi = premium.indexOf(QP + key);
+    position = (pi >= 0 ? pi : premium.length) + 1;          // premium is drained first
+  } else {
+    const fi = free.indexOf(QF + key);
+    position = premium.length + (fi >= 0 ? fi : free.length) + 1;  // free comes after all premium
+  }
+  const total = Math.max(premium.length + free.length, position);  // count self even if list() lags
+  return { position: position, total: total, etaMinutes: Math.ceil(position / DRAIN_PER_RUN) };
+}
+
+// A "queued" JSON response carrying the live queue status (position / total / ETA). Used both
+// when a character is freshly queued AND when it's ALREADY queued (so a re-lookup never double-
+// adds — it just reports where you are).
+async function queuedResponse(env, region, name, tier, extra) {
+  const st = await queueStatus(env, region, name, tier);
+  return json(Object.assign({ queued: true, tier: tier, region: region, name: normalizeName(name) }, st, extra || {}), 200);
+}
+
 // Add a not-yet-cached character to the premium/free queue, gated by a GLOBAL enqueue rate so the
 // queue can't be filled faster than the drain empties it (keeps monthly writes bounded). region+name
 // stored as KV metadata (the drain reads them from list() without an extra get).
@@ -565,6 +595,7 @@ async function enqueueChar(env, region, name, premium) {
       return json({ error: "We've reached this month's character-caching budget — new lookups resume next month. Cached characters and the leaderboard still work normally.", monthlyBudget: true }, 503);
     }
     try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
+    return queuedResponse(env, region, name, premium ? "premium" : "free", { justQueued: true });
   }
   return json({ queued: true, justQueued: true, tier: premium ? "premium" : "free", region: region, name: normalizeName(name) }, 200);
 }
@@ -636,15 +667,16 @@ export default {
     // Old clients (no &queue=1) keep the legacy synchronous fetch so nothing breaks mid-migration.
     const wantQueue = u.searchParams.get("queue") === "1";
 
-    // Already in the queue? Return its status for free (no rate limit) — this is also the poll path.
+    // Already in the queue? Don't re-add — return its live position/total/ETA for free (no rate
+    // limit). This is also the poll path the client hits while it waits for the drain.
     if (wantQueue && env.CHARS) {
-      if ((await env.CHARS.get(QP + key)) !== null) return json({ queued: true, tier: "premium", region: region, name: normalizeName(name) }, 200);
+      if ((await env.CHARS.get(QP + key)) !== null) return queuedResponse(env, region, name, "premium", { alreadyQueued: true });
       if ((await env.CHARS.get(QF + key)) !== null) {
         if (premium) { // a password lookup of a free-queued character bumps it to the premium queue
           try { await env.CHARS.put(QP + key, "", { metadata: { region: region, name: name }, expirationTtl: QUEUE_TTL_S }); await env.CHARS.delete(QF + key); } catch (e) {}
-          return json({ queued: true, tier: "premium", upgraded: true, region: region, name: normalizeName(name) }, 200);
+          return queuedResponse(env, region, name, "premium", { alreadyQueued: true, upgraded: true });
         }
-        return json({ queued: true, tier: "free", region: region, name: normalizeName(name) }, 200);
+        return queuedResponse(env, region, name, "free", { alreadyQueued: true });
       }
     }
 
