@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Astrogem Queue Admin</title>
+<style>
+  :root{--bg:#0b0d11;--panel:#14171d;--panel2:#1b1f27;--line:#252a33;--text:#e7e9ec;--dim:#8b919b;--accent:#6db1ff;--good:#5fcf80;--warn:#e8b54a;--bad:#e8736a}
+  *{box-sizing:border-box}
+  body{margin:0 auto;max-width:980px;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:24px}
+  h1{font-size:20px;margin:0 0 2px}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 18px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  input{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:9px 12px;font:inherit;min-width:280px;flex:1}
+  input:focus{outline:0;border-color:var(--accent)}
+  button{background:var(--accent);color:#08111c;border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:700;cursor:pointer}
+  button.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:18px 0 6px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  .card .v{font-size:26px;font-weight:800;margin-top:4px;font-variant-numeric:tabular-nums}
+  .card .v small{font-size:12px;color:var(--dim);font-weight:600}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:10px}
+  .panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);margin:0;padding:13px 16px;border-bottom:1px solid var(--line)}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  th,td{text-align:left;padding:7px 16px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
+  tr:last-child td{border-bottom:0}
+  .tier-premium{color:var(--warn);font-weight:700}
+  .tier-free{color:var(--dim)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);margin-right:6px;vertical-align:middle}
+  .dot.stale{background:var(--warn)} .dot.off{background:var(--bad)}
+  .muted{color:var(--dim)} .good{color:var(--good)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+  #status{font-size:12px;color:var(--dim)}
+  .hide{display:none}
+</style>
+</head>
+<body>
+  <h1>Astrogem Queue Admin</h1>
+  <p class="sub">Private live view of the lostark.bible lookup queue. <span id="status"></span></p>
+
+  <div class="row" id="auth">
+    <input id="tok" type="password" placeholder="Owner token (the k= value)" autocomplete="off" spellcheck="false">
+    <button id="connect">Connect</button>
+  </div>
+
+  <div id="app" class="hide">
+    <div class="cards" id="cards"></div>
+    <p class="sub" id="note"></p>
+    <div class="panel">
+      <h2 id="qhead">Queue</h2>
+      <div id="qbody" style="max-height:58vh;overflow:auto"></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button class="ghost" id="refresh">Refresh now</button>
+      <button class="ghost" id="logout">Forget token</button>
+    </div>
+  </div>
+
+<script>
+(function(){
+  var WORKER = "https://astrogem-bible.shizukaziye.workers.dev";
+  var TOKKEY = "astrogem_admin_token";
+  var $ = function(id){ return document.getElementById(id); };
+  var timer = null, lastOk = 0, lastErr = "";
+
+  function fmtAgo(ms){
+    if(!ms) return "never";
+    var s = Math.max(0, Math.round((Date.now()-ms)/1000));
+    if(s<60) return s+"s ago";
+    var m = Math.round(s/60); if(m<60) return m+"m ago";
+    return Math.round(m/60)+"h ago";
+  }
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c];}); }
+  function num(n){ return (n||0).toLocaleString(); }
+  function card(k,v){ return '<div class="card"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'; }
+
+  function setStatus(){
+    if(lastErr){ $("status").innerHTML = '<span class="dot off"></span>'+esc(lastErr); return; }
+    if(!lastOk){ $("status").textContent = ""; return; }
+    var stale = (Date.now()-lastOk) > 25000;
+    $("status").innerHTML = '<span class="dot'+(stale?' stale':'')+'"></span>live · updated '+fmtAgo(lastOk);
+  }
+
+  function render(j){
+    lastOk = Date.now(); lastErr = "";
+    var q = j.queue, d = j.drain, u = j.usage;
+    var clearMin = d.perMin>0 ? Math.ceil(q.total/d.perMin) : 0;
+    var ago = (j.nowMs - j.lastWriteMs)/1000;
+    var drainCls = (!j.lastWriteMs) ? "bad" : (ago<180 ? "good" : (ago<900 ? "warn" : "bad"));
+    $("cards").innerHTML =
+      card("Free backlog", num(q.free)) +
+      card("Premium", num(q.premium)) +
+      card("Total queued", num(q.total) + (q.total ? ' <small>&#8776;'+clearMin+' min to clear</small>' : '')) +
+      card("Drain rate", d.perMin + ' <small>/min &middot; 1 req/'+(d.delayMs/1000)+'s</small>') +
+      card("Last drain", '<span class="'+drainCls+'">'+fmtAgo(j.lastWriteMs)+'</span>') +
+      card("Cached this month", num(u.count) + ' <small>/ '+num(u.budget)+'</small>');
+    $("note").textContent = q.total
+      ? "Clear estimate assumes no new lookups — the drain ("+d.perMin+"/min) is intentionally gentle, so a backlog only shrinks when traffic dips below it."
+      : "";
+    var list = q.list || [];
+    $("qhead").textContent = "Queue — " + q.total + (list.length < q.total ? " (showing first "+list.length+")" : "");
+    if(!list.length){
+      $("qbody").innerHTML = '<p class="muted" style="padding:16px;margin:0">Queue is empty — all caught up. &#127881;</p>';
+    } else {
+      var rows = list.map(function(x,i){
+        var tier = x.tier === "premium" ? "premium" : "free";
+        return '<tr><td class="muted">'+(i+1)+'</td><td class="tier-'+tier+'">'+(tier==="premium"?"&#9733; priority":"free")+'</td><td>'+esc(x.region)+'</td><td>'+esc(x.name)+'</td></tr>';
+      }).join("");
+      $("qbody").innerHTML = '<table><thead><tr><th>#</th><th>Tier</th><th>Region</th><th>Character</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    }
+    setStatus();
+  }
+
+  function showAuth(){ $("auth").classList.remove("hide"); $("app").classList.add("hide"); if(timer){ clearInterval(timer); timer=null; } }
+
+  function poll(){
+    var tok = localStorage.getItem(TOKKEY) || "";
+    if(!tok){ showAuth(); return; }
+    fetch(WORKER + "/?metrics=1&k=" + encodeURIComponent(tok)).then(function(r){
+      if(r.status === 403){ var e = new Error("Wrong token"); e.forbidden = true; throw e; }
+      if(!r.ok) throw new Error("Worker " + r.status);
+      return r.json();
+    }).then(function(j){
+      if(!j || !j.ok) throw new Error("Bad response");
+      $("auth").classList.add("hide"); $("app").classList.remove("hide");
+      render(j);
+    }).catch(function(e){
+      lastErr = e.message || "error"; setStatus();
+      if(e.forbidden){ localStorage.removeItem(TOKKEY); showAuth(); }
+    });
+  }
+
+  function start(){ poll(); if(timer) clearInterval(timer); timer = setInterval(poll, 10000); }
+
+  $("connect").addEventListener("click", function(){ var t = $("tok").value.trim(); if(t){ localStorage.setItem(TOKKEY, t); lastErr=""; start(); } });
+  $("tok").addEventListener("keydown", function(e){ if(e.key === "Enter") $("connect").click(); });
+  $("refresh").addEventListener("click", poll);
+  $("logout").addEventListener("click", function(){ localStorage.removeItem(TOKKEY); lastOk=0; lastErr=""; showAuth(); });
+  setInterval(setStatus, 1000);
+
+  if(localStorage.getItem(TOKKEY)) start(); else showAuth();
+})();
+</script>
+</body>
+</html>

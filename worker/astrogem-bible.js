@@ -668,6 +668,30 @@ export default {
       return handleList(env);
     }
 
+    // Owner-only QUEUE METRICS (gated by the token): backlog counts, the queued list in drain order
+    // (PREMIUM first, then FREE, each alphabetical), drain config + monthly usage. Light — two queue
+    // list()s + two small get()s, NO big snapshot read — so the private dashboard can poll it often.
+    if (u.searchParams.get("metrics") === "1") {
+      if (!premium) return json({ error: "Forbidden — owner token required." }, 403);
+      let qp = [], qf = [];
+      try { qp = (await env.CHARS.list({ prefix: QP })).keys; } catch (e) {}
+      try { qf = (await env.CHARS.list({ prefix: QF })).keys; } catch (e) {}
+      const mapq = function (keys, tier) {
+        return keys.map(function (k) { const m = k.metadata || {}; return { region: m.region || "", name: m.name || "", tier: tier }; });
+      };
+      const list = mapq(qp, "premium").concat(mapq(qf, "free")).slice(0, 500);
+      const usage = (await kvGetJson(env, USAGE_KEY)) || {};
+      let lastWrite = 0;
+      try { lastWrite = parseInt(await env.CHARS.get(LASTWRITE_KEY), 10) || 0; } catch (e) {}
+      return json({
+        ok: true, nowMs: Date.now(),
+        drain: { perRun: DRAIN_PER_RUN, delayMs: DRAIN_DELAY_MS, perMin: DRAIN_PER_RUN },
+        queue: { premium: qp.length, free: qf.length, total: qp.length + qf.length, list: list },
+        usage: { month: usage.month || "", count: (usage.count | 0), budget: MONTHLY_CHAR_BUDGET },
+        lastWriteMs: lastWrite
+      }, 200);
+    }
+
     const region = (u.searchParams.get("region") || "").trim();
     const name = (u.searchParams.get("name") || "").trim();
     const refresh = u.searchParams.get("refresh") === "1";
