@@ -530,8 +530,12 @@ async function drainQueue(env) {
   for (const prefix of [QP, QF]) {
     if (stop || processed >= DRAIN_PER_RUN) break;
     let list;
-    try { list = await env.CHARS.list({ prefix: prefix, limit: DRAIN_PER_RUN }); } catch (e) { break; }
-    for (const k of list.keys) {
+    try { list = await env.CHARS.list({ prefix: prefix }); } catch (e) { break; }
+    // FIFO: drain OLDEST-enqueued first. KV list() returns keys alphabetically, so re-order by the
+    // enqueue `ts` stamped into each entry's metadata (pre-FIFO entries have no ts -> 0 -> treated
+    // as oldest, so they clear first). The queue is gate-bounded, so one unpaged list() is plenty.
+    const ordered = list.keys.slice().sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); });
+    for (const k of ordered) {
       if (processed >= DRAIN_PER_RUN || Date.now() - t0 > DRAIN_BUDGET_MS) { stop = true; break; }
       const md = k.metadata || {};
       if (!md.region || !md.name) { await env.CHARS.delete(k.name); continue; } // malformed -> drop
@@ -583,8 +587,10 @@ async function drainQueue(env) {
 async function queueStatus(env, region, name, tier) {
   const key = charKey(region, name);
   let premium = [], free = [];
-  try { premium = (await env.CHARS.list({ prefix: QP })).keys.map(function (k) { return k.name; }); } catch (e) {}
-  try { free = (await env.CHARS.list({ prefix: QF })).keys.map(function (k) { return k.name; }); } catch (e) {}
+  // FIFO order: sort by the enqueue ts (old entries without a ts sort first, as oldest).
+  const byTs = function (keys) { return keys.slice().sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); }).map(function (k) { return k.name; }); };
+  try { premium = byTs((await env.CHARS.list({ prefix: QP })).keys); } catch (e) {}
+  try { free = byTs((await env.CHARS.list({ prefix: QF })).keys); } catch (e) {}
   let position;
   if (tier === "premium") {
     const pi = premium.indexOf(QP + key);
@@ -621,7 +627,7 @@ async function enqueueChar(env, region, name, premium, wantPos) {
     if (usage && usage.month === new Date().toISOString().slice(0, 7) && (usage.count | 0) >= MONTHLY_CHAR_BUDGET) {
       return json({ error: "We've reached this month's character-caching budget — new lookups resume next month. Cached characters and the leaderboard still work normally.", monthlyBudget: true }, 503);
     }
-    try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
+    try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
     return queuedResponse(env, region, name, premium ? "premium" : "free", { justQueued: true }, wantPos);
   }
   return json({ queued: true, justQueued: true, tier: premium ? "premium" : "free", region: region, name: normalizeName(name) }, 200);
@@ -676,8 +682,10 @@ export default {
       let qp = [], qf = [];
       try { qp = (await env.CHARS.list({ prefix: QP })).keys; } catch (e) {}
       try { qf = (await env.CHARS.list({ prefix: QF })).keys; } catch (e) {}
+      const now = Date.now();
       const mapq = function (keys, tier) {
-        return keys.map(function (k) { const m = k.metadata || {}; return { region: m.region || "", name: m.name || "", tier: tier }; });
+        return keys.slice().sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); })
+          .map(function (k) { const m = k.metadata || {}; return { region: m.region || "", name: m.name || "", tier: tier, waitedS: m.ts ? Math.round((now - m.ts) / 1000) : null }; });
       };
       const list = mapq(qp, "premium").concat(mapq(qf, "free")).slice(0, 500);
       const usage = (await kvGetJson(env, USAGE_KEY)) || {};
@@ -726,7 +734,7 @@ export default {
       if ((await env.CHARS.get(QP + key)) !== null) return queuedResponse(env, region, name, "premium", { alreadyQueued: true }, wantPos);
       if ((await env.CHARS.get(QF + key)) !== null) {
         if (premium) { // a password lookup of a free-queued character bumps it to the premium queue
-          try { await env.CHARS.put(QP + key, "", { metadata: { region: region, name: name }, expirationTtl: QUEUE_TTL_S }); await env.CHARS.delete(QF + key); } catch (e) {}
+          try { await env.CHARS.put(QP + key, "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); await env.CHARS.delete(QF + key); } catch (e) {}
           return queuedResponse(env, region, name, "premium", { alreadyQueued: true, upgraded: true }, wantPos);
         }
         return queuedResponse(env, region, name, "free", { alreadyQueued: true }, wantPos);

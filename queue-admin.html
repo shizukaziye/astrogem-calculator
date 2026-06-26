@@ -72,6 +72,7 @@
     var m = Math.round(s/60); if(m<60) return m+"m ago";
     return Math.round(m/60)+"h ago";
   }
+  function fmtWait(s){ if(s==null) return "—"; if(s<60) return s+"s"; var m=Math.floor(s/60); if(m<60) return m+"m"; return Math.floor(m/60)+"h "+(m%60)+"m"; }
   function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c];}); }
   function num(n){ return (n||0).toLocaleString(); }
   function card(k,v){ return '<div class="card"><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'; }
@@ -106,9 +107,9 @@
     } else {
       var rows = list.map(function(x,i){
         var tier = x.tier === "premium" ? "premium" : "free";
-        return '<tr><td class="muted">'+(i+1)+'</td><td class="tier-'+tier+'">'+(tier==="premium"?"&#9733; priority":"free")+'</td><td>'+esc(x.region)+'</td><td>'+esc(x.name)+'</td></tr>';
+        return '<tr><td class="muted">'+(i+1)+'</td><td class="tier-'+tier+'">'+(tier==="premium"?"&#9733; priority":"free")+'</td><td>'+esc(x.region)+'</td><td>'+esc(x.name)+'</td><td class="muted">'+fmtWait(x.waitedS)+'</td></tr>';
       }).join("");
-      $("qbody").innerHTML = '<table><thead><tr><th>#</th><th>Tier</th><th>Region</th><th>Character</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      $("qbody").innerHTML = '<table><thead><tr><th>#</th><th>Tier</th><th>Region</th><th>Character</th><th>Waited</th></tr></thead><tbody>'+rows+'</tbody></table>';
     }
     setStatus();
   }
