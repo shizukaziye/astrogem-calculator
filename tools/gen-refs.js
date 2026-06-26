@@ -176,6 +176,35 @@ var tierExpectedValueCases = [];
   });
 });
 
+// ----- SUPPORT-axis fusion/value over a grid (parity for the axis="support" path) -----
+// tierExpectedValue(cost, supportGradeToScore(grade), gpd, "support") and
+// fusionValueForTier(tier, cost, supportGradeToScore(grade), gpd, "support").
+var supportFusionCases = [];
+[8, 9, 10].forEach(function (bc) {
+  [57, 66, 77].forEach(function (grade) {
+    [1500000, 5000000].forEach(function (gpd) {
+      var bl = A.supportGradeToScore(grade);
+      var ev = A.tierExpectedValue(bc, bl, gpd, "support");
+      var entry = {
+        baseCost: bc, grade: grade, baseline: round6(bl), goldPerDamage: gpd,
+        ev: { legendary: round6(ev.legendary), relic: round6(ev.relic), ancient: round6(ev.ancient) },
+        fusion: {
+          legendary: round6(A.fusionValueForTier("legendary", bc, bl, gpd, "support")),
+          relic: round6(A.fusionValueForTier("relic", bc, bl, gpd, "support")),
+          ancient: round6(A.fusionValueForTier("ancient", bc, bl, gpd, "support"))
+        }
+      };
+      supportFusionCases.push(entry);
+    });
+  });
+});
+
+// ----- supportGradeToScore at a few grades -----
+var supportGradeToScoreCases = [];
+[52, 66, 87].forEach(function (g) {
+  supportGradeToScoreCases.push({ grade: g, score: round6(A.supportGradeToScore(g)) });
+});
+
 var refs = {
   meta: {
     generated: new Date().toISOString(),
@@ -194,7 +223,9 @@ var refs = {
   fusionOutputDist: fusionDistCases,
   outcomeProbabilities: outcomeProbCases,
   goldValue: goldValueCases,
-  tierExpectedValue: tierExpectedValueCases
+  tierExpectedValue: tierExpectedValueCases,
+  supportFusion: supportFusionCases,
+  supportGradeToScore: supportGradeToScoreCases
 };
 
 var outPath = path.join(__dirname, "..", "refs.json");
@@ -208,3 +239,5 @@ console.log("  fusionOutputDist cases: " + fusionDistCases.length);
 console.log("  outcomeProb cases:      " + outcomeProbCases.length);
 console.log("  goldValue cases:        " + goldValueCases.length);
 console.log("  tierExpectedValue cases:" + tierExpectedValueCases.length);
+console.log("  supportFusion cases:    " + supportFusionCases.length);
+console.log("  supportGradeToScore:    " + supportGradeToScoreCases.length);

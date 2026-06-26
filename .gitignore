@@ -5,3 +5,4 @@ node_modules/
 
 # Tesseract.js auto-downloads its language data when the Node eval harness runs.
 *.traineddata
+worker/.wrangler/

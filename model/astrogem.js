@@ -228,8 +228,49 @@
     return orderLevel * SCORING.orderPerPoint;
   }
 
+  // ---- Willpower as a MULTIPLIER on damage (the grading model) ----
+  // Damage is multiplicative; willpower is a quality multiplier on it. Each baseCost's
+  // PERFECT gem (wp5, order5, top-2 effects @5) lands at cost 3/4/5; M(cost) is
+  // calibrated so those three tie EXACTLY (each -> grade 100):
+  //   M(3)=Dp5/Dp3, M(4)=Dp5/Dp4, M(5)=1.  Cost 6+ continues linearly at the cost4->5
+  //   slope (low willpower punished hard; lands on ~0.90/0.80/0.70/0.60).
+  // Computed from the perfect-gem damages so it tracks the effect weights.
+  function _perfectDamage(baseCost) {
+    var pool = EFFECT_POOLS[baseCost], v = [];
+    for (var i = 0; i < pool.length; i++) v.push(effectScore(pool[i], 5));
+    v.sort(function (a, b) { return b - a; });
+    return v[0] + v[1] + orderScore(5);
+  }
+  var _WP_MULT = (function () {
+    var M = { 3: _perfectDamage(10) / _perfectDamage(8),
+              4: _perfectDamage(10) / _perfectDamage(9),
+              5: 1 };
+    var slope = M[4] - M[5];                 // cost4->5 step; continue linearly for 6+
+    for (var c = 6; c <= 9; c++) M[c] = 1 - slope * (c - 5);
+    return M;
+  })();
+  function willpowerMultiplier(cost) {
+    if (cost <= 3) return _WP_MULT[3];
+    if (cost >= 9) return _WP_MULT[9];
+    if (_WP_MULT[cost] != null) return _WP_MULT[cost];
+    var lo = Math.floor(cost);               // non-integer (e.g. 4.25 baseline): interpolate
+    return _WP_MULT[lo] + (_WP_MULT[lo + 1] - _WP_MULT[lo]) * (cost - lo);
+  }
+
+  // Damage only (effects + order), NO willpower — the gem's actual % damage.
+  function gemDamage(config) {
+    return effectScore(config.effect1, config.effect1Level)
+      + effectScore(config.effect2, config.effect2Level)
+      + orderScore(config.orderLevel);
+  }
+  // Grading value = damage x willpower multiplier (every perfect gem ties at the top).
+  function gemValue(config) {
+    return gemDamage(config) * willpowerMultiplier(willpowerCost(config.baseCost, config.willpowerLevel));
+  }
+
   // Total score = approximate % damage of the gem (sum of per-line D, additive
-  // in log space).
+  // in log space).  [LEGACY additive-willpower score: still feeds the pipeline EV /
+  //  gradeToScore layer until the Stage-2 rebake; grading no longer uses it.]
   function score(config) {
     var wpc = willpowerCost(config.baseCost, config.willpowerLevel);
     return willpowerScore(wpc)
@@ -242,7 +283,8 @@
   // so the combined multiplier is e^(D/100); damagePercent = (mult − 1)·100.
   // For small D this ≈ score(config); for large gems it is slightly below the sum.
   function damagePercent(config) {
-    return (Math.exp(score(config) / 100) - 1) * 100;
+    // willpower is NOT damage in the new model -> use gemDamage (effects + order only).
+    return (Math.exp(gemDamage(config) / 100) - 1) * 100;
   }
 
   // -------------------- cp% damage baseline (the zero-point) --------------------
@@ -270,15 +312,17 @@
   }
 
   // -------------------- 0-100 grade + letter rank --------------------
-  // grade: 0 = the worst possible gem (incl. the willpower penalty), 100 = the
-  // best (perfect 10-cost: Boss5 + AddDmg5, order5, wp5). Min-max over every gem,
-  // enumerated once + cached. (Distribution is well spread: median gem ~43.)
+  // grade: 0 = worst gem OF ITS TYPE, 100 = the perfect gem of its type — so a perfect
+  // cost-3, cost-4 and cost-5 each read 100, and willpower is judged relative to each
+  // type's own wp5 (dynamic). Bounds are computed per baseCost (effect pool), cached;
+  // `all` keeps the global min/max for the legacy (no-baseCost) gradeToScore.
   var _gradeBounds = null;
   function gradeBounds() {
     if (_gradeBounds) return _gradeBounds;
-    var min = Infinity, max = -Infinity, costs = [8, 9, 10];
+    var costs = [8, 9, 10], per = {}, allMin = Infinity, allMax = -Infinity;
     for (var ci = 0; ci < costs.length; ci++) {
       var cost = costs[ci], pool = EFFECT_POOLS[cost];
+      var min = Infinity, max = -Infinity;
       for (var i = 0; i < pool.length; i++)
         for (var j = i + 1; j < pool.length; j++)
           for (var wp = 1; wp <= 5; wp++)
@@ -290,22 +334,53 @@
                   if (s < min) min = s;
                   if (s > max) max = s;
                 }
+      per[cost] = { min: min, max: max };
+      if (min < allMin) allMin = min;
+      if (max > allMax) allMax = max;
     }
-    _gradeBounds = { min: min, max: max };
+    per.all = { min: allMin, max: allMax };
+    _gradeBounds = per;
     return _gradeBounds;
   }
 
-  // 0-100 grade for a gem (rounded to 1 decimal).
+  // 0-100 grade for a gem (rounded to 1 decimal). GLOBAL value-normalization: with the
+  // multiplicative willpower curve every baseCost's perfect gem has the SAME value, so a
+  // single global scale makes a perfect cost-3/4/5 gem each read 100 (no more per-type
+  // bounds). gemValue already folds willpower in multiplicatively.
+  var _valueBounds = null;
+  function valueBounds() {
+    if (_valueBounds) return _valueBounds;
+    var costs = [8, 9, 10], min = Infinity, max = -Infinity;
+    for (var ci = 0; ci < costs.length; ci++) {
+      var bc = costs[ci], pool = EFFECT_POOLS[bc];
+      for (var i = 0; i < pool.length; i++)
+        for (var j = i + 1; j < pool.length; j++)
+          for (var wp = 1; wp <= 5; wp++)
+            for (var o = 1; o <= 5; o++)
+              for (var a = 1; a <= 5; a++)
+                for (var b = 1; b <= 5; b++) {
+                  var v = gemValue({ baseCost: bc, willpowerLevel: wp, orderLevel: o,
+                    effect1: pool[i], effect1Level: a, effect2: pool[j], effect2Level: b });
+                  if (v < min) min = v;
+                  if (v > max) max = v;
+                }
+    }
+    _valueBounds = { min: min, max: max };
+    return _valueBounds;
+  }
   function grade(config) {
-    var b = gradeBounds();
-    var g = 100 * (score(config) - b.min) / (b.max - b.min);
+    var b = valueBounds();
+    var g = 100 * (gemValue(config) - b.min) / (b.max - b.min);
     return Math.round(Math.max(0, Math.min(100, g)) * 10) / 10;
   }
 
   // Inverse of grade(): the score (≈ % damage) at a given 0-100 grade. Used to turn
   // a grade-based baseline into the %-damage threshold the value/verdict logic uses.
-  function gradeToScore(g) {
-    var b = gradeBounds();
+  // Inverse of grade(): the score at grade g. Pass baseCost for the per-type scale; with
+  // no baseCost it uses the global (`all`) bounds — the legacy behavior the pipeline relies on.
+  function gradeToScore(g, baseCost) {
+    var bounds = gradeBounds();
+    var b = (baseCost != null && bounds[baseCost]) ? bounds[baseCost] : bounds.all;
     return b.min + (Math.max(0, Math.min(100, g)) / 100) * (b.max - b.min);
   }
 
@@ -325,6 +400,17 @@
     return "F-";
   }
   function gemRank(config) { return rankFromGrade(grade(config)); }
+
+  // ---- Whole-character (grid) aggregates ----
+  // Raw absolute power: sum of each gem's actual % damage (additive in log space).
+  function gridDamage(gems) {
+    var s = 0; for (var i = 0; i < gems.length; i++) s += gemDamage(gems[i]); return s;
+  }
+  // Cost-fair quality: sum of ln(value) = log of the product of gem values. Pairing-
+  // invariant (equivalent builds tie); the per-gem grades roll up into this.
+  function gridQuality(gems) {
+    var s = 0; for (var i = 0; i < gems.length; i++) s += Math.log(gemValue(gems[i])); return s;
+  }
 
   // ==================== SUPPORT SCORING AXIS ====================
   // A parallel score for SUPPORT gems, mirroring the DPS scoring structure exactly
@@ -434,6 +520,14 @@
 
   // Letter rank from the SUPPORT grade — reuses the SAME RANK_CUTS as DPS.
   function supportRank(config) { return rankFromGrade(supportGrade(config)); }
+
+  // Inverse of supportGrade(): the support score at a 0-100 support grade. Parallel
+  // to gradeToScore — turns a grade-based baseline into the support-score threshold
+  // the support value/verdict logic uses.
+  function supportGradeToScore(g) {
+    var b = supportGradeBounds();
+    return b.min + (Math.max(0, Math.min(100, g)) / 100) * (b.max - b.min);
+  }
 
   // Grade-tier colors (owner's percentile palette): F/D gray, C green, B blue,
   // A purple, S- orange, S pink, S+ white. rank = "S+"|"S"|"S-"|"A+"|"A"|… .
@@ -650,10 +744,12 @@
   // assignments of (levelA, levelB) to the unordered pair, which is equivalent to
   // enumerating ordered pairs uniformly.
   var _scoreDistCache = {};
-  function scoreDistributionForTier(baseCost, tier) {
-    var ck = baseCost + "_" + tier;
+  function scoreDistributionForTier(baseCost, tier, axis) {
+    var support = (axis === "support");
+    var ck = baseCost + "_" + tier + "_" + (support ? "support" : "dps");
     if (_scoreDistCache[ck]) return _scoreDistCache[ck];
 
+    var esFn = support ? supportEffectScore : effectScore;
     var pool = EFFECT_POOLS[baseCost];
     var bounds = TIER_BOUNDS[tier];
     var sumDist = outputLevelSumDist(tier); // P(sum) within tier
@@ -675,12 +771,14 @@
       for (var pi = 0; pi < parts.length; pi++) {
         var part = parts[pi];
         var wp = part[0], ord = part[1], lvA = part[2], lvB = part[3];
-        var baseScore = willpowerScore(willpowerCost(baseCost, wp)) + orderScore(ord);
+        var baseScore = support
+          ? supportWillpowerScore(willpowerCost(baseCost, wp)) + supportOrderScore(ord)
+          : willpowerScore(willpowerCost(baseCost, wp)) + orderScore(ord);
         for (var ci = 0; ci < pairs.length; ci++) {
           var eA = pairs[ci][0], eB = pairs[ci][1];
           // Average over the two assignments of (lvA, lvB) to the unordered pair.
-          var sc1 = baseScore + effectScore(eA, lvA) + effectScore(eB, lvB);
-          var sc2 = baseScore + effectScore(eA, lvB) + effectScore(eB, lvA);
+          var sc1 = baseScore + esFn(eA, lvA) + esFn(eB, lvB);
+          var sc2 = baseScore + esFn(eA, lvB) + esFn(eB, lvA);
           var w = pSum * partW * pairW * 0.5;
           _addToDist(dist, sc1, w);
           _addToDist(dist, sc2, w);
@@ -732,8 +830,8 @@
 
   // Solve the joint system once for (baseline, goldPerDamage). Returns
   //   { E: {8:{legendary,relic,ancient}, 9:{...}, 10:{...}}, maxG, maxH, iters }.
-  function _solveJointEV(baseline, goldPerDamage) {
-    var key = baseline + "_" + goldPerDamage;
+  function _solveJointEV(baseline, goldPerDamage, axis) {
+    var key = baseline + "_" + goldPerDamage + "_" + (axis === "support" ? "support" : "dps");
     if (_jointEVCache[key]) return _jointEVCache[key];
 
     var tiers = ["legendary", "relic", "ancient"];
@@ -747,7 +845,7 @@
       directExp[c] = {}; pBelow[c] = {}; E[c] = {};
       for (ti = 0; ti < tiers.length; ti++) {
         tier = tiers[ti];
-        var dist = scoreDistributionForTier(c, tier);
+        var dist = scoreDistributionForTier(c, tier, axis);
         var dExp = 0, below = 0;
         dist.forEach(function (p, sc) {
           if (sc >= baseline) dExp += p * goldValue(sc, baseline, goldPerDamage);
@@ -817,10 +915,10 @@
   // preserved for callers. The joint solve is computed once per (baseline,
   // goldPerDamage) and cached.
   var _tierEVCache = {};
-  function tierExpectedValue(baseCost, baseline, goldPerDamage) {
-    var key = baseCost + "_" + baseline + "_" + goldPerDamage;
+  function tierExpectedValue(baseCost, baseline, goldPerDamage, axis) {
+    var key = baseCost + "_" + baseline + "_" + goldPerDamage + "_" + (axis === "support" ? "support" : "dps");
     if (_tierEVCache[key]) return _tierEVCache[key];
-    var joint = _solveJointEV(baseline, goldPerDamage);
+    var joint = _solveJointEV(baseline, goldPerDamage, axis);
     var Ec = joint.E[baseCost];
     var result = {
       legendary: Math.max(0, Ec.legendary),
@@ -838,8 +936,8 @@
   //   relic:     1R + 2L (73/25/2)      -> (1/3)*G(c) + (2/3)*maxG - FC
   //   ancient:   1A + 2L (35/40/25)     -> (1/3)*H(c) + (2/3)*maxH - FC
   // (the 2 L's are free surplus, so only the FC=500 fusion fee is paid). Clamped >= 0.
-  function fusionValueForTier(inputTier, baseCost, baseline, goldPerDamage) {
-    var joint = _solveJointEV(baseline, goldPerDamage);
+  function fusionValueForTier(inputTier, baseCost, baseline, goldPerDamage, axis) {
+    var joint = _solveJointEV(baseline, goldPerDamage, axis);
     var Ec = joint.E[baseCost];
     var FC = COSTS.fusion;
     var v;
@@ -900,9 +998,16 @@
     damagePercent: damagePercent,
     cpBaseline: cpBaseline,
     relDamage: relDamage,
+    willpowerMultiplier: willpowerMultiplier,
+    gemDamage: gemDamage,
+    gemValue: gemValue,
+    valueBounds: valueBounds,
+    gridDamage: gridDamage,
+    gridQuality: gridQuality,
     grade: grade,
     gradeBounds: gradeBounds,
     gradeToScore: gradeToScore,
+    supportGradeToScore: supportGradeToScore,
     gemRank: gemRank,
     rankFromGrade: rankFromGrade,
     RANK_CUTS: RANK_CUTS,

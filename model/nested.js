@@ -149,13 +149,13 @@
 
   // ---------------- gem value (direct or fusion-fodder) ----------------
 
-  function calculateGemValue(scoreVal, baseline, goldPerDamage, config) {
+  function calculateGemValue(scoreVal, baseline, goldPerDamage, config, axis) {
     var direct = A.goldValue(scoreVal, baseline, goldPerDamage);
     if (direct > 0) return direct;
     if (!config) return 0;
     var baseCost = config.baseCost != null ? config.baseCost : 10;
     var inputTier = A.classifyTier(A.levelSum(config));
-    return A.fusionValueForTier(inputTier, baseCost, baseline, goldPerDamage);
+    return A.fusionValueForTier(inputTier, baseCost, baseline, goldPerDamage, axis);
   }
 
   // ---------------- state helpers ----------------

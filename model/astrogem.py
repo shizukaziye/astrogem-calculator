@@ -167,8 +167,8 @@ def damage_percent(config):
 
 
 # -------------------- 0-100 grade + letter rank --------------------
-# grade: 0 = worst possible gem (incl. willpower penalty), 100 = best (perfect
-# 10-cost). Min-max over every gem (enumerated once + cached).
+# grade: 0 = worst gem of its TYPE, 100 = the perfect gem of its type (so a perfect
+# cost-3/4/5 each read 100). Per-baseCost min-max, cached; "all" kept for legacy global.
 _GRADE_BOUNDS = None
 
 
@@ -176,9 +176,11 @@ def grade_bounds():
     global _GRADE_BOUNDS
     if _GRADE_BOUNDS is not None:
         return _GRADE_BOUNDS
-    lo, hi = float("inf"), float("-inf")
+    per = {}
+    all_lo, all_hi = float("inf"), float("-inf")
     for cost in (8, 9, 10):
         pool = EFFECT_POOLS[cost]
+        lo, hi = float("inf"), float("-inf")
         for i in range(len(pool)):
             for j in range(i + 1, len(pool)):
                 for wp in range(1, 6):
@@ -194,18 +196,26 @@ def grade_bounds():
                                     lo = s
                                 if s > hi:
                                     hi = s
-    _GRADE_BOUNDS = {"min": lo, "max": hi}
+        per[cost] = {"min": lo, "max": hi}
+        if lo < all_lo:
+            all_lo = lo
+        if hi > all_hi:
+            all_hi = hi
+    per["all"] = {"min": all_lo, "max": all_hi}
+    _GRADE_BOUNDS = per
     return _GRADE_BOUNDS
 
 
 def grade(config):
-    b = grade_bounds()
+    bounds = grade_bounds()
+    b = bounds.get(config["baseCost"], bounds["all"])  # grade vs the perfect gem of THIS type
     g = 100 * (score(config) - b["min"]) / (b["max"] - b["min"])
     return round(max(0.0, min(100.0, g)) * 10) / 10
 
 
-def grade_to_score(g):
-    b = grade_bounds()
+def grade_to_score(g, base_cost=None):
+    bounds = grade_bounds()
+    b = bounds[base_cost] if (base_cost is not None and base_cost in bounds) else bounds["all"]
     return b["min"] + (max(0.0, min(100.0, g)) / 100) * (b["max"] - b["min"])
 
 
@@ -328,6 +338,15 @@ def support_grade(config):
 def support_rank(config):
     # Reuses the SAME RANK_CUTS as DPS.
     return rank_from_grade(support_grade(config))
+
+
+def support_grade_to_score(g):
+    # Inverse of support_grade(): the support score at a 0-100 support grade.
+    # Mirror of grade_to_score using support_grade_bounds (parallel to JS
+    # supportGradeToScore). Turns a grade-based baseline into the support-score
+    # threshold the support value/verdict logic uses.
+    b = support_grade_bounds()
+    return b["min"] + (max(0.0, min(100.0, g)) / 100) * (b["max"] - b["min"])
 
 
 def score_breakdown(config):
@@ -513,11 +532,15 @@ def _round_key(x):
     return round(x * 1e6) / 1e6
 
 
-def score_distribution_for_tier(base_cost, tier):
-    ck = (base_cost, tier)
+def score_distribution_for_tier(base_cost, tier, axis="dps"):
+    # axis="support" builds the distribution with the SUPPORT scoring functions
+    # (mirrors astrogem.js scoreDistributionForTier). Cache key includes the axis.
+    support = (axis == "support")
+    ck = (base_cost, tier, "support" if support else "dps")
     if ck in _SCORE_DIST_CACHE:
         return _SCORE_DIST_CACHE[ck]
 
+    es_fn = support_effect_score if support else effect_score
     pool = EFFECT_POOLS[base_cost]
     sum_dist = output_level_sum_dist(tier)
     dist = {}
@@ -532,10 +555,14 @@ def score_distribution_for_tier(base_cost, tier):
         parts = _partitions_of_sum(s)
         part_w = 1.0 / len(parts)
         for (wp, ordv, lv_a, lv_b) in parts:
-            base_score = willpower_score(willpower_cost(base_cost, wp)) + order_score(ordv)
+            if support:
+                base_score = (support_willpower_score(willpower_cost(base_cost, wp))
+                              + support_order_score(ordv))
+            else:
+                base_score = willpower_score(willpower_cost(base_cost, wp)) + order_score(ordv)
             for (e_a, e_b) in pairs:
-                sc1 = base_score + effect_score(e_a, lv_a) + effect_score(e_b, lv_b)
-                sc2 = base_score + effect_score(e_a, lv_b) + effect_score(e_b, lv_a)
+                sc1 = base_score + es_fn(e_a, lv_a) + es_fn(e_b, lv_b)
+                sc2 = base_score + es_fn(e_a, lv_b) + es_fn(e_b, lv_a)
                 w = p_sum * part_w * pair_w * 0.5
                 k1 = _round_key(sc1)
                 k2 = _round_key(sc2)
@@ -561,13 +588,17 @@ JOINT_COSTS = [8, 9, 10]
 _JOINT_EV_CACHE = {}
 
 
-def _solve_joint_ev(baseline, gold_per_damage):
-    """Solve the joint system once for (baseline, gold_per_damage).
+def _solve_joint_ev(baseline, gold_per_damage, axis="dps"):
+    """Solve the joint system once for (baseline, gold_per_damage, axis).
+
+    axis="support" uses the SUPPORT score distribution (mirrors astrogem.js
+    _solveJointEV); gold_value is unchanged (just (score-baseline)*gpd). Cache key
+    includes the axis.
 
     Returns {"E": {8:{legendary,relic,ancient}, 9:{...}, 10:{...}},
              "maxG": ..., "maxH": ..., "iters": ...}.
     """
-    key = (baseline, gold_per_damage)
+    key = (baseline, gold_per_damage, "support" if axis == "support" else "dps")
     if key in _JOINT_EV_CACHE:
         return _JOINT_EV_CACHE[key]
 
@@ -582,7 +613,7 @@ def _solve_joint_ev(baseline, gold_per_damage):
         p_below[c] = {}
         e[c] = {}
         for tier in tiers:
-            dist = score_distribution_for_tier(c, tier)
+            dist = score_distribution_for_tier(c, tier, axis)
             d_exp = 0.0
             below = 0.0
             for sc, p in dist.items():
@@ -655,11 +686,11 @@ def _solve_joint_ev(baseline, gold_per_damage):
 _TIER_EV_CACHE = {}
 
 
-def tier_expected_value(base_cost, baseline, gold_per_damage):
-    key = (base_cost, baseline, gold_per_damage)
+def tier_expected_value(base_cost, baseline, gold_per_damage, axis="dps"):
+    key = (base_cost, baseline, gold_per_damage, "support" if axis == "support" else "dps")
     if key in _TIER_EV_CACHE:
         return _TIER_EV_CACHE[key]
-    joint = _solve_joint_ev(baseline, gold_per_damage)
+    joint = _solve_joint_ev(baseline, gold_per_damage, axis)
     e_c = joint["E"][base_cost]
     result = {
         "legendary": max(0.0, e_c["legendary"]),
@@ -670,8 +701,8 @@ def tier_expected_value(base_cost, baseline, gold_per_damage):
     return result
 
 
-def fusion_value_for_tier(input_tier, base_cost, baseline, gold_per_damage):
-    joint = _solve_joint_ev(baseline, gold_per_damage)
+def fusion_value_for_tier(input_tier, base_cost, baseline, gold_per_damage, axis="dps"):
+    joint = _solve_joint_ev(baseline, gold_per_damage, axis)
     e_c = joint["E"][base_cost]
     fc = COSTS["fusion"]
     if input_tier == "legendary":

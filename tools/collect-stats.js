@@ -65,6 +65,14 @@ var os = require("os");
 var { Worker } = require("worker_threads");
 var A = require("../model/astrogem.js");
 
+// Scoring axis for this bake: "dps" (default) or "support" (--axis=support). Selects
+// the effect buckets, the grade->score baseline mapping, the DP scoring (in the
+// worker), and the output filename (data/pipeline.json vs data/pipeline-support.json).
+var AXIS = (function () {
+  var a = process.argv.find(function (x) { return x.indexOf("--axis=") === 0; });
+  return (a && a.split("=")[1] === "support") ? "support" : "dps";
+})();
+
 // ---------------------------------------------------------------------------
 // Grid
 // ---------------------------------------------------------------------------
@@ -84,7 +92,7 @@ var RARITIES = ["uncommon", "rare", "epic"];
 var BUCKETS = ["2_damage", "optimal_damage", "suboptimal_damage", "no_damage"];
 
 // Effect pairs per (cost, bucket) — EXACT from ark-grid-solver/collect-statistics-v2.js.
-var EFFECT_BUCKETS = {
+var EFFECT_BUCKETS_DPS = {
   8: {
     "2_damage": { effect1: "Additional Damage", effect2: "Attack Power" },
     "optimal_damage": { effect1: "Additional Damage", effect2: "Brand Power" },
@@ -105,12 +113,40 @@ var EFFECT_BUCKETS = {
   }
 };
 
-// Bake EXACTLY at the grade rows the pipeline renders (ranks C- … S+), so every
-// baked cell is an exact DP value at that baseline grade — no interpolation noise.
-// Each grade -> its %-damage threshold via gradeToScore (the SAME fn the UI uses,
-// so the UI's grade rows land precisely on these baked baselines = exact lookup).
+// SUPPORT axis: the "valuable" lines are the support effects (Ally Atk / Brand / Ally
+// Dmg) and the DPS effects are the dead fillers. Same 2D/Op/Sub/No archetypes, keyed
+// on the support effects (better support per cost: AllyAtk 0.0596 > Brand 0.0434 >
+// AllyDmg 0.0195; Op = better support + dead, Sub = worse support + dead, No = 2 dead).
+var EFFECT_BUCKETS_SUPPORT = {
+  8: { // support: Brand>AllyDmg ; dead: AddDmg, ATK
+    "2_damage": { effect1: "Brand Power", effect2: "Ally Damage Enh." },
+    "optimal_damage": { effect1: "Brand Power", effect2: "Additional Damage" },
+    "suboptimal_damage": { effect1: "Ally Damage Enh.", effect2: "Additional Damage" },
+    "no_damage": { effect1: "Additional Damage", effect2: "Attack Power" }
+  },
+  9: { // support: AllyAtk>AllyDmg ; dead: Boss, ATK
+    "2_damage": { effect1: "Ally Attack Enh.", effect2: "Ally Damage Enh." },
+    "optimal_damage": { effect1: "Ally Attack Enh.", effect2: "Boss Damage" },
+    "suboptimal_damage": { effect1: "Ally Damage Enh.", effect2: "Boss Damage" },
+    "no_damage": { effect1: "Boss Damage", effect2: "Attack Power" }
+  },
+  10: { // support: AllyAtk>Brand ; dead: Boss, AddDmg
+    "2_damage": { effect1: "Ally Attack Enh.", effect2: "Brand Power" },
+    "optimal_damage": { effect1: "Ally Attack Enh.", effect2: "Boss Damage" },
+    "suboptimal_damage": { effect1: "Brand Power", effect2: "Boss Damage" },
+    "no_damage": { effect1: "Boss Damage", effect2: "Additional Damage" }
+  }
+};
+var EFFECT_BUCKETS = AXIS === "support" ? EFFECT_BUCKETS_SUPPORT : EFFECT_BUCKETS_DPS;
+
+// Bake EXACTLY at the grade rows the pipeline renders (ranks C- … S+), so every baked
+// cell is an exact DP value at that baseline grade — no interpolation noise. Each grade
+// -> its score threshold via (support)gradeToScore (the SAME fn the UI uses), axis-aware
+// so support baselines sit on the support score scale.
 var BAKED_GRADES = [52, 57, 62, 66, 70, 73, 77, 80, 83, 87, 92, 97]; // C- … S+
-var BAKED_BASELINES = BAKED_GRADES.map(function (g) { return A.gradeToScore(g); });
+var BAKED_BASELINES = BAKED_GRADES.map(function (g) {
+  return AXIS === "support" ? A.supportGradeToScore(g) : A.gradeToScore(g);
+});
 
 // Per-gpd baseline window shown in the BAKED tables. Cheap gold/1%: even weak gems
 // are worth keeping -> low floor. Expensive gold/1%: only strong gems clear -> high.
@@ -204,7 +240,7 @@ function runWithWorkers(tasks, numWorkers) {
 
   function runWorker(workerId) {
     return new Promise(function (resolve, reject) {
-      var worker = new Worker(workerPath, { workerData: { tasks: tasks, workerId: workerId, numWorkers: numWorkers } });
+      var worker = new Worker(workerPath, { workerData: { tasks: tasks, workerId: workerId, numWorkers: numWorkers, axis: AXIS } });
       active.push(worker);
       worker.on("message", function (msg) {
         if (msg.type !== "result") return;
@@ -414,7 +450,7 @@ function main() {
   if (testMode) {
     var n = sampleArg ? Math.max(1, parseInt(sampleArg.split("=")[1], 10)) : 12;
     // Take a spread: a few of each rarity so --test exercises the epic path too.
-    tasks = tasks.filter(function (t) { return t.baseline === 1.0 && t.gpd === 1500000 && !t.rosterBound; }).slice(0, n);
+    tasks = tasks.filter(function (t) { return t.baseline === BAKED_BASELINES[3] && t.gpd === 1500000 && !t.rosterBound; }).slice(0, n);
     tasks = tasks.map(function (t, i) { return Object.assign({}, t, { id: i }); });
   }
 
@@ -440,6 +476,7 @@ function main() {
     var data = {
       meta: {
         generated: new Date().toISOString(),
+        axis: AXIS,
         generator: "tools/collect-stats.js",
         core: "model/dp.js (exact Bellman DP) over model/astrogem.js + model/nested.js",
         scoreUnit: "percent_damage",
@@ -470,7 +507,7 @@ function main() {
       thru: asm.thru
     };
 
-    var outPath = path.join(__dirname, "..", "data", "pipeline.json");
+    var outPath = path.join(__dirname, "..", "data", AXIS === "support" ? "pipeline-support.json" : "pipeline.json");
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
     fs.writeFileSync(outPath, JSON.stringify(data) + "\n");
     var kb = (fs.statSync(outPath).size / 1024).toFixed(1);

@@ -118,6 +118,26 @@ refs.tierExpectedValue.forEach(function (cse, i) {
   check("tierEV[" + i + "].A", r6(ev.ancient), cse.ev.ancient);
 });
 
+// ---- supportFusion (SUPPORT-axis tierExpectedValue + fusionValueForTier) ----
+(refs.supportFusion || []).forEach(function (cse, i) {
+  var bl = A.supportGradeToScore(cse.grade);
+  var ev = A.tierExpectedValue(cse.baseCost, bl, cse.goldPerDamage, "support");
+  check("supportFusion[" + i + "].ev.L", r6(ev.legendary), cse.ev.legendary);
+  check("supportFusion[" + i + "].ev.R", r6(ev.relic), cse.ev.relic);
+  check("supportFusion[" + i + "].ev.A", r6(ev.ancient), cse.ev.ancient);
+  check("supportFusion[" + i + "].fusion.L",
+    r6(A.fusionValueForTier("legendary", cse.baseCost, bl, cse.goldPerDamage, "support")), cse.fusion.legendary);
+  check("supportFusion[" + i + "].fusion.R",
+    r6(A.fusionValueForTier("relic", cse.baseCost, bl, cse.goldPerDamage, "support")), cse.fusion.relic);
+  check("supportFusion[" + i + "].fusion.A",
+    r6(A.fusionValueForTier("ancient", cse.baseCost, bl, cse.goldPerDamage, "support")), cse.fusion.ancient);
+});
+
+// ---- supportGradeToScore ----
+(refs.supportGradeToScore || []).forEach(function (cse, i) {
+  check("supportGradeToScore[" + i + "]", r6(A.supportGradeToScore(cse.grade)), cse.score);
+});
+
 // ---- summary ----
 console.log("=== verify.js (JS self-consistency) ===");
 console.log("PASS: " + pass + "   FAIL: " + fail);

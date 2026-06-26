@@ -86,15 +86,18 @@
   // terminal value). All zero-score support effects collapse to one class. This +
   // the effect-slot swap symmetry below shrinks the reachable state space a lot.
   var _effClassCache = {};
-  function effectClass(baseCost, effectName) {
-    var ck = baseCost;
+  function effectClass(baseCost, effectName, axis) {
+    var support = (axis === "support");
+    var ck = baseCost + "_" + (support ? "support" : "dps");
     var map = _effClassCache[ck];
     if (!map) {
       map = {};
       var pool = A.EFFECT_POOLS[baseCost] || [];
-      // class id = the per-level damage value rounded; zero-score effects -> 0.
+      // class id = the per-level VALUE on the active axis, rounded; effects with no
+      // value on this axis -> 0 (DPS: support effects=0; support: DPS effects=0).
+      var esFn = support ? A.supportEffectScore : A.effectScore;
       for (var i = 0; i < pool.length; i++) {
-        map[pool[i]] = Math.round(A.effectScore(pool[i], 1) * 1e6); // 0 for support
+        map[pool[i]] = Math.round(esFn(pool[i], 1) * 1e6);
       }
       _effClassCache[ck] = map;
     }
@@ -106,10 +109,10 @@
   // with the two effect pairs ordered canonically (slot-swap symmetry). gemType /
   // baseCost are fixed for a whole cut so they are NOT part of the key (each query
   // builds a fresh Solver, and Solvers are never shared across base costs).
-  function configKey(c) {
+  function configKey(c, axis) {
     var bc = c.baseCost;
-    var c1 = effectClass(bc, c.effect1), l1 = c.effect1Level;
-    var c2 = effectClass(bc, c.effect2), l2 = c.effect2Level;
+    var c1 = effectClass(bc, c.effect1, axis), l1 = c.effect1Level;
+    var c2 = effectClass(bc, c.effect2, axis), l2 = c.effect2Level;
     // order the two (class, level) pairs so {e1,e2} and {e2,e1} share a key
     var aKey, bKey;
     if (c1 < c2 || (c1 === c2 && l1 <= l2)) { aKey = c1 + ":" + l1; bKey = c2 + ":" + l2; }
@@ -209,6 +212,10 @@
     this.baseline = baseline;
     this.gpd = goldPerDamage;
     this.rb = !!rosterBound;
+    // Scoring axis: "dps" (default) or "support". Selects the score function used for
+    // the terminal value, the baseline test, and the memo-key effect canonicalization.
+    this.axis = (opts && opts.axis === "support") ? "support" : "dps";
+    this._score = (this.axis === "support") ? A.supportScore : A.score;
     // Draw model: "wor" (default) = exact without-replacement 4-distinct draw,
     // matching the game (passes the MC gate to ~2%). "iid" = the faster
     // with-replacement approximation (≈2x faster, ~3-5% high on long epic cuts).
@@ -230,7 +237,7 @@
 
   // Terminal gem value (direct or fusion-fodder) — SAME as nested.calculateGemValue.
   Solver.prototype.gemValue = function (config) {
-    return calculateGemValue(A.score(config), this.baseline, this.gpd, config);
+    return calculateGemValue(this._score(config), this.baseline, this.gpd, config, this.axis);
   };
 
   // The continuation record for ONE drawn possibility (collapsed over any
@@ -523,17 +530,17 @@
     cm = clampCm(cm || 0);
     r = clampReroll(r || 0);
     if (t <= 0) {
-      var scT = A.score(config);
+      var scT = this._score(config);
       return { v: this.gemValue(config), act: "complete", expScore: scT, pAbove: scT > this.baseline ? 1 : 0, expSpend: 0 };
     }
-    var key = configKey(config) + "#" + t + "#" + r + "#" + cm;
+    var key = configKey(config, this.axis) + "#" + t + "#" + r + "#" + cm;
     var hit = this.memo[key];
     if (hit !== undefined) return hit;
     this.nodes++;
 
     // Cannot Complete a 0-process gem (t === maxTurns) — only Process or Delete(=0).
     var complete = (t < this.maxTurns) ? this.gemValue(config) : 0;
-    var scTerminal = A.score(config);
+    var scTerminal = this._score(config);
 
     // REROLL does not depend on the draw.
     var reroll = -Infinity, rerollRec = null;

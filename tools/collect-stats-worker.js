@@ -28,7 +28,7 @@ const path = require("path");
 const DP = require(path.join(__dirname, "..", "model", "dp.js"));
 const A = require(path.join(__dirname, "..", "model", "astrogem.js"));
 
-const { tasks, workerId, numWorkers } = workerData;
+const { tasks, workerId, numWorkers, axis } = workerData;
 
 // ---------------------------------------------------------------------------
 // Fresh (level-1) gem config for a bucket — mirrors collect-statistics-v2.js
@@ -83,7 +83,9 @@ function fodderTierSplit(solver, rootConfig, t0, r0) {
     else map.set(k, { config: config, t: t, r: r, cm: cm, prob: prob });
   }
   function addFodder(c, prob) {
-    if (A.score(c) < baseline) acc[A.classifyTier(A.levelSum(c))] += prob;
+    // Use the Solver's axis score (DPS or support) so the below-baseline test matches
+    // the value pass's baseline semantics on the active axis.
+    if (solver._score(c) < baseline) acc[A.classifyTier(A.levelSum(c))] += prob;
   }
 
   // Breadth-first over the reachable policy tree, FOLDING identical
@@ -178,7 +180,7 @@ for (let i = workerId; i < tasks.length; i += numWorkers) {
   const task = tasks[i];
   try {
     const cfg = freshConfig(task.cost, task.effect1, task.effect2);
-    const solver = new DP.Solver(task.baseline, task.gpd, task.rosterBound, { maxTurns: task.maxTurns });
+    const solver = new DP.Solver(task.baseline, task.gpd, task.rosterBound, { maxTurns: task.maxTurns, axis: axis });
     const t = task.maxTurns, r = task.maxRerolls;
     const rec = solver._node(cfg, t, r, 0);  // value + policy diagnostics in one pass
     const cutValue = rec.v;

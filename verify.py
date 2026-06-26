@@ -134,6 +134,27 @@ for i, cse in enumerate(refs["tierExpectedValue"]):
     check("tierEV[%d].R" % i, r6(ev["relic"]), cse["ev"]["relic"])
     check("tierEV[%d].A" % i, r6(ev["ancient"]), cse["ev"]["ancient"])
 
+# ---- supportFusion (SUPPORT-axis tier_expected_value + fusion_value_for_tier) ----
+for i, cse in enumerate(refs.get("supportFusion", [])):
+    bl = A.support_grade_to_score(cse["grade"])
+    ev = A.tier_expected_value(cse["baseCost"], bl, cse["goldPerDamage"], "support")
+    check("supportFusion[%d].ev.L" % i, r6(ev["legendary"]), cse["ev"]["legendary"])
+    check("supportFusion[%d].ev.R" % i, r6(ev["relic"]), cse["ev"]["relic"])
+    check("supportFusion[%d].ev.A" % i, r6(ev["ancient"]), cse["ev"]["ancient"])
+    check("supportFusion[%d].fusion.L" % i,
+          r6(A.fusion_value_for_tier("legendary", cse["baseCost"], bl, cse["goldPerDamage"], "support")),
+          cse["fusion"]["legendary"])
+    check("supportFusion[%d].fusion.R" % i,
+          r6(A.fusion_value_for_tier("relic", cse["baseCost"], bl, cse["goldPerDamage"], "support")),
+          cse["fusion"]["relic"])
+    check("supportFusion[%d].fusion.A" % i,
+          r6(A.fusion_value_for_tier("ancient", cse["baseCost"], bl, cse["goldPerDamage"], "support")),
+          cse["fusion"]["ancient"])
+
+# ---- supportGradeToScore ----
+for i, cse in enumerate(refs.get("supportGradeToScore", [])):
+    check("supportGradeToScore[%d]" % i, r6(A.support_grade_to_score(cse["grade"])), cse["score"])
+
 # ---- summary ----
 print("=== verify.py (JS<->Python parity) ===")
 print("PASS: %d   FAIL: %d" % (_pass, _fail))
