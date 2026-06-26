@@ -25,6 +25,20 @@ compatibility_date = "2026-06-01"
 binding = "CHARS"
 id = "0f51c3b5ac6d45a59186375d62879ad7"
 
+# Rebuild the leaderboard snapshot server-side every 10 minutes (the worker only does the
+# expensive full re-read when a character actually changed since the last build).
+[triggers]
+crons = ["*/10 * * * *"]
+
+# Edge throttle for NON-password character pulls: at most 1 per 10s per IP (the key is the IP,
+# passed in code). Blocks rapid free-tier spam before it can touch KV. period must be 10 or 60.
+[[ratelimits]]
+name = "PULL_THROTTLE"
+namespace_id = "1001"
+[ratelimits.simple]
+limit = 1
+period = 10
+
 # Observability (logs) — optional, handy while validating the parser.
 [observability]
 enabled = true

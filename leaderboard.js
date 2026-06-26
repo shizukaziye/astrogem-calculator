@@ -293,7 +293,6 @@
 '      <button class="lb-regbtn on" id="lb-reg-KR" type="button" aria-pressed="true">KR</button>' +
 '    </div>' +
 '    <input class="lb-search" id="lb-search" type="search" placeholder="Search name&hellip;" autocomplete="off" aria-label="Search characters by name">' +
-'    <button class="mbtn" id="lb-refresh" type="button">Refresh</button>' +
 '    <span class="lb-status" id="lb-status"></span>' +
 '  </div>' +
 '  <div id="lb-body"></div>' +
@@ -570,7 +569,7 @@
     if (window.astrogemGate && !window.astrogemGate.isUnlocked()) {
       window.astrogemGate.ensureUnlocked().then(function (ok) {
         if (ok) load();
-        else { setStatus("Locked", "err"); renderEmpty("This leaderboard is access-limited — click Refresh and enter the password to load it."); loadedOnce = true; }
+        else { setStatus("Locked", "err"); renderEmpty("The leaderboard is for password holders — re-open this tab and enter the password to view it."); }
       });
       return;
     }
@@ -613,8 +612,6 @@
     if (!el) return;
     el.innerHTML = shell();
     el.classList.add("axis-dps");   // default DPS = red theme
-    $("lb-refresh").addEventListener("click", load);
-
     // Name search: filter the table by name (matches at ANY grade, so sub-B- characters
     // are findable). Empty box restores the normal board. Favorites hide while searching.
     var searchEl = $("lb-search");

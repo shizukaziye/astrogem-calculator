@@ -215,8 +215,10 @@ function coresToGems(cores) {
 // ---- KV cache config + helpers ----
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // a cached character is "fresh" for 7 days.
 const INDEX_KEY = "__index__";               // KV key holding a JSON array of all char keys.
-const SNAPSHOT_KEY = "lb:snapshot";          // single KV key caching the whole leaderboard list (?list=1).
-const SNAPSHOT_TTL_MS = 10 * 60 * 1000;      // rebuild that snapshot at most once per 10 minutes.
+const SNAPSHOT_KEY = "lb:snapshot";          // single KV key holding the whole leaderboard list (?list=1 serves it).
+const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent character write (plain overwrite, race-free).
+const BUILTAT_KEY = "lb:builtat";            // ms timestamp the snapshot was last rebuilt by the cron.
+const FREE_DAILY_CAP = 5;                    // successful pulls/day for a NON-password (un-gated) client, keyed by IP.
 // Access token the GATED client appends as ?k= (== gate.js's salted hash). Requests without it
 // are un-refreshed pre-gate clients -> 403'd before any KV work, so they stop draining the quota.
 // Not the password (a one-way hash); a stale client just needs to refresh the page.
@@ -423,29 +425,32 @@ async function fetchCharacterData(region, name) {
 //   - else fetch fresh, store { region, name, gems, pulledAt, ... }, index the key, cached:false.
 //   - &refresh=1 bypasses the cache read (force fresh + re-store).
 //   - no env.CHARS -> fetch fresh every time, no caching (cached:false, no pulledAt write).
-async function handleCharacter(env, region, name, refresh) {
+async function handleCharacter(env, region, name, refresh, extra) {
   const key = charKey(region, name);
+  extra = extra || {};
 
   if (env && env.CHARS && !refresh) {
     const cached = await kvGetJson(env, key);
     if (cached && typeof cached.pulledAt === "number" && (Date.now() - cached.pulledAt) < CACHE_TTL_MS) {
-      return json(Object.assign({}, cached, { cached: true }), 200);
+      return json(Object.assign({}, cached, { cached: true }, extra), 200);
     }
   }
 
   const res = await fetchCharacterData(region, name);
-  if (!res.ok) return json(res.body, res.status);
+  if (!res.ok) return json(Object.assign({}, res.body, extra), res.status);
 
   const record = Object.assign({}, res.data, { pulledAt: Date.now() });
   if (env && env.CHARS) {
     try {
       await env.CHARS.put(key, JSON.stringify(record));
-      // No index to maintain — handleList enumerates keys via KV list() (race-free).
+      // Bump the leaderboard "last write" stamp so the next cron run rebuilds the snapshot.
+      // handleList enumerates keys via KV list() (race-free); no per-key index to maintain.
+      await env.CHARS.put(LASTWRITE_KEY, String(Date.now()));
     } catch (e) {
       // Storage failure is non-fatal: still return the freshly fetched data.
     }
   }
-  return json(Object.assign({}, record, { cached: false }), 200);
+  return json(Object.assign({}, record, { cached: false }, extra), 200);
 }
 
 // Rebuild the leaderboard list from a race-free KV enumeration. This is the EXPENSIVE path
@@ -469,24 +474,50 @@ async function buildCharacterList(env) {
   return characters;
 }
 
-// GET /?list=1 — leaderboard list. Served from ONE snapshot key (a single KV read) that is
-// lazily rebuilt at most once per SNAPSHOT_TTL_MS. This collapses the old ~1-read-per-character
-// cost (hundreds of reads per open) to one read — the fix for the blown free KV read quota.
+// GET /?list=1 — leaderboard list. Serves the snapshot key in a SINGLE read and NEVER rebuilds
+// on demand: the snapshot is maintained server-side by the cron (rebuildSnapshotIfChanged), so
+// reads are decoupled from how often the board is opened. Empty until the first cron build.
 async function handleList(env) {
   if (!env || !env.CHARS) return json({ characters: [] }, 200);
   const snap = await kvGetJson(env, SNAPSHOT_KEY);
-  if (snap && typeof snap.builtAt === "number" && Array.isArray(snap.characters)
-      && (Date.now() - snap.builtAt) < SNAPSHOT_TTL_MS) {
-    return json({ characters: snap.characters, snapshot: true, builtAt: snap.builtAt }, 200);
-  }
-  // Stale or missing -> rebuild from the live keys (the only multi-read path).
+  const characters = (snap && Array.isArray(snap.characters)) ? snap.characters : [];
+  return json({ characters: characters, builtAt: (snap && snap.builtAt) || 0 }, 200);
+}
+
+// Cron entry: rebuild the leaderboard snapshot, but ONLY when a character was written since the
+// last build (lastWrite > builtAt) — so idle 10-min windows cost ~2 small reads instead of a
+// full re-read of every stored character. Race-free: lastWrite is a plain overwrite and the
+// build is a fresh list() enumeration. Stamps builtAt at the START so a write landing mid-build
+// re-triggers next run. Never pins an empty result (e.g. a throttled read).
+async function rebuildSnapshotIfChanged(env) {
+  if (!env || !env.CHARS) return;
+  const lastWrite = parseInt((await env.CHARS.get(LASTWRITE_KEY)) || "0", 10);
+  const builtAt = parseInt((await env.CHARS.get(BUILTAT_KEY)) || "0", 10);
+  if (builtAt > 0 && lastWrite <= builtAt) return; // nothing changed since the last build
+  const startedAt = Date.now();
   const characters = await buildCharacterList(env);
-  // Cache it for next time — but NEVER pin an empty result (a throttled/failed read shouldn't
-  // stick a blank leaderboard for the whole TTL; let the next request retry instead).
-  if (characters.length) {
-    try { await env.CHARS.put(SNAPSHOT_KEY, JSON.stringify({ builtAt: Date.now(), characters: characters })); } catch (e) {}
-  }
-  return json({ characters: characters, snapshot: false }, 200);
+  if (!characters.length) return;
+  await env.CHARS.put(SNAPSHOT_KEY, JSON.stringify({ builtAt: startedAt, characters: characters }));
+  await env.CHARS.put(BUILTAT_KEY, String(startedAt));
+}
+
+// Reserve one of a NON-password client's free daily pulls (by IP, UTC day). The edge throttle
+// gates this so it's read at most ~1x/10s/IP. Records auto-expire after 2 days. -> {ok, remaining}.
+async function reserveFreePull(env, ip) {
+  if (!env || !env.CHARS) return { ok: true, remaining: FREE_DAILY_CAP };
+  const today = new Date().toISOString().slice(0, 10);
+  const k = "rl:" + (await sha256Hex(ip));
+  const cur = await kvGetJson(env, k);
+  let count = (cur && cur.day === today) ? (cur.count | 0) : 0;
+  if (count >= FREE_DAILY_CAP) return { ok: false, remaining: 0 };
+  count += 1;
+  try { await env.CHARS.put(k, JSON.stringify({ day: today, count: count }), { expirationTtl: 172800 }); } catch (e) {}
+  return { ok: true, remaining: FREE_DAILY_CAP - count };
+}
+
+async function sha256Hex(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
 }
 
 export default {
@@ -516,8 +547,27 @@ export default {
     if (!region || !name) {
       return json({ error: "Both ?region= and ?name= are required (e.g. ?region=NA&name=Paroxysmal)." }, 400);
     }
-    if (!gated(u)) return json({ error: "This app was updated — please refresh the page to continue.", refresh: true }, 403);
+    // Password (gated) clients: unlimited. Everyone else: a small free daily allowance, paced
+    // by an edge throttle (no KV touched on a throttled hit, so a flood can't drain the quota).
+    if (gated(u)) {
+      return handleCharacter(env, region, name, refresh);
+    }
+    const ip = request.headers.get("CF-Connecting-IP") || "0.0.0.0";
+    if (env.PULL_THROTTLE) {
+      const t = await env.PULL_THROTTLE.limit({ key: "pull:" + ip });
+      if (!t.success) {
+        return json({ error: "Free requests are paced to one every 10 seconds — please wait.", rateLimited: true, retryAfterMs: 10000 }, 429);
+      }
+    }
+    const cap = await reserveFreePull(env, ip);
+    if (!cap.ok) {
+      return json({ error: "Free daily limit reached (" + FREE_DAILY_CAP + "). Resets at UTC midnight — enter the password for unlimited access.", rateLimited: true, dailyLimit: true, remaining: 0 }, 429);
+    }
+    return handleCharacter(env, region, name, refresh, { free: true, remaining: cap.remaining });
+  },
 
-    return handleCharacter(env, region, name, refresh);
+  async scheduled(controller, env, ctx) {
+    // Runs on the cron schedule (every 10 min): refresh the leaderboard snapshot if anything changed.
+    await rebuildSnapshotIfChanged(env);
   }
 };

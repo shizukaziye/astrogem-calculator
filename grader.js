@@ -376,6 +376,11 @@
 '  #tab-grader .gr-pullctl .fld-name{flex:0 0 auto;width:200px}' +
 '  #tab-grader .gr-pullctl .fld select,#tab-grader .gr-pullctl .fld input{width:100%}' +
 '  #tab-grader .gr-pullbtns{display:flex;gap:10px;flex-wrap:wrap;align-items:center}' +
+'  #tab-grader .gr-freenote{font-size:12px;color:var(--dim);margin-top:6px;line-height:1.5}' +
+'  #tab-grader .gr-freenote b{color:var(--text)}' +
+'  #tab-grader .gr-freenote .gr-cap{color:#e0683c;font-weight:600}' +
+'  #tab-grader .gr-freenote .gr-unlock{color:var(--axis,var(--accent));cursor:pointer;white-space:nowrap}' +
+'  #tab-grader .gr-freenote .gr-unlock:hover{text-decoration:underline}' +
 '  @media(max-width:520px){#tab-grader .gr-pullctl .fld-name{flex:1 1 160px;width:auto}}' +
 // DPS / Support grading toggle (two pills) — sits above the loadout, near the header.
 '  #tab-grader .gr-axis{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}' +
@@ -584,6 +589,7 @@
 '            <button class="mbtn" id="gr-pull-refresh" type="button" style="display:none">Re-pull</button>' +
 '          </div>' +
 '          <div class="barrow" style="margin-top:8px"><span class="gr-status" id="gr-pull-status"></span></div>' +
+'          <div class="gr-freenote" id="gr-free-note"></div>' +
 '          <div class="note" id="gr-pull-note"></div>' +
 '        </div>' +
 '        <div class="gr-pullright"><div class="gr-favs" id="gr-favs"></div></div>' +
@@ -1276,14 +1282,8 @@ presetToggleHtml(data) +
   }
 
   function runPull(refresh) {
-    // Worker-access gate: if locked, prompt; on success re-run unlocked, else abort.
-    if (window.astrogemGate && !window.astrogemGate.isUnlocked()) {
-      window.astrogemGate.ensureUnlocked().then(function (ok) {
-        if (ok) runPull(refresh);
-        else setPullStatus("Locked — enter the password to pull from the Worker.", "err");
-      });
-      return;
-    }
+    // Pull is open to everyone: password-holders (token, see below) are unlimited; everyone
+    // else gets the Worker's free daily allowance, paced by the countdown started on success.
     if (!WORKER_URL) {
       setPullStatus("", "");
       $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">The lostark.bible Worker isn’t configured. Deploy worker/astrogem-bible.js and set WORKER_URL at the top of grader.js.</div></div>';
@@ -1303,13 +1303,18 @@ presetToggleHtml(data) +
       "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) +
       (refresh ? "&refresh=1" : "") +
       (k ? "&k=" + encodeURIComponent(k) : "");
+    var pendingCountdownMs = 0;
     fetch(url).then(function (resp) {
       return resp.json().then(function (data) { return { ok: resp.ok, data: data }; });
     }).then(function (r) {
-      if (!r.ok || (r.data && r.data.error && !r.data.gems)) {
-        var msg = (r.data && r.data.error) || ("Worker returned an error.");
+      var d = r.data || {};
+      if (!r.ok || (d.error && !d.gems)) {
+        var msg = d.error || "Worker returned an error.";
         setPullStatus(msg, "err");
         $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(msg) + '</div></div>';
+        if (d.rateLimited && d.retryAfterMs) pendingCountdownMs = d.retryAfterMs; // throttled -> pace the button
+        if (d.dailyLimit) setFreeStatus(0);
+        if (d.free) { pendingCountdownMs = 10000; setFreeStatus(d.remaining); } // free slot consumed even on a fetch error
         return;
       }
       lastLoadout = r.data;
@@ -1318,13 +1323,56 @@ presetToggleHtml(data) +
       setPullStatus("Graded " + ((r.data.gems || []).length) + " gems.", "");
       if (refreshBtn) refreshBtn.style.display = "";
       renderLoadout(r.data);
+      if (d.free) { pendingCountdownMs = 10000; setFreeStatus(d.remaining); } // free tier: pace + show X/5 left
     }).catch(function (e) {
       setPullStatus("Request failed: " + (e && e.message || e), "err");
     }).then(function () {
-      $("gr-pull-go").disabled = false;
-      if (refreshBtn) refreshBtn.disabled = false;
+      if (pendingCountdownMs > 0) startCountdown(pendingCountdownMs);
+      else { $("gr-pull-go").disabled = false; if (refreshBtn) refreshBtn.disabled = false; }
     });
   }
+
+  // ---------------- free-tier pacing + status ----------------
+  // After a free (non-password) pull, disable the pull buttons for `ms` and tick down a
+  // countdown on the button label, so a free user is paced to the Worker's 1-per-10s rate.
+  var grCountdownTimer = null;
+  function startCountdown(ms) {
+    var go = $("gr-pull-go"), rb = $("gr-pull-refresh");
+    if (!go) return;
+    if (grCountdownTimer) { clearInterval(grCountdownTimer); grCountdownTimer = null; }
+    var until = Date.now() + ms;
+    go.disabled = true; if (rb) rb.disabled = true;
+    function tick() {
+      var left = Math.ceil((until - Date.now()) / 1000);
+      if (left <= 0) {
+        clearInterval(grCountdownTimer); grCountdownTimer = null;
+        go.disabled = false; if (rb) rb.disabled = false;
+        go.textContent = "Grade loadout";
+        return;
+      }
+      go.textContent = "Wait " + left + "s…";
+    }
+    tick();
+    grCountdownTimer = setInterval(tick, 250);
+  }
+
+  // The "X/5 free pulls left today" note under the pull buttons (hidden for password-holders,
+  // who are unlimited). Pass a number to update the remembered count; call with none to re-render.
+  var grFreeRemaining = null;
+  function setFreeStatus(remaining) {
+    if (typeof remaining === "number") grFreeRemaining = remaining;
+    var el = $("gr-free-note");
+    if (!el) return;
+    if (window.astrogemGate && window.astrogemGate.isUnlocked()) { el.innerHTML = ""; return; }
+    var left = (grFreeRemaining == null) ? 5 : grFreeRemaining;
+    var head = (left <= 0)
+      ? '<span class="gr-cap">Free daily limit reached.</span> Resets at UTC midnight.'
+      : '<b>' + left + '</b> of 5 free pulls left today · paced ~10s apart.';
+    el.innerHTML = head + ' <a class="gr-unlock" onclick="window.__grUnlock()">Have the password? Unlock for unlimited →</a>';
+  }
+  window.__grUnlock = function () {
+    if (window.astrogemGate) window.astrogemGate.ensureUnlocked().then(function () { setFreeStatus(); });
+  };
 
   // ---------------- mode switching ----------------
   function selectMode(mode) {
@@ -1333,7 +1381,7 @@ presetToggleHtml(data) +
     $("gr-mode-pull").classList.toggle("active", !custom);
     $("gr-body-custom").style.display = custom ? "" : "none";
     $("gr-body-pull").style.display = custom ? "none" : "";
-    if (!custom) renderFavRow(); // refresh the saved-characters quick-pick row
+    if (!custom) { renderFavRow(); setFreeStatus(); } // saved-chars quick-pick + free-tier note
     if (custom) {
       renderCustom();
     } else if (lastLoadout) {
