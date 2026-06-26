@@ -220,11 +220,13 @@ const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent 
 const BUILTAT_KEY = "lb:builtat";            // ms timestamp the snapshot was last rebuilt by the cron.
 const QP = "q:p:";                           // premium lookup-queue key prefix (region+name ride in KV metadata).
 const QF = "q:f:";                           // free lookup-queue key prefix.
-const DRAIN_PER_RUN = 20;                     // max characters cached per cron run (~20/min) — kept ABOVE the 10/min enqueue gate so a backlog actually drains instead of just holding. Time-budgeted below so it never overruns the 60s cron; monthly guard caps the total.
+const DRAIN_PER_RUN = 12;                     // max characters cached per cron run — kept gentle on lostark.bible: an aggressive rate just gets rate-limited/timed-out, which FAILS far more than it caches. Time-budgeted below so it never overruns the 60s cron; monthly guard caps the total.
 const MONTHLY_CHAR_BUDGET = 300000;          // hard cap on characters cached per calendar month (~2 writes each ≈ 66% of the 1M/mo write budget → no overage, ever).
 const USAGE_KEY = "usage:drained";           // {month:"YYYY-MM", count} — characters cached this month (the budget guard).
-const DRAIN_DELAY_MS = 1500;                 // pause between lostark.bible fetches within a drain run (gentle on the upstream).
+const DRAIN_DELAY_MS = 3000;                 // pause between lostark.bible fetches (~1 req / 3s) — gentle enough to avoid upstream rate-limiting/timeouts, which cost more than they cache.
 const DRAIN_BUDGET_MS = 50000;               // stop a drain run after ~50s no matter the count, so it never overruns the 60s cron (margin for the snapshot rebuild + no overlapping runs).
+const UPSTREAM_FAIL_LIMIT = 6;               // consecutive fetch failures before assuming lostark.bible is down/limiting and backing off this run (one bad/slow character is skipped, not fatal — no head-of-line blocking).
+const MAX_FETCH_ATTEMPTS = 5;                // after this many failed fetches a queued character is DROPPED, so a permanently-broken entry (e.g. some KR names) can't sit at the head retrying forever and starving everyone behind it.
 const QUEUE_TTL_S = 7 * 24 * 60 * 60;        // a queued request expires after 7 days if never drained.
 const SNAPSHOT_MIN_INTERVAL_MS = 30 * 60 * 1000; // rebuild the leaderboard snapshot at most every ~30 min (the read-heavy part).
 // Access token the GATED client appends as ?k= (== gate.js's salted hash). Requests without it
@@ -523,7 +525,7 @@ async function drainQueue(env) {
   const usage = await kvGetJson(env, USAGE_KEY);
   let used = (usage && usage.month === month) ? (usage.count | 0) : 0;
   if (used >= MONTHLY_CHAR_BUDGET) return;
-  let processed = 0, cached = 0, stop = false;
+  let processed = 0, cached = 0, failed = 0, consecFail = 0, stop = false;
   const t0 = Date.now();
   for (const prefix of [QP, QF]) {
     if (stop || processed >= DRAIN_PER_RUN) break;
@@ -533,20 +535,40 @@ async function drainQueue(env) {
       if (processed >= DRAIN_PER_RUN || Date.now() - t0 > DRAIN_BUDGET_MS) { stop = true; break; }
       const md = k.metadata || {};
       if (!md.region || !md.name) { await env.CHARS.delete(k.name); continue; } // malformed -> drop
-      let res;
-      try { res = await fetchCharacterData(md.region, md.name); } catch (e) { stop = true; break; }
-      if (res.ok) {
+      let res = null;
+      try { res = await fetchCharacterData(md.region, md.name); } catch (e) { res = null; } // timeout/network -> treat as upstream error
+      if (!res || res.status >= 500) {
+        // lostark.bible 502s on a chunk of requests independent of our rate; one quick retry
+        // catches the transient ones in THIS run, so they don't consume a future run's slot.
+        await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
+        try { res = await fetchCharacterData(md.region, md.name); } catch (e) { res = null; }
+      }
+      if (res && res.ok) {
+        consecFail = 0;
         const record = Object.assign({}, res.data, { pulledAt: Date.now() });
         try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(record)); await env.CHARS.delete(k.name); cached++; } catch (e) {}
-      } else if (res.status >= 400 && res.status < 500) {
+      } else if (res && res.status >= 400 && res.status < 500) {
+        consecFail = 0;
         await env.CHARS.delete(k.name); // not found / bad request -> drop from queue
       } else {
-        stop = true; break; // 5xx / upstream rate-limit -> leave queued, stop this run
+        // 5xx / network error / timeout: SKIP this character (leave it queued) so one bad or slow
+        // character can't head-of-line-block the queue. Count attempts in its metadata so a
+        // PERMANENTLY broken entry (e.g. some KR names) is eventually DROPPED instead of retried
+        // forever at the head, starving everyone behind it.
+        failed++;
+        const att = (md.attempts | 0) + 1;
+        console.log("[drain-fail] " + md.region + ":" + md.name + " status=" + (res ? res.status : "throw") + " att=" + att);
+        try {
+          if (att >= MAX_FETCH_ATTEMPTS) await env.CHARS.delete(k.name);                                  // give up — drop it
+          else await env.CHARS.put(k.name, "", { metadata: { region: md.region, name: md.name, attempts: att }, expirationTtl: QUEUE_TTL_S });
+        } catch (e) {}
+        if (++consecFail >= UPSTREAM_FAIL_LIMIT) { stop = true; break; } // sustained streak -> upstream down, back off
       }
       processed++;
       if (processed < DRAIN_PER_RUN) await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
     }
   }
+  if (processed > 0 || failed > 0) console.log("[drain] processed=" + processed + " cached=" + cached + " failed=" + failed + (stop ? " (backed off)" : ""));
   if (cached > 0) {
     try { await env.CHARS.put(LASTWRITE_KEY, String(Date.now())); } catch (e) {}
     try { await env.CHARS.put(USAGE_KEY, JSON.stringify({ month: month, count: used + cached }), { expirationTtl: 40 * 24 * 3600 }); } catch (e) {}
@@ -578,15 +600,18 @@ async function queueStatus(env, region, name, tier) {
 // A "queued" JSON response carrying the live queue status (position / total / ETA). Used both
 // when a character is freshly queued AND when it's ALREADY queued (so a re-lookup never double-
 // adds — it just reports where you are).
-async function queuedResponse(env, region, name, tier, extra) {
-  const st = await queueStatus(env, region, name, tier);
-  return json(Object.assign({ queued: true, tier: tier, region: region, name: normalizeName(name) }, st, extra || {}), 200);
+async function queuedResponse(env, region, name, tier, extra, wantPos) {
+  // Position/total/ETA cost two KV list()s — compute them only when the client asks (&pos=1: the
+  // initial lookup + manual refresh). The 8s auto-poll omits &pos, so it pays only the cheap get()s
+  // and the client keeps showing the position from its first response.
+  const st = wantPos ? await queueStatus(env, region, name, tier) : null;
+  return json(Object.assign({ queued: true, tier: tier, region: region, name: normalizeName(name) }, st || {}, extra || {}), 200);
 }
 
 // Add a not-yet-cached character to the premium/free queue, gated by a GLOBAL enqueue rate so the
 // queue can't be filled faster than the drain empties it (keeps monthly writes bounded). region+name
 // stored as KV metadata (the drain reads them from list() without an extra get).
-async function enqueueChar(env, region, name, premium) {
+async function enqueueChar(env, region, name, premium, wantPos) {
   if (env.ENQUEUE_GATE) {
     const g = await env.ENQUEUE_GATE.limit({ key: "enqueue" });
     if (!g.success) return json({ error: "The lookup queue is busy right now — please try again in a moment.", queueBusy: true, rateLimited: true, retryAfterMs: 30000 }, 429);
@@ -597,7 +622,7 @@ async function enqueueChar(env, region, name, premium) {
       return json({ error: "We've reached this month's character-caching budget — new lookups resume next month. Cached characters and the leaderboard still work normally.", monthlyBudget: true }, 503);
     }
     try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
-    return queuedResponse(env, region, name, premium ? "premium" : "free", { justQueued: true });
+    return queuedResponse(env, region, name, premium ? "premium" : "free", { justQueued: true }, wantPos);
   }
   return json({ queued: true, justQueued: true, tier: premium ? "premium" : "free", region: region, name: normalizeName(name) }, 200);
 }
@@ -668,17 +693,19 @@ export default {
     // MISS. New clients send &queue=1 -> the character is QUEUED (cached later by the drain).
     // Old clients (no &queue=1) keep the legacy synchronous fetch so nothing breaks mid-migration.
     const wantQueue = u.searchParams.get("queue") === "1";
+    const wantPos = u.searchParams.get("pos") === "1"; // compute queue position/ETA (2 KV lists) only when asked — the initial lookup + manual refresh set &pos=1; the 8s auto-poll omits it, so waiting costs only cheap get()s.
 
-    // Already in the queue? Don't re-add — return its live position/total/ETA for free (no rate
-    // limit). This is also the poll path the client hits while it waits for the drain.
+    // Already in the queue? Don't re-add — confirm it's still queued (cheap get) and, only when the
+    // client asked (&pos=1), its live position/total/ETA. This is also the poll path the client hits
+    // while it waits for the drain, kept list()-free so a waiting tab is nearly free to serve.
     if (wantQueue && env.CHARS) {
-      if ((await env.CHARS.get(QP + key)) !== null) return queuedResponse(env, region, name, "premium", { alreadyQueued: true });
+      if ((await env.CHARS.get(QP + key)) !== null) return queuedResponse(env, region, name, "premium", { alreadyQueued: true }, wantPos);
       if ((await env.CHARS.get(QF + key)) !== null) {
         if (premium) { // a password lookup of a free-queued character bumps it to the premium queue
           try { await env.CHARS.put(QP + key, "", { metadata: { region: region, name: name }, expirationTtl: QUEUE_TTL_S }); await env.CHARS.delete(QF + key); } catch (e) {}
-          return queuedResponse(env, region, name, "premium", { alreadyQueued: true, upgraded: true });
+          return queuedResponse(env, region, name, "premium", { alreadyQueued: true, upgraded: true }, wantPos);
         }
-        return queuedResponse(env, region, name, "free", { alreadyQueued: true });
+        return queuedResponse(env, region, name, "free", { alreadyQueued: true }, wantPos);
       }
     }
 
@@ -691,7 +718,7 @@ export default {
       const t = await env.LOOKUP_THROTTLE.limit({ key: ip });
       if (!t.success) return json({ error: "One new-character lookup every 5 seconds — please wait a moment (cached characters are unlimited).", rateLimited: true, retryAfterMs: 5000, throttled: true }, 429);
     }
-    if (wantQueue) return enqueueChar(env, region, name, premium);
+    if (wantQueue) return enqueueChar(env, region, name, premium, wantPos);
     return handleCharacter(env, region, name, refresh, { premium: premium, nextMs: 5000 });
   },
 

@@ -1331,7 +1331,7 @@ presetToggleHtml(data) +
     var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
     var url = WORKER_URL.replace(/\/+$/, "") +
       "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) +
-      "&queue=1" +
+      "&queue=1&pos=1" +
       (refresh ? "&refresh=1" : "") +
       (k ? "&k=" + encodeURIComponent(k) : "");
     fetch(url).then(function (resp) {
@@ -1414,7 +1414,7 @@ presetToggleHtml(data) +
           renderLoadout(d);
         } else if (d.queued || d.cached || hasGems) {
           // still working: genuinely queued (show live position) OR a stale-cache hit mid-refresh
-          if (d.queued) { var p = $("gr-queued-pos"); if (p) p.innerHTML = queueLine(d); }
+          if (d.queued && d.position) { var p = $("gr-queued-pos"); if (p) p.innerHTML = queueLine(d); } // cheap poll omits position; keep the one shown on enqueue
           var t = $("gr-queued-timer"); if (t) t.innerHTML = "checking… (" + Math.round((Date.now() - started) / 1000) + "s)";
         } else if (!r.ok || (d.error && !hasGems)) {
           stopPoll();
