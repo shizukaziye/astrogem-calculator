@@ -88,17 +88,19 @@
   }
   function gGrade(cfg) { return isSupport() ? supportGrade(cfg) : grade(cfg); }
   function gRank(cfg) { return isSupport() ? supportRank(cfg) : gemRank(cfg); }
-  // Per-gem RAW % damage shown in the loadout (these SUM to the grid total = the
-  // leaderboard figure). DPS: gemDamage (effects + order, no willpower). Support: the
-  // per-CORE party-damage contribution (supportDamage with the gem's own core order
-  // value), shown ÷3 as the per-ally number (support coefficients bake in ×3 for 3 DPS).
+  // Per-gem % damage ABOVE the neutral baseline gem (order 4.25, no effects) — these SUM
+  // to the loadout/leaderboard total. Measuring above the baseline keeps the total in the
+  // familiar ~10% range instead of the raw ~26% (each gem otherwise carries a ~0.68% order
+  // floor). Willpower is NOT damage here (it lives in the grade). DPS subtracts the order
+  // 4.25 floor; support subtracts the per-CORE order 4.25 floor, shown ÷3 (per-ally).
   function gRel(cfg) {
     if (isSupport()) {
       var ov = (A && A.supportOrderValueForCore) ? A.supportOrderValueForCore(cfg.coreBase) : null;
-      var sd = (A && A.supportDamage) ? A.supportDamage(cfg, ov) : supportRelValue(cfg);
-      return sd / 3;
+      if (A && A.supportDamage && ov != null) return (A.supportDamage(cfg, ov) - 4.25 * ov) / 3;
+      return supportRelValue(cfg) / 3;
     }
-    return (A && A.gemDamage) ? A.gemDamage(cfg) : relDamage(cfg);
+    if (A && A.gemDamage && A.orderScore) return A.gemDamage(cfg) - A.orderScore(4.25);
+    return relDamage(cfg);
   }
 
   // Support classes that CAN play support (gate for the support-default auto-detect).

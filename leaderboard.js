@@ -201,17 +201,24 @@
     return Math.round(Math.max(0, Math.min(100, g)) * 10) / 10;
   }
 
-  // RAW total damage over a character's VALID gems — the leaderboard's RANKING basis.
-  // DPS: Σ gemDamage (uniform order, no willpower). Null when there are no valid gems.
+  // Total damage ABOVE the neutral baseline (order 4.25, no effects) over a character's
+  // VALID gems — the leaderboard's RANKING basis. Subtracting the constant per-gem floor
+  // keeps the figure in the familiar ~10% range (raw was ~26%) WITHOUT changing the order
+  // (the floor is constant across full 24-gem grids). DPS: Σ(gemDamage − order 4.25 floor).
   function totalDmgOf(char) {
     var g = validGemsOf(char); if (!g.length) return null;
-    if (A && A.gridDamage) return A.gridDamage(g, "dps");
+    if (A && A.gridDamage && A.orderScore) return A.gridDamage(g, "dps") - g.length * A.orderScore(4.25);
     var s = 0; for (var i = 0; i < g.length; i++) s += relDamage(g[i]); return s; // old-model fallback
   }
-  // SUPPORT total: Σ supportDamage with each gem's PER-CORE order value, ÷3 (per-ally).
+  // SUPPORT total: Σ(supportDamage at each gem's PER-CORE order − that core's order 4.25
+  // floor), ÷3 (per-ally party damage).
   function totalPartyDmgOf(char) {
     var g = validGemsOf(char); if (!g.length) return null;
-    if (A && A.gridDamage) return A.gridDamage(g, "support") / 3;
+    if (A && A.gridDamage && A.supportOrderValueForCore) {
+      var base = 0;
+      for (var i = 0; i < g.length; i++) base += 4.25 * A.supportOrderValueForCore(g[i].coreBase);
+      return (A.gridDamage(g, "support") - base) / 3;
+    }
     var s = 0; for (var i = 0; i < g.length; i++) s += supportRelValue(g[i]) / 3; return s; // fallback
   }
   // "Quality" grade (0-100): the PAIRING-INVARIANT cost-fair quality — the geometric
