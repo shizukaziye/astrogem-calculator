@@ -388,7 +388,7 @@
 
   // Letter rank from a 0-100 grade (user-set cutoffs). Each band split into +/ /-
   // thirds for finer granularity.
-  var RANK_CUTS = [["S", 85], ["A", 75], ["B", 65], ["C", 50], ["D", 25], ["F", 0]];
+  var RANK_CUTS = [["S", 85], ["A", 70], ["B", 55], ["C", 40], ["D", 20], ["F", 0]];
   function rankFromGrade(g) {
     var i, lo, hi, t;
     for (i = 0; i < RANK_CUTS.length; i++) {

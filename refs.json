@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-06-26T10:41:05.936Z",
+    "generated": "2026-06-26T19:14:45.674Z",
     "note": "Captured references for the deterministic core. Regenerate with `node tools/gen-refs.js`. Scoring is REAL % damage (D = 100*ln(multiplier)); supersedes the abstract-weight model and the removed SCORE_PER_PERCENT_DAMAGE=30.96.",
     "SCORING": {
       "willpowerPerLevel": 0.0781186855277456,
@@ -136,7 +136,7 @@
       "score": 0.56137,
       "damagePercent": 0.641538,
       "grade": 38.4,
-      "rank": "D",
+      "rank": "D+",
       "breakdown": {
         "willpowerCost": 5,
         "willpowerScore": -0.078119,
@@ -160,7 +160,7 @@
       "score": 0.483806,
       "damagePercent": 0.563507,
       "grade": 32.9,
-      "rank": "D-",
+      "rank": "D",
       "breakdown": {
         "willpowerCost": 5,
         "willpowerScore": -0.078119,
@@ -208,7 +208,7 @@
       "score": 0.017904,
       "damagePercent": 0.252579,
       "grade": 7.5,
-      "rank": "F-",
+      "rank": "F",
       "breakdown": {
         "willpowerCost": 7,
         "willpowerScore": -0.234356,
@@ -256,7 +256,7 @@
       "score": 0.737137,
       "damagePercent": 0.73986,
       "grade": 50.5,
-      "rank": "C-",
+      "rank": "C+",
       "breakdown": {
         "willpowerCost": 4,
         "willpowerScore": 0,
@@ -346,7 +346,7 @@
       "supportScore": 0.410421,
       "supportRelValue": 0.105966,
       "supportGrade": 50.5,
-      "supportRank": "C-"
+      "supportRank": "C+"
     },
     {
       "config": {
@@ -362,7 +362,7 @@
       "supportScore": 0.294584,
       "supportRelValue": -0.009872,
       "supportGrade": 27.9,
-      "supportRank": "D-"
+      "supportRank": "D"
     },
     {
       "config": {
@@ -378,7 +378,7 @@
       "supportScore": 0.502721,
       "supportRelValue": 0.198266,
       "supportGrade": 61.2,
-      "supportRank": "C+"
+      "supportRank": "B"
     },
     {
       "config": {
@@ -394,7 +394,7 @@
       "supportScore": 0.425579,
       "supportRelValue": 0.121124,
       "supportGrade": 52.8,
-      "supportRank": "C-"
+      "supportRank": "C+"
     }
   ],
   "supportBounds": {

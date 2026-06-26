@@ -295,7 +295,7 @@ def grade_to_score(g, base_cost=None):
 
 
 # user-set rank cutoffs on the 0-100 grade; +/ /- thirds within each band.
-RANK_CUTS = [("S", 85), ("A", 75), ("B", 65), ("C", 50), ("D", 25), ("F", 0)]
+RANK_CUTS = [("S", 85), ("A", 70), ("B", 55), ("C", 40), ("D", 20), ("F", 0)]
 
 
 def rank_from_grade(g):

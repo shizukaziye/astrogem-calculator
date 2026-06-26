@@ -89,7 +89,7 @@
     document.cookie = LB_CLASS_COOKIE + "=" + encodeURIComponent(cls || "") + "; path=/; max-age=31536000; SameSite=Lax";
   }
   var classFilter = readCookieVal(LB_CLASS_COOKIE) || "";  // selected class name, or "" for all
-  var MIN_GRADE = 65;  // hide anything ranked C+ or below — B- starts at grade 65
+  var MIN_GRADE = 55;  // hide anything ranked C+ or below — B- starts at grade 55 (the B cutoff)
 
   // (just for laughs) the entire "Buff" crew made some... questionable gem choices,
   // and is shown on the board no matter how bad it gets.
