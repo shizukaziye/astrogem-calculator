@@ -565,14 +565,7 @@
   var loadedOnce = false;
 
   function load() {
-    // Worker-access gate: if locked, prompt; on success re-run unlocked, else show locked.
-    if (window.astrogemGate && !window.astrogemGate.isUnlocked()) {
-      window.astrogemGate.ensureUnlocked().then(function (ok) {
-        if (ok) load();
-        else { setStatus("Locked", "err"); renderEmpty("The leaderboard is for password holders — re-open this tab and enter the password to view it."); }
-      });
-      return;
-    }
+    // Open to everyone (the Worker throttles ?list=1 against spam-refresh).
     if (!WORKER_URL) {
       setStatus("", "");
       renderEmpty("The lostark.bible Worker isn’t configured. Set WORKER_URL in leaderboard.js (and deploy worker/astrogem-bible.js).");
@@ -586,8 +579,10 @@
       return resp.json().then(function (data) { return { ok: resp.ok, data: data }; });
     }).then(function (r) {
       if (!r.ok) {
-        setStatus((r.data && r.data.error) || "Worker returned an error.", "err");
-        renderEmpty("Could not load the leaderboard.");
+        var em = (r.data && r.data.error) || "Worker returned an error.";
+        // A throttle 429 (spam-refresh) isn't an error — show the note and keep any stale table.
+        if (r.data && r.data.rateLimited) { setStatus(em, ""); if (!rawChars.length) renderEmpty(em); }
+        else { setStatus(em, "err"); if (!rawChars.length) renderEmpty("Could not load the leaderboard."); }
         return;
       }
       var chars = (r.data && r.data.characters) || [];

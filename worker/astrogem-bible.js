@@ -218,7 +218,7 @@ const INDEX_KEY = "__index__";               // KV key holding a JSON array of a
 const SNAPSHOT_KEY = "lb:snapshot";          // single KV key holding the whole leaderboard list (?list=1 serves it).
 const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent character write (plain overwrite, race-free).
 const BUILTAT_KEY = "lb:builtat";            // ms timestamp the snapshot was last rebuilt by the cron.
-const FREE_DAILY_CAP = 5;                    // successful pulls/day for a NON-password (un-gated) client, keyed by IP.
+const FREE_HOURLY_CAP = 10;                  // free (un-gated) pulls per HOUR per IP; the edge throttle paces them to 1/min.
 // Access token the GATED client appends as ?k= (== gate.js's salted hash). Requests without it
 // are un-refreshed pre-gate clients -> 403'd before any KV work, so they stop draining the quota.
 // Not the password (a one-way hash); a stale client just needs to refresh the page.
@@ -501,18 +501,18 @@ async function rebuildSnapshotIfChanged(env) {
   await env.CHARS.put(BUILTAT_KEY, String(startedAt));
 }
 
-// Reserve one of a NON-password client's free daily pulls (by IP, UTC day). The edge throttle
-// gates this so it's read at most ~1x/10s/IP. Records auto-expire after 2 days. -> {ok, remaining}.
-async function reserveFreePull(env, ip) {
-  if (!env || !env.CHARS) return { ok: true, remaining: FREE_DAILY_CAP };
-  const today = new Date().toISOString().slice(0, 10);
+// Reserve one of a NON-password client's free HOURLY pulls (by IP, UTC hour bucket). The 1/min
+// edge throttle gates this so it's read at most ~1x/min/IP. Records expire after 2h. -> {ok, remaining}.
+async function reserveFreeHourly(env, ip) {
+  if (!env || !env.CHARS) return { ok: true, remaining: FREE_HOURLY_CAP };
+  const hour = Math.floor(Date.now() / 3600000); // UTC hour bucket
   const k = "rl:" + (await sha256Hex(ip));
   const cur = await kvGetJson(env, k);
-  let count = (cur && cur.day === today) ? (cur.count | 0) : 0;
-  if (count >= FREE_DAILY_CAP) return { ok: false, remaining: 0 };
+  let count = (cur && cur.hour === hour) ? (cur.count | 0) : 0;
+  if (count >= FREE_HOURLY_CAP) return { ok: false, remaining: 0 };
   count += 1;
-  try { await env.CHARS.put(k, JSON.stringify({ day: today, count: count }), { expirationTtl: 172800 }); } catch (e) {}
-  return { ok: true, remaining: FREE_DAILY_CAP - count };
+  try { await env.CHARS.put(k, JSON.stringify({ hour: hour, count: count }), { expirationTtl: 7200 }); } catch (e) {}
+  return { ok: true, remaining: FREE_HOURLY_CAP - count };
 }
 
 async function sha256Hex(str) {
@@ -530,10 +530,22 @@ export default {
     }
 
     const u = new URL(request.url);
+    const ip = request.headers.get("CF-Connecting-IP") || "0.0.0.0";
 
-    // Leaderboard listing (gated — blocks un-refreshed pre-gate clients before any KV read).
+    // Hard backstop on EVERY request (per IP) to stop scripted abuse before any work — an edge
+    // rate-limit binding, no KV touched on a blocked hit. The token is public so it can't exempt.
+    if (env.HARD_CAP) {
+      const h = await env.HARD_CAP.limit({ key: ip });
+      if (!h.success) return json({ error: "Too many requests — please slow down.", rateLimited: true, retryAfterMs: 60000, hardCap: true }, 429);
+    }
+
+    // Leaderboard — open to everyone, but throttled so it can't be spam-refreshed (the data
+    // only changes every ~10 min server-side anyway).
     if (u.searchParams.get("list") === "1") {
-      if (!gated(u)) return json({ error: "This app was updated — please refresh the page to continue.", refresh: true }, 403);
+      if (env.LB_THROTTLE) {
+        const l = await env.LB_THROTTLE.limit({ key: ip });
+        if (!l.success) return json({ error: "The leaderboard refreshes about every 10 minutes — please wait a moment.", rateLimited: true, retryAfterMs: 20000, lbThrottle: true }, 429);
+      }
       return handleList(env);
     }
 
@@ -547,23 +559,23 @@ export default {
     if (!region || !name) {
       return json({ error: "Both ?region= and ?name= are required (e.g. ?region=NA&name=Paroxysmal)." }, 400);
     }
-    // Password (gated) clients: unlimited. Everyone else: a small free daily allowance, paced
-    // by an edge throttle (no KV touched on a throttled hit, so a flood can't drain the quota).
+    // Password clients: paced ~1 per 5s. Everyone else: 1 per minute + 10 per hour (by IP).
     if (gated(u)) {
-      return handleCharacter(env, region, name, refresh);
-    }
-    const ip = request.headers.get("CF-Connecting-IP") || "0.0.0.0";
-    if (env.PULL_THROTTLE) {
-      const t = await env.PULL_THROTTLE.limit({ key: "pull:" + ip });
-      if (!t.success) {
-        return json({ error: "Free requests are paced to one every 10 seconds — please wait.", rateLimited: true, retryAfterMs: 10000 }, 429);
+      if (env.PREMIUM_THROTTLE) {
+        const p = await env.PREMIUM_THROTTLE.limit({ key: ip });
+        if (!p.success) return json({ error: "Please wait a few seconds between pulls.", rateLimited: true, retryAfterMs: 5000, premiumThrottle: true }, 429);
       }
+      return handleCharacter(env, region, name, refresh, { premium: true, nextMs: 5000 });
     }
-    const cap = await reserveFreePull(env, ip);
+    if (env.FREE_THROTTLE) {
+      const f = await env.FREE_THROTTLE.limit({ key: ip });
+      if (!f.success) return json({ error: "Free pulls are limited to one per minute — please wait, or enter the password for faster access.", rateLimited: true, retryAfterMs: 60000, freeThrottle: true }, 429);
+    }
+    const cap = await reserveFreeHourly(env, ip);
     if (!cap.ok) {
-      return json({ error: "Free daily limit reached (" + FREE_DAILY_CAP + "). Resets at UTC midnight — enter the password for unlimited access.", rateLimited: true, dailyLimit: true, remaining: 0 }, 429);
+      return json({ error: "Free hourly limit reached (" + FREE_HOURLY_CAP + "/hour). Please wait, or enter the password for faster access.", rateLimited: true, hourlyLimit: true, remaining: 0 }, 429);
     }
-    return handleCharacter(env, region, name, refresh, { free: true, remaining: cap.remaining });
+    return handleCharacter(env, region, name, refresh, { free: true, remaining: cap.remaining, nextMs: 60000 });
   },
 
   async scheduled(controller, env, ctx) {

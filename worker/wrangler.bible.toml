@@ -30,14 +30,38 @@ id = "0f51c3b5ac6d45a59186375d62879ad7"
 [triggers]
 crons = ["*/10 * * * *"]
 
-# Edge throttle for NON-password character pulls: at most 1 per 10s per IP (the key is the IP,
-# passed in code). Blocks rapid free-tier spam before it can touch KV. period must be 10 or 60.
+# Edge rate-limit bindings (keyed by IP in code; NO KV touched on a blocked hit). period must
+# be 10 or 60 seconds. HARD_CAP is the absolute backstop on EVERY request to stop scripted abuse.
 [[ratelimits]]
-name = "PULL_THROTTLE"
+name = "HARD_CAP"
+namespace_id = "1000"
+[ratelimits.simple]
+limit = 10
+period = 60
+
+# Free (non-password) pulls: 1 per minute (the 10-per-hour cap is enforced in KV behind this).
+[[ratelimits]]
+name = "FREE_THROTTLE"
 namespace_id = "1001"
 [ratelimits.simple]
 limit = 1
+period = 60
+
+# Password pulls: ~1 per 5s (2 per 10s, since period must be 10 or 60).
+[[ratelimits]]
+name = "PREMIUM_THROTTLE"
+namespace_id = "1002"
+[ratelimits.simple]
+limit = 2
 period = 10
+
+# Leaderboard pulls (open to everyone): 3 per minute, to block spam-refresh.
+[[ratelimits]]
+name = "LB_THROTTLE"
+namespace_id = "1003"
+[ratelimits.simple]
+limit = 3
+period = 60
 
 # Observability (logs) — optional, handy while validating the parser.
 [observability]

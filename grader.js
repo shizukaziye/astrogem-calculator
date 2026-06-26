@@ -379,6 +379,7 @@
 '  #tab-grader .gr-freenote{font-size:12px;color:var(--dim);margin-top:6px;line-height:1.5}' +
 '  #tab-grader .gr-freenote b{color:var(--text)}' +
 '  #tab-grader .gr-freenote .gr-cap{color:#e0683c;font-weight:600}' +
+'  #tab-grader .gr-freenote .gr-prem{color:#5cb87a;font-weight:600}' +
 '  #tab-grader .gr-freenote .gr-unlock{color:var(--axis,var(--accent));cursor:pointer;white-space:nowrap}' +
 '  #tab-grader .gr-freenote .gr-unlock:hover{text-decoration:underline}' +
 '  @media(max-width:520px){#tab-grader .gr-pullctl .fld-name{flex:1 1 160px;width:auto}}' +
@@ -1313,8 +1314,9 @@ presetToggleHtml(data) +
         setPullStatus(msg, "err");
         $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(msg) + '</div></div>';
         if (d.rateLimited && d.retryAfterMs) pendingCountdownMs = d.retryAfterMs; // throttled -> pace the button
-        if (d.dailyLimit) setFreeStatus(0);
-        if (d.free) { pendingCountdownMs = 10000; setFreeStatus(d.remaining); } // free slot consumed even on a fetch error
+        if (d.hourlyLimit) setFreeStatus(0);
+        if (d.premium) { pendingCountdownMs = d.nextMs || 5000; setFreeStatus(null, true); }
+        else if (d.free) { pendingCountdownMs = d.nextMs || 60000; setFreeStatus(d.remaining); } // slot consumed even on a fetch error
         return;
       }
       lastLoadout = r.data;
@@ -1323,7 +1325,8 @@ presetToggleHtml(data) +
       setPullStatus("Graded " + ((r.data.gems || []).length) + " gems.", "");
       if (refreshBtn) refreshBtn.style.display = "";
       renderLoadout(r.data);
-      if (d.free) { pendingCountdownMs = 10000; setFreeStatus(d.remaining); } // free tier: pace + show X/5 left
+      if (d.premium) { pendingCountdownMs = d.nextMs || 5000; setFreeStatus(null, true); } // password: ~5s pacing
+      else if (d.free) { pendingCountdownMs = d.nextMs || 60000; setFreeStatus(d.remaining); } // free tier: 1/min + X/10
     }).catch(function (e) {
       setPullStatus("Request failed: " + (e && e.message || e), "err");
     }).then(function () {
@@ -1359,16 +1362,19 @@ presetToggleHtml(data) +
   // The "X/5 free pulls left today" note under the pull buttons (hidden for password-holders,
   // who are unlimited). Pass a number to update the remembered count; call with none to re-render.
   var grFreeRemaining = null;
-  function setFreeStatus(remaining) {
+  function setFreeStatus(remaining, premium) {
     if (typeof remaining === "number") grFreeRemaining = remaining;
     var el = $("gr-free-note");
     if (!el) return;
-    if (window.astrogemGate && window.astrogemGate.isUnlocked()) { el.innerHTML = ""; return; }
-    var left = (grFreeRemaining == null) ? 5 : grFreeRemaining;
+    if (premium || (window.astrogemGate && window.astrogemGate.isUnlocked())) {
+      el.innerHTML = '<span class="gr-prem">&#10003; Password access · paced 1 pull / 5s</span>';
+      return;
+    }
+    var left = (grFreeRemaining == null) ? 10 : grFreeRemaining;
     var head = (left <= 0)
-      ? '<span class="gr-cap">Free daily limit reached.</span> Resets at UTC midnight.'
-      : '<b>' + left + '</b> of 5 free pulls left today · paced ~10s apart.';
-    el.innerHTML = head + ' <a class="gr-unlock" onclick="window.__grUnlock()">Have the password? Unlock for unlimited →</a>';
+      ? '<span class="gr-cap">Free hourly limit reached (10/hour).</span> Try again shortly'
+      : '<b>' + left + '</b> of 10 free pulls left this hour · 1 per minute';
+    el.innerHTML = head + ' · <a class="gr-unlock" onclick="window.__grUnlock()">Have the password? Unlock for faster access &rarr;</a>';
   }
   window.__grUnlock = function () {
     if (window.astrogemGate) window.astrogemGate.ensureUnlocked().then(function () { setFreeStatus(); });
