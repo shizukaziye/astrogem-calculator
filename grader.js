@@ -380,6 +380,11 @@
 '  #tab-grader .gr-freenote b{color:var(--text)}' +
 '  #tab-grader .gr-freenote .gr-cap{color:#e0683c;font-weight:600}' +
 '  #tab-grader .gr-freenote .gr-prem{color:#5cb87a;font-weight:600}' +
+'  #tab-grader .gr-queued{display:flex;align-items:center;gap:14px;padding:6px 2px}' +
+'  #tab-grader .gr-queued-icon{font-size:30px;line-height:1}' +
+'  #tab-grader .gr-queued-main{font-size:14px}' +
+'  #tab-grader .gr-queued-sub{font-size:12px;color:var(--dim);margin-top:4px}' +
+'  #tab-grader #gr-queued-timer{color:var(--axis,var(--accent))}' +
 '  #tab-grader .gr-freenote .gr-unlock{color:var(--axis,var(--accent));cursor:pointer;white-space:nowrap}' +
 '  #tab-grader .gr-freenote .gr-unlock:hover{text-decoration:underline}' +
 '  @media(max-width:520px){#tab-grader .gr-pullctl .fld-name{flex:1 1 160px;width:auto}}' +
@@ -1299,64 +1304,89 @@ presetToggleHtml(data) +
     var refreshBtn = $("gr-pull-refresh");
     if (refreshBtn) refreshBtn.disabled = true;
 
+    stopPoll(); // cancel any in-flight queue poll from a previous lookup
     var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
     var url = WORKER_URL.replace(/\/+$/, "") +
       "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) +
+      "&queue=1" +
       (refresh ? "&refresh=1" : "") +
       (k ? "&k=" + encodeURIComponent(k) : "");
-    var pendingCountdownMs = 0;
     fetch(url).then(function (resp) {
       return resp.json().then(function (data) { return { ok: resp.ok, data: data }; });
     }).then(function (r) {
       var d = r.data || {};
-      if (!r.ok || (d.error && !d.gems)) {
-        var msg = d.error || "Worker returned an error.";
-        setPullStatus(msg, "err");
-        $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(msg) + '</div></div>';
-        if (d.rateLimited && d.retryAfterMs) pendingCountdownMs = d.retryAfterMs; // throttled -> pace the button
-        if (d.hourlyLimit) setFreeStatus(0);
-        if (d.premium) { pendingCountdownMs = d.nextMs || 5000; setFreeStatus(null, true); }
-        else if (d.free) { pendingCountdownMs = d.nextMs || 60000; setFreeStatus(d.remaining, false, d.degraded); } // slot consumed even on a fetch error
+      // Cached -> render the loadout (free, instant).
+      if (d.cached || (Array.isArray(d.gems) && d.gems.length)) {
+        lastLoadout = r.data;
+        grPreset = "raid";
+        grMode = defaultModeFor(r.data);
+        setPullStatus("Graded " + ((r.data.gems || []).length) + " gems.", "");
+        if (refreshBtn) refreshBtn.style.display = "";
+        renderLoadout(r.data);
         return;
       }
-      lastLoadout = r.data;
-      grPreset = "raid"; // a fresh pull always starts on the raid preset
-      grMode = defaultModeFor(r.data); // auto-default DPS/Support for this fresh loadout
-      setPullStatus("Graded " + ((r.data.gems || []).length) + " gems.", "");
-      if (refreshBtn) refreshBtn.style.display = "";
-      renderLoadout(r.data);
-      if (d.premium) { pendingCountdownMs = d.nextMs || 5000; setFreeStatus(null, true); } // password: ~5s pacing
-      else if (d.free) { pendingCountdownMs = d.nextMs || 60000; setFreeStatus(d.remaining, false, d.degraded); } // free / degraded-premium: 1/min
+      // Not cached -> queued. Show the queued panel and poll until the drain caches it.
+      if (d.queued) {
+        setPullStatus("Queued — fetching " + name + "…", "");
+        showQueued(region, name, d);
+        if (typeof d.remaining === "number") setFreeStatus(d.remaining);
+        startPoll(region, name);
+        return;
+      }
+      // Anything else: an error / rate-limit / busy / monthly-budget message.
+      var msg = d.error || "Worker returned an error.";
+      setPullStatus(msg, "err");
+      $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(msg) + '</div></div>';
+      if (d.hourlyLimit || d.monthlyBudget) setFreeStatus(0);
     }).catch(function (e) {
       setPullStatus("Request failed: " + (e && e.message || e), "err");
     }).then(function () {
-      if (pendingCountdownMs > 0) startCountdown(pendingCountdownMs);
-      else { $("gr-pull-go").disabled = false; if (refreshBtn) refreshBtn.disabled = false; }
+      $("gr-pull-go").disabled = false;
+      if (refreshBtn) refreshBtn.disabled = false;
     });
   }
 
-  // ---------------- free-tier pacing + status ----------------
-  // After a free (non-password) pull, disable the pull buttons for `ms` and tick down a
-  // countdown on the button label, so a free user is paced to the Worker's 1-per-10s rate.
-  var grCountdownTimer = null;
-  function startCountdown(ms) {
-    var go = $("gr-pull-go"), rb = $("gr-pull-refresh");
-    if (!go) return;
-    if (grCountdownTimer) { clearInterval(grCountdownTimer); grCountdownTimer = null; }
-    var until = Date.now() + ms;
-    go.disabled = true; if (rb) rb.disabled = true;
-    function tick() {
-      var left = Math.ceil((until - Date.now()) / 1000);
-      if (left <= 0) {
-        clearInterval(grCountdownTimer); grCountdownTimer = null;
-        go.disabled = false; if (rb) rb.disabled = false;
-        go.textContent = "Grade loadout";
+  // ---------------- queue: show "queued", poll until the drain caches it ----------------
+  var grPollTimer = null;
+  function stopPoll() { if (grPollTimer) { clearInterval(grPollTimer); grPollTimer = null; } }
+  function showQueued(region, name, d) {
+    var disp = (d && d.name) || name;
+    var tier = (d && d.tier === "premium") ? "priority queue" : "queue";
+    $("gr-result").innerHTML =
+      '<div class="panel"><div class="gr-queued">' +
+      '<div class="gr-queued-icon">⏳</div>' +
+      '<div class="gr-queued-main"><b>' + esc(disp) + '</b> is in the ' + tier + '.' +
+      '<div class="gr-queued-sub">Fetching it now — this updates automatically when it’s ready. <span id="gr-queued-timer">checking…</span></div></div>' +
+      '</div></div>';
+  }
+  function startPoll(region, name) {
+    stopPoll();
+    var started = Date.now(), MAX_MS = 5 * 60 * 1000;
+    grPollTimer = setInterval(function () {
+      if (Date.now() - started > MAX_MS) {
+        stopPoll();
+        var t0 = $("gr-queued-timer"); if (t0) t0.innerHTML = "still queued — check back in a bit, or search again.";
         return;
       }
-      go.textContent = "Wait " + left + "s…";
-    }
-    tick();
-    grCountdownTimer = setInterval(tick, 250);
+      var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
+      var url = WORKER_URL.replace(/\/+$/, "") + "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) + "&queue=1" + (k ? "&k=" + encodeURIComponent(k) : "");
+      fetch(url).then(function (resp) { return resp.json().then(function (data) { return { ok: resp.ok, data: data }; }); }).then(function (r) {
+        var d = r.data || {};
+        if (d.cached || (Array.isArray(d.gems) && d.gems.length)) {
+          stopPoll();
+          lastLoadout = d; grPreset = "raid"; grMode = defaultModeFor(d);
+          var rb = $("gr-pull-refresh"); if (rb) rb.style.display = "";
+          setPullStatus("Graded " + ((d.gems || []).length) + " gems.", "");
+          renderLoadout(d);
+        } else if (d.queued) {
+          var t = $("gr-queued-timer"); if (t) t.innerHTML = "checking… (" + Math.round((Date.now() - started) / 1000) + "s)";
+        } else if (!r.ok || (d.error && !d.gems)) {
+          stopPoll();
+          setPullStatus(d.error || "Lookup failed.", "err");
+          $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(d.error || "Lookup failed.") + '</div></div>';
+        }
+      }).catch(function () { /* transient — keep polling */ });
+    }, 8000);
   }
 
   // The "X/5 free pulls left today" note under the pull buttons (hidden for password-holders,
@@ -1367,18 +1397,18 @@ presetToggleHtml(data) +
     var el = $("gr-free-note");
     if (!el) return;
     if (degraded) {
-      el.innerHTML = '<span class="gr-cap">The site is very busy — everyone is temporarily limited to 1 pull per minute.</span>';
+      el.innerHTML = '<span class="gr-cap">The site is very busy — new-character lookups are paused. Cached characters still work.</span>';
       return;
     }
     if (premium || (window.astrogemGate && window.astrogemGate.isUnlocked())) {
-      el.innerHTML = '<span class="gr-prem">&#10003; Password access · paced 1 pull / 5s</span>';
+      el.innerHTML = '<span class="gr-prem">&#10003; Password access · priority queue + faster lookups</span>';
       return;
     }
     var left = (grFreeRemaining == null) ? 10 : grFreeRemaining;
     var head = (left <= 0)
-      ? '<span class="gr-cap">Free hourly limit reached (10/hour).</span> Try again shortly'
-      : '<b>' + left + '</b> of 10 free pulls left this hour · 1 per minute';
-    el.innerHTML = head + ' · <a class="gr-unlock" onclick="window.__grUnlock()">Have the password? Unlock for faster access &rarr;</a>';
+      ? '<span class="gr-cap">No new-character lookups left this hour.</span> Cached characters are still free'
+      : '<b>' + left + '</b> of 10 new-character lookups left this hour · cached are free';
+    el.innerHTML = head + ' · <a class="gr-unlock" onclick="window.__grUnlock()">Have the password? Unlock for priority &rarr;</a>';
   }
   window.__grUnlock = function () {
     if (window.astrogemGate) window.astrogemGate.ensureUnlocked().then(function () { setFreeStatus(); });
