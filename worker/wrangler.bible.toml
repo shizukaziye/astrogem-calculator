@@ -63,6 +63,16 @@ namespace_id = "1003"
 limit = 3
 period = 60
 
+# GLOBAL overload gate: ONE shared counter across all requests (fixed key in code, not per-IP).
+# ~167/min ≈ 10k/hour; when tripped the worker degrades (free cut off, password -> free rate).
+# period max is 60s, so this is a rolling per-minute proxy for "10k/hour" that auto-recovers.
+[[ratelimits]]
+name = "GLOBAL_GATE"
+namespace_id = "1004"
+[ratelimits.simple]
+limit = 167
+period = 60
+
 # Observability (logs) — optional, handy while validating the parser.
 [observability]
 enabled = true

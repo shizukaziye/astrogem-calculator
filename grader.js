@@ -1316,7 +1316,7 @@ presetToggleHtml(data) +
         if (d.rateLimited && d.retryAfterMs) pendingCountdownMs = d.retryAfterMs; // throttled -> pace the button
         if (d.hourlyLimit) setFreeStatus(0);
         if (d.premium) { pendingCountdownMs = d.nextMs || 5000; setFreeStatus(null, true); }
-        else if (d.free) { pendingCountdownMs = d.nextMs || 60000; setFreeStatus(d.remaining); } // slot consumed even on a fetch error
+        else if (d.free) { pendingCountdownMs = d.nextMs || 60000; setFreeStatus(d.remaining, false, d.degraded); } // slot consumed even on a fetch error
         return;
       }
       lastLoadout = r.data;
@@ -1326,7 +1326,7 @@ presetToggleHtml(data) +
       if (refreshBtn) refreshBtn.style.display = "";
       renderLoadout(r.data);
       if (d.premium) { pendingCountdownMs = d.nextMs || 5000; setFreeStatus(null, true); } // password: ~5s pacing
-      else if (d.free) { pendingCountdownMs = d.nextMs || 60000; setFreeStatus(d.remaining); } // free tier: 1/min + X/10
+      else if (d.free) { pendingCountdownMs = d.nextMs || 60000; setFreeStatus(d.remaining, false, d.degraded); } // free / degraded-premium: 1/min
     }).catch(function (e) {
       setPullStatus("Request failed: " + (e && e.message || e), "err");
     }).then(function () {
@@ -1362,10 +1362,14 @@ presetToggleHtml(data) +
   // The "X/5 free pulls left today" note under the pull buttons (hidden for password-holders,
   // who are unlimited). Pass a number to update the remembered count; call with none to re-render.
   var grFreeRemaining = null;
-  function setFreeStatus(remaining, premium) {
+  function setFreeStatus(remaining, premium, degraded) {
     if (typeof remaining === "number") grFreeRemaining = remaining;
     var el = $("gr-free-note");
     if (!el) return;
+    if (degraded) {
+      el.innerHTML = '<span class="gr-cap">The site is very busy — everyone is temporarily limited to 1 pull per minute.</span>';
+      return;
+    }
     if (premium || (window.astrogemGate && window.astrogemGate.isUnlocked())) {
       el.innerHTML = '<span class="gr-prem">&#10003; Password access · paced 1 pull / 5s</span>';
       return;

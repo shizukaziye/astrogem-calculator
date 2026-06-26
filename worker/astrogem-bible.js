@@ -539,9 +539,21 @@ export default {
       if (!h.success) return json({ error: "Too many requests — please slow down.", rateLimited: true, retryAfterMs: 60000, hardCap: true }, 429);
     }
 
-    // Leaderboard — open to everyone, but throttled so it can't be spam-refreshed (the data
-    // only changes every ~10 min server-side anyway).
+    // GLOBAL overload gate: one shared counter across ALL requests (fixed key, not the IP). When
+    // the site-wide rate trips ~167/min (≈10k/hour) we enter "degraded" mode — free clients are
+    // cut off and password clients drop to the free rate. period max 60s, so it's a rolling
+    // per-minute proxy for "10k/hour" that auto-recovers when traffic falls.
+    const premium = gated(u);
+    let degraded = false;
+    if (env.GLOBAL_GATE) {
+      const g = await env.GLOBAL_GATE.limit({ key: "global" });
+      degraded = !g.success;
+    }
+    const busyMsg = "The site is very busy right now — free access is paused. Enter the password for limited access, or try again shortly.";
+
+    // Leaderboard — open to everyone, throttled vs spam-refresh; free clients cut while degraded.
     if (u.searchParams.get("list") === "1") {
+      if (degraded && !premium) return json({ error: busyMsg, rateLimited: true, degraded: true }, 429);
       if (env.LB_THROTTLE) {
         const l = await env.LB_THROTTLE.limit({ key: ip });
         if (!l.success) return json({ error: "The leaderboard refreshes about every 10 minutes — please wait a moment.", rateLimited: true, retryAfterMs: 20000, lbThrottle: true }, 429);
@@ -559,14 +571,18 @@ export default {
     if (!region || !name) {
       return json({ error: "Both ?region= and ?name= are required (e.g. ?region=NA&name=Paroxysmal)." }, 400);
     }
-    // Password clients: paced ~1 per 5s. Everyone else: 1 per minute + 10 per hour (by IP).
-    if (gated(u)) {
+    // While degraded, free clients get nothing (password clients fall through to the free rate).
+    if (degraded && !premium) return json({ error: busyMsg, rateLimited: true, degraded: true }, 429);
+
+    // Full password tier: ~1 per 5s. Skipped while degraded so the pull drops to the free rate below.
+    if (premium && !degraded) {
       if (env.PREMIUM_THROTTLE) {
         const p = await env.PREMIUM_THROTTLE.limit({ key: ip });
         if (!p.success) return json({ error: "Please wait a few seconds between pulls.", rateLimited: true, retryAfterMs: 5000, premiumThrottle: true }, 429);
       }
       return handleCharacter(env, region, name, refresh, { premium: true, nextMs: 5000 });
     }
+    // Free tier (and password clients while degraded): 1 per minute + 10 per hour (by IP).
     if (env.FREE_THROTTLE) {
       const f = await env.FREE_THROTTLE.limit({ key: ip });
       if (!f.success) return json({ error: "Free pulls are limited to one per minute — please wait, or enter the password for faster access.", rateLimited: true, retryAfterMs: 60000, freeThrottle: true }, 429);
@@ -575,7 +591,7 @@ export default {
     if (!cap.ok) {
       return json({ error: "Free hourly limit reached (" + FREE_HOURLY_CAP + "/hour). Please wait, or enter the password for faster access.", rateLimited: true, hourlyLimit: true, remaining: 0 }, 429);
     }
-    return handleCharacter(env, region, name, refresh, { free: true, remaining: cap.remaining, nextMs: 60000 });
+    return handleCharacter(env, region, name, refresh, { free: true, remaining: cap.remaining, nextMs: 60000, degraded: degraded });
   },
 
   async scheduled(controller, env, ctx) {
