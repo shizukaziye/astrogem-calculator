@@ -226,7 +226,11 @@ const USAGE_KEY = "usage:drained";           // {month:"YYYY-MM", count} — cha
 const DRAIN_DELAY_MS = 3000;                 // pause between lostark.bible fetches (~1 req / 3s) — gentle enough to avoid upstream rate-limiting/timeouts, which cost more than they cache.
 const DRAIN_BUDGET_MS = 50000;               // stop a drain run after ~50s no matter the count, so it never overruns the 60s cron (margin for the snapshot rebuild + no overlapping runs).
 const PAUSE_FAIL_LIMIT = 5;                   // consecutive fetch failures that PAUSE the whole queue (circuit-breaker): the streak is re-queued at the FRONT, new lookups get the "unavailable" notice, and the drain backs off to a single probe every PAUSE_PROBE_MS until one succeeds.
-const PAUSE_PROBE_MS = 5 * 60 * 1000;        // while paused, attempt lostark.bible at most once every 5 min (one probe of the oldest queued character).
+const PAUSE_PROBE_MS = 5 * 60 * 1000;        // fallback probe interval (old pause states that predate the adaptive backoff).
+const PAUSE_PROBE_FIRST_MS = 60 * 1000;      // ADAPTIVE backoff: first probe ~1 min after pausing (catch a quick recovery),
+const PAUSE_PROBE_MAX_MS = 30 * 60 * 1000;   // then ×2 per failed probe, capped at 30 min — a long outage costs very few probes.
+const NOTFOUND_PREFIX = "nf:";               // short-lived "no such character" marker: a typo'd/deleted name isn't re-fetched in a loop.
+const NOTFOUND_TTL_S = 60 * 60;              // remember not-found for 1 hour (self-corrects if it was a transient 404).
 const PAUSE_KEY = "drain:paused";            // present (JSON {since, lastProbe}) iff the queue is paused — gates enqueues + drives the client "lookups temporarily unavailable" notice.
 const UNAVAILABLE_MSG = "Character lookups are temporarily unavailable — lostark.bible isn't responding. Cached characters still work; we retry automatically and this clears the moment it recovers.";
 const MAX_FETCH_ATTEMPTS = 5;                // after this many failed fetches a queued character is DROPPED, so a permanently-broken entry (e.g. some KR names) can't sit at the head retrying forever and starving everyone behind it.
@@ -556,6 +560,9 @@ async function requeueFront(env, items) {
 // lostark.bible is back. UP = a 200 (cache it) or a 404 (it responded — just no such character);
 // DOWN = a 502 (incl. the 401 IP block) / 5xx / network error.
 const CANARY = { region: "NA", name: "Paroxysmal" };
+// Fresh pause state for the circuit-breaker. `interval` is the ADAPTIVE probe gap, reset to the
+// first (fast ~1 min) step; it grows ×2 per failed probe (capped at PAUSE_PROBE_MAX_MS).
+function newPause(now) { return { since: now, lastProbe: now, interval: PAUSE_PROBE_FIRST_MS }; }
 async function probeOldest(env) {
   let keys = [];
   try { keys = (await env.CHARS.list({ prefix: QP })).keys.concat((await env.CHARS.list({ prefix: QF })).keys); } catch (e) {}
@@ -592,7 +599,7 @@ async function drainQueue(env) {
   // PAUSE_PROBE_MS. UP -> clear the pause and resume normal draining next run; DOWN -> stay paused.
   const pause = await kvGetJson(env, PAUSE_KEY);
   if (pause && pause.since) {
-    if (Date.now() - (pause.lastProbe || pause.since) < PAUSE_PROBE_MS) return; // not time to probe yet
+    if (Date.now() - (pause.lastProbe || pause.since) < (pause.interval || PAUSE_PROBE_MS)) return; // not time to probe yet (adaptive gap)
     const probe = await probeOldest(env);
     run.ms = Date.now() - t0;
     if (probe.up) {
@@ -604,7 +611,7 @@ async function drainQueue(env) {
         try { const u = await kvGetJson(env, USAGE_KEY); const c = (u && u.month === month ? (u.count | 0) : 0) + 1; await env.CHARS.put(USAGE_KEY, JSON.stringify({ month: month, count: c }), { expirationTtl: 40 * 24 * 3600 }); } catch (e) {}
       }
     } else {
-      try { await env.CHARS.put(PAUSE_KEY, JSON.stringify({ since: pause.since, lastProbe: Date.now() })); } catch (e) {} // stay paused
+      try { await env.CHARS.put(PAUSE_KEY, JSON.stringify({ since: pause.since, lastProbe: Date.now(), interval: Math.min((pause.interval || PAUSE_PROBE_FIRST_MS) * 2, PAUSE_PROBE_MAX_MS) })); } catch (e) {} // stay paused; back off ×2
       run.stop = "paused";
       if (probe.entry) run.failed.push(probe.entry);
     }
@@ -627,29 +634,33 @@ async function drainQueue(env) {
       const md = k.metadata || {};
       if (!md.region || !md.name) { await env.CHARS.delete(k.name); continue; } // malformed -> drop
       let res = null;
-      try { res = await fetchCharacterData(md.region, md.name); } catch (e) { res = null; } // timeout/network -> treat as upstream error
-      if (!res || res.status >= 500) {
-        // lostark.bible 502s on a chunk of requests independent of our rate; one quick retry
-        // catches the transient ones in THIS run, so they don't consume a future run's slot.
-        await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
-        try { res = await fetchCharacterData(md.region, md.name); } catch (e) { res = null; }
-      }
+      try { res = await fetchCharacterData(md.region, md.name); } catch (e) { res = null; } // ONE fetch — no blind retry (gentler on lostark.bible; a real outage trips the breaker below)
+      const upstream = (res && res.body && res.body.upstreamStatus) || null; // the real lostark.bible status behind our 502
       if (res && res.ok) {
         consecFail = 0;
         const record = Object.assign({}, res.data, { pulledAt: Date.now() });
         try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(record)); await env.CHARS.delete(k.name); cached++; run.cached.push(md.region + ":" + md.name); } catch (e) {}
       } else if (res && res.status >= 400 && res.status < 500) {
+        // not found / bad request -> drop. REMEMBER a 404 (short TTL) so a typo'd or deleted name
+        // isn't re-enqueued + re-fetched in a loop; enqueueChar checks this marker.
         consecFail = 0;
-        await env.CHARS.delete(k.name); // not found / bad request -> drop from queue
+        await env.CHARS.delete(k.name);
+        if (res.status === 404) { try { await env.CHARS.put(NOTFOUND_PREFIX + charKey(md.region, md.name), "1", { expirationTtl: NOTFOUND_TTL_S }); } catch (e) {} }
         run.dropped.push({ region: md.region, name: md.name, status: res.status, msg: (res.body && res.body.error) || "dropped" });
+      } else if (upstream === 401 || upstream === 403) {
+        // a BLOCK (lostark.bible refusing the Worker's IP) — it won't fix itself on a retry, so PAUSE
+        // immediately instead of burning the full fail streak to discover it. Re-queue this run at the front.
+        run.failed.push({ region: md.region, name: md.name, status: res ? res.status : 0, upstream: upstream, msg: (res.body && res.body.error) || "blocked", att: 1 });
+        await requeueFront(env, run.failed);
+        try { await env.CHARS.put(PAUSE_KEY, JSON.stringify(newPause(Date.now()))); } catch (e) {}
+        run.stop = "blocked"; stop = true; break;
       } else {
-        // 5xx / network error / timeout: SKIP this character (leave it queued) so one bad or slow
-        // character can't head-of-line-block the queue. Count attempts in its metadata so a
-        // PERMANENTLY broken entry (e.g. some KR names) is eventually DROPPED instead of retried
-        // forever at the head, starving everyone behind it.
+        // transient 5xx / network / timeout: SKIP this character (leave it queued) so one bad or slow
+        // character can't head-of-line-block the queue. Count attempts so a PERMANENTLY broken entry
+        // (e.g. some KR names) is eventually DROPPED instead of retried forever at the head.
         failed++;
         const att = (md.attempts | 0) + 1;
-        run.failed.push({ region: md.region, name: md.name, status: res ? res.status : 0, upstream: (res && res.body && res.body.upstreamStatus) || null, msg: (res && res.body && res.body.error) || "network/timeout", att: att });
+        run.failed.push({ region: md.region, name: md.name, status: res ? res.status : 0, upstream: upstream, msg: (res && res.body && res.body.error) || "network/timeout", att: att });
         console.log("[drain-fail] " + md.region + ":" + md.name + " status=" + (res ? res.status : "throw") + " att=" + att);
         try {
           if (att >= MAX_FETCH_ATTEMPTS) await env.CHARS.delete(k.name);                                  // give up — drop it
@@ -657,9 +668,9 @@ async function drainQueue(env) {
         } catch (e) {}
         if (++consecFail >= PAUSE_FAIL_LIMIT) {
           // circuit-breaker: PAUSE the queue — re-queue this run's failures at the FRONT (attempts
-          // reset; the upstream being down isn't the character's fault), back off to a 5-min probe.
+          // reset; the upstream being down isn't the character's fault), back off to adaptive probes.
           await requeueFront(env, run.failed);
-          try { await env.CHARS.put(PAUSE_KEY, JSON.stringify({ since: Date.now(), lastProbe: Date.now() })); } catch (e) {}
+          try { await env.CHARS.put(PAUSE_KEY, JSON.stringify(newPause(Date.now()))); } catch (e) {}
           run.stop = "paused"; stop = true; break;
         }
       }
@@ -668,7 +679,9 @@ async function drainQueue(env) {
     }
   }
   run.ms = Date.now() - t0;
-  await appendDrainLog(env, run);
+  // #4: skip logging a do-nothing run (idle / empty queue) — keep drain:log (and its KV write) for
+  // runs that actually cached, failed, or dropped something. Liveness is still visible via backlog.
+  if (run.cached.length || run.failed.length || run.dropped.length) await appendDrainLog(env, run);
   if (processed > 0 || failed > 0) console.log("[drain] processed=" + processed + " cached=" + cached + " failed=" + failed + (stop ? " (backed off)" : ""));
   if (cached > 0) {
     try { await env.CHARS.put(LASTWRITE_KEY, String(Date.now())); } catch (e) {}
@@ -715,9 +728,13 @@ async function queuedResponse(env, region, name, tier, extra, wantPos) {
 // queue can't be filled faster than the drain empties it (keeps monthly writes bounded). region+name
 // stored as KV metadata (the drain reads them from list() without an extra get).
 async function enqueueChar(env, region, name, premium, wantPos) {
-  if (env.CHARS) {                                   // queue PAUSED -> don't enqueue, return the notice
-    const paused = await kvGetJson(env, PAUSE_KEY);
-    if (paused && paused.since) return json({ unavailable: true, error: UNAVAILABLE_MSG }, 503);
+  if (env.CHARS) {                                   // one round-trip: queue PAUSED? + known-missing (recent 404)?
+    const [paused, miss] = await Promise.all([
+      kvGetJson(env, PAUSE_KEY),
+      env.CHARS.get(NOTFOUND_PREFIX + charKey(region, name))
+    ]);
+    if (paused && paused.since) return json({ unavailable: true, error: UNAVAILABLE_MSG }, 503);   // -> "lookups temporarily unavailable" notice
+    if (miss) return json({ error: "We couldn't find that character on lostark.bible — double-check the name and region.", notFound: true }, 404); // #6: don't re-queue a known-missing name
   }
   if (env.ENQUEUE_GATE) {
     const g = await env.ENQUEUE_GATE.limit({ key: "enqueue" });
