@@ -2,7 +2,8 @@
 
 Deep-dive documentation for the Lost Ark **astrogem** tool. These cover the **math and
 game mechanics** behind each tab so you can get full context here instead of reading
-through the code. (Deployment/infrastructure details are intentionally out of scope.)
+through the code. Most cover the **math**; the lookup-queue / drain / rate-control **plumbing**
+has its own doc — see *Operations* below.
 
 ## The math docs
 
@@ -11,6 +12,12 @@ through the code. (Deployment/infrastructure details are intentionally out of sc
 | **[how-a-gem-is-graded.md](how-a-gem-is-graded.md)** | The whole scoring model: multiplicative damage in log space, the stat baselines and per-line `D` values, the willpower multiplier that makes perfect gems tie, the 0–100 grade + letter ranks, the support axis, and the lvl-0 whole-grid "% total damage". **Start here** — the other docs build on it. |
 | **[how-the-pipeline-tables-are-computed.md](how-the-pipeline-tables-are-computed.md)** | The cut / fuse / throw decision per effect-pair archetype: the exact Bellman DP cut value, the fusion fixed-point EV, the verdict colors, and the weekly-throughput model. (Full bake reference: [`../METHODOLOGY.md`](../METHODOLOGY.md).) |
 | **[how-the-leaderboard-ranks.md](how-the-leaderboard-ranks.md)** | How a whole character is ranked: total damage % (the sort key), the pairing-invariant avg-grade, the DPS/Support toggle, the floorless boards, and the "support main" exclusion. |
+
+## Operations / infrastructure
+
+| Doc | What it explains |
+|---|---|
+| **[how-the-queue-and-drain-work.md](how-the-queue-and-drain-work.md)** | The "pull from lostark.bible" plumbing: the lookup queue (premium/free lanes), the every-minute drain, the run/off/probe modes + circuit breaker, the enqueue-kick that caches a fresh character in ~2s (and the KV-list-consistency bug behind it), every edge rate-limit layer, the admin page, and the full endpoint / KV-key / constant reference. |
 
 ## The four tabs (quick map)
 
