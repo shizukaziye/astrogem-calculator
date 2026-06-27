@@ -1552,7 +1552,7 @@ presetToggleHtml(data) +
   function setUnavailable(on, msg) {
     var el = $("gr-unavailable"); if (!el) return;
     if (on) {
-      el.innerHTML = '<b>&#9888;&#65039; Lookups temporarily unavailable.</b> ' + esc(msg || "lostark.bible isn’t responding right now.") + ' Characters already cached still grade normally below.';
+      el.innerHTML = '<b>&#9888;&#65039; ' + esc(msg || "Character lookups are temporarily unavailable") + '</b>';
       el.style.display = "";
     } else { el.style.display = "none"; }
   }

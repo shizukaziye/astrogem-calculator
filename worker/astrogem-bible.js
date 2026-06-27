@@ -236,7 +236,7 @@ const NOTFOUND_TTL_S = 60 * 60;              // remember not-found for 1 hour (s
 const Q_ORDER_KEY = "q:order";               // #1: cron-maintained ordered queue snapshot — lets position/metrics/probe skip the 2 KV list()s.
 const Q_ORDER_TTL_MS = 90 * 1000;            // trust the snapshot for 90s (rewritten each active drain minute); older -> re-list for correctness.
 const PAUSE_KEY = "drain:paused";            // present (JSON {since, lastProbe}) iff the queue is paused — gates enqueues + drives the client "lookups temporarily unavailable" notice.
-const UNAVAILABLE_MSG = "Character lookups are temporarily unavailable — lostark.bible isn't responding. Cached characters still work; we retry automatically and this clears the moment it recovers.";
+const UNAVAILABLE_MSG = "Character lookups are temporarily unavailable";
 const MAX_FETCH_ATTEMPTS = 5;                // after this many failed fetches a queued character is DROPPED, so a permanently-broken entry (e.g. some KR names) can't sit at the head retrying forever and starving everyone behind it.
 const QUEUE_TTL_S = 7 * 24 * 60 * 60;        // a queued request expires after 7 days if never drained.
 const SNAPSHOT_MIN_INTERVAL_MS = 30 * 60 * 1000; // rebuild the leaderboard snapshot at most every ~30 min (the read-heavy part).
@@ -625,29 +625,13 @@ async function drainQueue(env) {
   const t0 = Date.now();
   const run = { t: t0, cached: [], dropped: [], failed: [], stop: null }; // per-drain history entry
 
-  // PAUSED (circuit-breaker open after a fail streak): probe lostark.bible at most once every
-  // PAUSE_PROBE_MS. UP -> clear the pause and resume normal draining next run; DOWN -> stay paused.
+  // PAUSED (circuit-breaker open): auto-probing is DISABLED — while paused the drain does nothing and
+  // makes NO lostark.bible requests at all. The queue stays paused until `drain:paused` is cleared
+  // (manually: `wrangler kv key delete "drain:paused" ... --remote`). Clearing it makes the very next
+  // drain try the queue once: it resumes + drains if lostark.bible has recovered, or re-pauses
+  // immediately on a 4xx block. (probeOldest / PAUSE_PROBE_* are kept but unused — re-enable here.)
   const pause = await kvGetJson(env, PAUSE_KEY);
-  if (pause && pause.since) {
-    if (Date.now() - (pause.lastProbe || pause.since) < (pause.interval || PAUSE_PROBE_MS)) return; // not time to probe yet (adaptive gap)
-    const probe = await probeOldest(env);
-    run.ms = Date.now() - t0;
-    if (probe.up) {
-      try { await env.CHARS.delete(PAUSE_KEY); } catch (e) {}                    // RESUME
-      run.stop = "resumed";
-      if (probe.cached && probe.name) {
-        run.cached.push(probe.name);
-        try { await env.CHARS.put(LASTWRITE_KEY, String(Date.now())); } catch (e) {}
-        try { const u = await kvGetJson(env, USAGE_KEY); const c = (u && u.month === month ? (u.count | 0) : 0) + 1; await env.CHARS.put(USAGE_KEY, JSON.stringify({ month: month, count: c }), { expirationTtl: 40 * 24 * 3600 }); } catch (e) {}
-      }
-    } else {
-      try { await env.CHARS.put(PAUSE_KEY, JSON.stringify({ since: pause.since, lastProbe: Date.now(), interval: Math.min((pause.interval || PAUSE_PROBE_FIRST_MS) * 2, PAUSE_PROBE_MAX_MS) })); } catch (e) {} // stay paused; back off ×2
-      run.stop = "paused";
-      if (probe.entry) run.failed.push(probe.entry);
-    }
-    await appendDrainLog(env, run);
-    return;
-  }
+  if (pause && pause.since) return;
 
   if (used >= MONTHLY_CHAR_BUDGET) { run.stop = "budget"; run.ms = 0; await appendDrainLog(env, run); return; }
   let processed = 0, cached = 0, failed = 0, consecFail = 0, stop = false;
