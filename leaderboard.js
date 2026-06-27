@@ -301,7 +301,7 @@
 '  #tab-leaderboard .lb-modebtn.on{background:var(--axis);color:#0c0e12}' +
 // DPS = GOLD, Support = GREEN: a mode-scoped --axis on avg grade, dmg, the header + the
 // toggle. Generic blue --accent stays for the rest; rank badges keep their rankColor.
-'  #tab-leaderboard.axis-dps{--axis:#f3a59c}' +
+'  #tab-leaderboard.axis-dps{--axis:#e18aaa}' +
 '  #tab-leaderboard.axis-support{--axis:#66c7ff}' +
 '  #tab-leaderboard .lb-regs{display:inline-flex;gap:0;border:1px solid var(--border);border-radius:99px;overflow:hidden}' +
 '  #tab-leaderboard .lb-regbtn{background:none;border:none;cursor:pointer;color:var(--dim);font-family:inherit;font-weight:700;font-size:12px;padding:5px 13px;line-height:1.4;transition:background .12s,color .12s}' +
