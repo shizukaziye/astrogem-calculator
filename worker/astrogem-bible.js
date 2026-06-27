@@ -231,6 +231,8 @@ const PAUSE_PROBE_FIRST_MS = 60 * 1000;      // ADAPTIVE backoff: first probe ~1
 const PAUSE_PROBE_MAX_MS = 30 * 60 * 1000;   // then ×2 per failed probe, capped at 30 min — a long outage costs very few probes.
 const NOTFOUND_PREFIX = "nf:";               // short-lived "no such character" marker: a typo'd/deleted name isn't re-fetched in a loop.
 const NOTFOUND_TTL_S = 60 * 60;              // remember not-found for 1 hour (self-corrects if it was a transient 404).
+const Q_ORDER_KEY = "q:order";               // #1: cron-maintained ordered queue snapshot — lets position/metrics/probe skip the 2 KV list()s.
+const Q_ORDER_TTL_MS = 90 * 1000;            // trust the snapshot for 90s (rewritten each active drain minute); older -> re-list for correctness.
 const PAUSE_KEY = "drain:paused";            // present (JSON {since, lastProbe}) iff the queue is paused — gates enqueues + drives the client "lookups temporarily unavailable" notice.
 const UNAVAILABLE_MSG = "Character lookups are temporarily unavailable — lostark.bible isn't responding. Cached characters still work; we retry automatically and this clears the moment it recovers.";
 const MAX_FETCH_ATTEMPTS = 5;                // after this many failed fetches a queued character is DROPPED, so a permanently-broken entry (e.g. some KR names) can't sit at the head retrying forever and starving everyone behind it.
@@ -564,19 +566,21 @@ const CANARY = { region: "NA", name: "Paroxysmal" };
 // first (fast ~1 min) step; it grows ×2 per failed probe (capped at PAUSE_PROBE_MAX_MS).
 function newPause(now) { return { since: now, lastProbe: now, interval: PAUSE_PROBE_FIRST_MS }; }
 async function probeOldest(env) {
-  let keys = [];
-  try { keys = (await env.CHARS.list({ prefix: QP })).keys.concat((await env.CHARS.list({ prefix: QF })).keys); } catch (e) {}
-  keys.sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); });
-  const k = keys[0];
-  const md = k ? (k.metadata || {}) : CANARY;
-  if (k && (!md.region || !md.name)) { try { await env.CHARS.delete(k.name); } catch (e) {} return { up: false, result: "skip" }; }
+  // Use the q:order snapshot (one read) — STALE is fine, the probe only tests connectivity. Fall
+  // back to a fresh list only if the snapshot is empty; a canary if the queue itself is empty.
+  let first = null;
+  try { const s = await kvGetJson(env, Q_ORDER_KEY); if (s && Array.isArray(s.items) && s.items.length) first = s.items[0]; } catch (e) {}
+  if (!first) { const items = await listQueueOrder(env); if (items.length) first = items[0]; }
+  const md = first ? { region: first.r, name: first.n } : CANARY;
+  const qkey = first ? first.k : null;                      // queue key to clear if the probe succeeds
+  if (first && (!md.region || !md.name)) { try { await env.CHARS.delete(qkey); } catch (e) {} return { up: false, result: "skip" }; }
   let res = null;
   try { res = await fetchCharacterData(md.region, md.name); } catch (e) { res = null; }
   if (res && res.ok) {
-    if (k) { try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(Object.assign({}, res.data, { pulledAt: Date.now() }))); await env.CHARS.delete(k.name); } catch (e) {} }
-    return { up: true, cached: !!k, name: md.region + ":" + md.name };
+    if (qkey) { try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(Object.assign({}, res.data, { pulledAt: Date.now() }))); await env.CHARS.delete(qkey); } catch (e) {} }
+    return { up: true, cached: !!qkey, name: md.region + ":" + md.name };
   }
-  if (res && res.status === 404) { if (k) { try { await env.CHARS.delete(k.name); } catch (e) {} } return { up: true, cached: false, name: md.region + ":" + md.name }; }
+  if (res && res.status === 404) { if (qkey) { try { await env.CHARS.delete(qkey); } catch (e) {} } return { up: true, cached: false, name: md.region + ":" + md.name }; }
   return { up: false, result: "down", entry: { region: md.region, name: md.name, status: res ? res.status : 0, upstream: (res && res.body && res.body.upstreamStatus) || null, msg: (res && res.body && res.body.error) || "network/timeout" } };
 }
 
@@ -621,63 +625,60 @@ async function drainQueue(env) {
 
   if (used >= MONTHLY_CHAR_BUDGET) { run.stop = "budget"; run.ms = 0; await appendDrainLog(env, run); return; }
   let processed = 0, cached = 0, failed = 0, consecFail = 0, stop = false;
-  for (const prefix of [QP, QF]) {
-    if (stop || processed >= DRAIN_PER_RUN) break;
-    let list;
-    try { list = await env.CHARS.list({ prefix: prefix }); } catch (e) { break; }
-    // FIFO: drain OLDEST-enqueued first. KV list() returns keys alphabetically, so re-order by the
-    // enqueue `ts` stamped into each entry's metadata (pre-FIFO entries have no ts -> 0 -> treated
-    // as oldest, so they clear first). The queue is gate-bounded, so one unpaged list() is plenty.
-    const ordered = list.keys.slice().sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); });
-    for (const k of ordered) {
-      if (processed >= DRAIN_PER_RUN || Date.now() - t0 > DRAIN_BUDGET_MS) { run.stop = processed >= DRAIN_PER_RUN ? "full" : "time"; stop = true; break; }
-      const md = k.metadata || {};
-      if (!md.region || !md.name) { await env.CHARS.delete(k.name); continue; } // malformed -> drop
-      let res = null;
-      try { res = await fetchCharacterData(md.region, md.name); } catch (e) { res = null; } // ONE fetch — no blind retry (gentler on lostark.bible; a real outage trips the breaker below)
-      const upstream = (res && res.body && res.body.upstreamStatus) || null; // the real lostark.bible status behind our 502
-      if (res && res.ok) {
-        consecFail = 0;
-        const record = Object.assign({}, res.data, { pulledAt: Date.now() });
-        try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(record)); await env.CHARS.delete(k.name); cached++; run.cached.push(md.region + ":" + md.name); } catch (e) {}
-      } else if (res && res.status >= 400 && res.status < 500) {
-        // not found / bad request -> drop. REMEMBER a 404 (short TTL) so a typo'd or deleted name
-        // isn't re-enqueued + re-fetched in a loop; enqueueChar checks this marker.
-        consecFail = 0;
-        await env.CHARS.delete(k.name);
-        if (res.status === 404) { try { await env.CHARS.put(NOTFOUND_PREFIX + charKey(md.region, md.name), "1", { expirationTtl: NOTFOUND_TTL_S }); } catch (e) {} }
-        run.dropped.push({ region: md.region, name: md.name, status: res.status, msg: (res.body && res.body.error) || "dropped" });
-      } else if (upstream === 401 || upstream === 403) {
-        // a BLOCK (lostark.bible refusing the Worker's IP) — it won't fix itself on a retry, so PAUSE
-        // immediately instead of burning the full fail streak to discover it. Re-queue this run at the front.
-        run.failed.push({ region: md.region, name: md.name, status: res ? res.status : 0, upstream: upstream, msg: (res.body && res.body.error) || "blocked", att: 1 });
+  // #1: list BOTH queues ONCE, up front, in drain order — then write the q:order snapshot at the end
+  // so position / metrics / probe reads can skip listing entirely (they read q:order instead).
+  const items = await listQueueOrder(env);     // [{k,r,n,t,a,p}] premium-first, oldest-ts first
+  const removed = new Set();                    // queue keys cached or dropped this run (gone from the snapshot)
+  for (const it of items) {
+    if (processed >= DRAIN_PER_RUN || Date.now() - t0 > DRAIN_BUDGET_MS) { run.stop = processed >= DRAIN_PER_RUN ? "full" : "time"; stop = true; break; }
+    if (!it.r || !it.n) { try { await env.CHARS.delete(it.k); } catch (e) {} removed.add(it.k); continue; } // malformed -> drop
+    let res = null;
+    try { res = await fetchCharacterData(it.r, it.n); } catch (e) { res = null; } // ONE fetch — no blind retry (gentler on lostark.bible; a real outage trips the breaker below)
+    const upstream = (res && res.body && res.body.upstreamStatus) || null; // the real lostark.bible status behind our 502
+    if (res && res.ok) {
+      consecFail = 0;
+      const record = Object.assign({}, res.data, { pulledAt: Date.now() });
+      try { await env.CHARS.put(charKey(it.r, it.n), JSON.stringify(record)); await env.CHARS.delete(it.k); cached++; removed.add(it.k); run.cached.push(it.r + ":" + it.n); } catch (e) {}
+    } else if (res && res.status >= 400 && res.status < 500) {
+      // not found / bad request -> drop. REMEMBER a 404 (short TTL) so a typo'd or deleted name
+      // isn't re-enqueued + re-fetched in a loop; enqueueChar checks this marker.
+      consecFail = 0;
+      try { await env.CHARS.delete(it.k); } catch (e) {} removed.add(it.k);
+      if (res.status === 404) { try { await env.CHARS.put(NOTFOUND_PREFIX + charKey(it.r, it.n), "1", { expirationTtl: NOTFOUND_TTL_S }); } catch (e) {} }
+      run.dropped.push({ region: it.r, name: it.n, status: res.status, msg: (res.body && res.body.error) || "dropped" });
+    } else if (upstream === 401 || upstream === 403) {
+      // a BLOCK (lostark.bible refusing the Worker's IP) — it won't fix itself on a retry, so PAUSE
+      // immediately instead of burning the full fail streak to discover it. Re-queue this run at the front.
+      run.failed.push({ region: it.r, name: it.n, status: res ? res.status : 0, upstream: upstream, msg: (res.body && res.body.error) || "blocked", att: 1 });
+      await requeueFront(env, run.failed);
+      try { await env.CHARS.put(PAUSE_KEY, JSON.stringify(newPause(Date.now()))); } catch (e) {}
+      run.stop = "blocked"; stop = true; break;
+    } else {
+      // transient 5xx / network / timeout: SKIP this character (leave it queued) so one bad or slow
+      // character can't head-of-line-block the queue. Count attempts so a PERMANENTLY broken entry
+      // (e.g. some KR names) is eventually DROPPED instead of retried forever at the head.
+      failed++;
+      const att = (it.a | 0) + 1;
+      run.failed.push({ region: it.r, name: it.n, status: res ? res.status : 0, upstream: upstream, msg: (res && res.body && res.body.error) || "network/timeout", att: att });
+      console.log("[drain-fail] " + it.r + ":" + it.n + " status=" + (res ? res.status : "throw") + " att=" + att);
+      try {
+        if (att >= MAX_FETCH_ATTEMPTS) { await env.CHARS.delete(it.k); removed.add(it.k); }                 // give up — drop it
+        else await env.CHARS.put(it.k, "", { metadata: { region: it.r, name: it.n, ts: it.t, attempts: att }, expirationTtl: QUEUE_TTL_S }); // preserve ts (keep FIFO place)
+      } catch (e) {}
+      if (++consecFail >= PAUSE_FAIL_LIMIT) {
+        // circuit-breaker: PAUSE the queue — re-queue this run's failures at the FRONT (attempts
+        // reset; the upstream being down isn't the character's fault), back off to adaptive probes.
         await requeueFront(env, run.failed);
         try { await env.CHARS.put(PAUSE_KEY, JSON.stringify(newPause(Date.now()))); } catch (e) {}
-        run.stop = "blocked"; stop = true; break;
-      } else {
-        // transient 5xx / network / timeout: SKIP this character (leave it queued) so one bad or slow
-        // character can't head-of-line-block the queue. Count attempts so a PERMANENTLY broken entry
-        // (e.g. some KR names) is eventually DROPPED instead of retried forever at the head.
-        failed++;
-        const att = (md.attempts | 0) + 1;
-        run.failed.push({ region: md.region, name: md.name, status: res ? res.status : 0, upstream: upstream, msg: (res && res.body && res.body.error) || "network/timeout", att: att });
-        console.log("[drain-fail] " + md.region + ":" + md.name + " status=" + (res ? res.status : "throw") + " att=" + att);
-        try {
-          if (att >= MAX_FETCH_ATTEMPTS) await env.CHARS.delete(k.name);                                  // give up — drop it
-          else await env.CHARS.put(k.name, "", { metadata: { region: md.region, name: md.name, ts: md.ts, attempts: att }, expirationTtl: QUEUE_TTL_S }); // preserve ts (keep FIFO place)
-        } catch (e) {}
-        if (++consecFail >= PAUSE_FAIL_LIMIT) {
-          // circuit-breaker: PAUSE the queue — re-queue this run's failures at the FRONT (attempts
-          // reset; the upstream being down isn't the character's fault), back off to adaptive probes.
-          await requeueFront(env, run.failed);
-          try { await env.CHARS.put(PAUSE_KEY, JSON.stringify(newPause(Date.now()))); } catch (e) {}
-          run.stop = "paused"; stop = true; break;
-        }
+        run.stop = "paused"; stop = true; break;
       }
-      processed++;
-      if (processed < DRAIN_PER_RUN) await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
     }
+    processed++;
+    if (processed < DRAIN_PER_RUN) await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
   }
+  // #1: refresh the q:order snapshot = items still queued after this run (drain order preserved), so
+  // queueStatus / metrics / probe read it instead of listing. (Skipped while paused — early return above.)
+  try { await env.CHARS.put(Q_ORDER_KEY, JSON.stringify({ ts: Date.now(), items: items.filter(function (it) { return !removed.has(it.k); }) })); } catch (e) {}
   run.ms = Date.now() - t0;
   // #4: skip logging a do-nothing run (idle / empty queue) — keep drain:log (and its KV write) for
   // runs that actually cached, failed, or dropped something. Liveness is still visible via backlog.
@@ -689,27 +690,34 @@ async function drainQueue(env) {
   }
 }
 
-// Where a queued character sits in the drain order (PREMIUM queue first, then FREE, each
-// alphabetical by key) + the total queued + a rough ETA (~DRAIN_PER_RUN cached per minute).
-// Lists both queues (bounded by the enqueue gate, so well under the 1000-key page limit). A
-// just-enqueued key may not show in list() yet (KV is eventually consistent) — then we report
-// it at the tail (slightly pessimistic), which the next poll corrects.
+// #1: the ordered queue (premium first, then free; each oldest-ts first) as [{k,r,n,t,a,p}].
+// listQueueOrder lists both queues fresh; readQueueOrder prefers the cron-maintained q:order
+// snapshot (one cheap read) and only re-lists when it's missing or stale — so callers stay
+// correct while skipping the two KV list()s in the common (fresh-snapshot) case.
+async function listQueueOrder(env) {
+  let p = [], f = [];
+  try { p = (await env.CHARS.list({ prefix: QP })).keys; } catch (e) {}
+  try { f = (await env.CHARS.list({ prefix: QF })).keys; } catch (e) {}
+  const map = function (keys, premium) {
+    return keys.slice().sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); })
+      .map(function (k) { const m = k.metadata || {}; return { k: k.name, r: m.region || "", n: m.name || "", t: m.ts || 0, a: m.attempts || 0, p: premium }; });
+  };
+  return map(p, true).concat(map(f, false));
+}
+async function readQueueOrder(env) {
+  try { const s = await kvGetJson(env, Q_ORDER_KEY); if (s && Array.isArray(s.items) && Date.now() - (s.ts || 0) < Q_ORDER_TTL_MS) return s.items; } catch (e) {}
+  return listQueueOrder(env);
+}
+
+// Where a queued character sits in the drain order + the total queued + a rough ETA
+// (~DRAIN_PER_RUN cached per minute). Reads the q:order snapshot (no list() when it's fresh). A
+// just-enqueued key may not be in the snapshot yet -> reported at the tail, which the next poll corrects.
 async function queueStatus(env, region, name, tier) {
-  const key = charKey(region, name);
-  let premium = [], free = [];
-  // FIFO order: sort by the enqueue ts (old entries without a ts sort first, as oldest).
-  const byTs = function (keys) { return keys.slice().sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); }).map(function (k) { return k.name; }); };
-  try { premium = byTs((await env.CHARS.list({ prefix: QP })).keys); } catch (e) {}
-  try { free = byTs((await env.CHARS.list({ prefix: QF })).keys); } catch (e) {}
-  let position;
-  if (tier === "premium") {
-    const pi = premium.indexOf(QP + key);
-    position = (pi >= 0 ? pi : premium.length) + 1;          // premium is drained first
-  } else {
-    const fi = free.indexOf(QF + key);
-    position = premium.length + (fi >= 0 ? fi : free.length) + 1;  // free comes after all premium
-  }
-  const total = Math.max(premium.length + free.length, position);  // count self even if list() lags
+  const fullKey = (tier === "premium" ? QP : QF) + charKey(region, name);
+  const items = await readQueueOrder(env);                  // premium-first, then free
+  const idx = items.findIndex(function (it) { return it.k === fullKey; });
+  const position = (idx >= 0 ? idx : items.length) + 1;     // not-yet-listed -> tail (next poll corrects)
+  const total = Math.max(items.length, position);
   return { position: position, total: total, etaMinutes: Math.ceil(position / DRAIN_PER_RUN), drainPerMin: DRAIN_PER_RUN };
 }
 
@@ -804,29 +812,26 @@ export default {
     // list()s + two small get()s, NO big snapshot read — so the private dashboard can poll it often.
     if (u.searchParams.get("metrics") === "1") {
       if (!premium) return json({ error: "Forbidden — owner token required." }, 403);
-      // all four reads are independent -> one parallel round-trip instead of four sequential awaits
-      const emptyList = function () { return { keys: [] }; };
-      const [rqp, rqf, usage0, lw, dlog, pz] = await Promise.all([
-        env.CHARS.list({ prefix: QP }).catch(emptyList),
-        env.CHARS.list({ prefix: QF }).catch(emptyList),
+      // #1: read the q:order snapshot (1 cheap read; lists only if stale) + the small state keys,
+      // all independent -> one parallel round-trip.
+      const [items, usage0, lw, dlog, pz] = await Promise.all([
+        readQueueOrder(env).catch(function () { return []; }),
         kvGetJson(env, USAGE_KEY).catch(function () { return null; }),
         env.CHARS.get(LASTWRITE_KEY).catch(function () { return null; }),
         kvGetJson(env, DRAIN_LOG_KEY).catch(function () { return null; }),
         kvGetJson(env, PAUSE_KEY).catch(function () { return null; })
       ]);
-      const qp = rqp.keys, qf = rqf.keys, usage = usage0 || {}, lastWrite = parseInt(lw, 10) || 0;
+      const usage = usage0 || {}, lastWrite = parseInt(lw, 10) || 0;
       const drainLog = Array.isArray(dlog) ? dlog : [];
       const paused = (pz && pz.since) ? pz : null;
       const now = Date.now();
-      const mapq = function (keys, tier) {
-        return keys.slice().sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); })
-          .map(function (k) { const m = k.metadata || {}; return { region: m.region || "", name: m.name || "", tier: tier, waitedS: m.ts ? Math.round((now - m.ts) / 1000) : null }; });
-      };
-      const list = mapq(qp, "premium").concat(mapq(qf, "free")).slice(0, 500);
+      const premiumCount = items.filter(function (it) { return it.p; }).length;
+      const freeCount = items.length - premiumCount;
+      const list = items.slice(0, 500).map(function (it) { return { region: it.r, name: it.n, tier: it.p ? "premium" : "free", waitedS: it.t > 1e12 ? Math.round((now - it.t) / 1000) : null }; }); // ts<=1e12 = a front-sentinel (e.g. requeued ts=1), not a real wait
       return json({
         ok: true, nowMs: Date.now(),
         drain: { perRun: DRAIN_PER_RUN, delayMs: DRAIN_DELAY_MS, perMin: DRAIN_PER_RUN },
-        queue: { premium: qp.length, free: qf.length, total: qp.length + qf.length, list: list },
+        queue: { premium: premiumCount, free: freeCount, total: items.length, list: list },
         usage: { month: usage.month || "", count: (usage.count | 0), budget: MONTHLY_CHAR_BUDGET },
         lastWriteMs: lastWrite,
         drainLog: drainLog,
