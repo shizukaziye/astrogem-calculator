@@ -1394,8 +1394,9 @@ presetToggleHtml(data) +
   }
 
   // ---------------- queue: show "queued", poll until the drain caches it ----------------
-  var grPollTimer = null, grPaintTimer = null;
+  var grPollTimer = null, grPaintTimer = null, grWatching = false;
   function stopPoll() {
+    grWatching = false;                                       // also stops the long-poll's reconnect loop
     if (grPollTimer) { clearTimeout(grPollTimer); grPollTimer = null; }
     if (grPaintTimer) { clearInterval(grPaintTimer); grPaintTimer = null; }
   }
@@ -1443,6 +1444,7 @@ presetToggleHtml(data) +
   // initial {position,total,etaMinutes,drainPerMin}; `cachedRefresh` routes UI to the banner vs panel.
   function startQueueWatch(region, name, since, cachedRefresh, st) {
     stopPoll();
+    grWatching = true;
     since = since || 0;
     var perMin = (st && st.drainPerMin) || 6;
     var pos = (st && st.position > 0) ? st.position : null;   // last server-known position
@@ -1477,14 +1479,7 @@ presetToggleHtml(data) +
         var hasGems = Array.isArray(d.gems) && d.gems.length;
         // Done only once the cache is genuinely NEWER than what we're replacing (a stale-cache hit
         // returns the same pulledAt until the drain re-fetches it).
-        if ((d.cached || hasGems) && (d.pulledAt || 0) > since) {
-          stopPoll(); clearRefreshBanner();
-          lastLoadout = d; grPreset = "raid"; grMode = defaultModeFor(d);
-          var rb = $("gr-pull-refresh"); if (rb) rb.style.display = "";
-          setPullStatus("Graded " + ((d.gems || []).length) + " gems.", "");
-          renderLoadout(d);
-          return;
-        }
+        if ((d.cached || hasGems) && (d.pulledAt || 0) > since) { finishWatch(d); return; }
         if (d.queued && d.position > 0) {                      // re-sync true position, reset countdown
           pos = d.position; total = d.total || total; if (d.drainPerMin) perMin = d.drainPerMin; syncAt = Date.now();
         } else if (!d.queued && !hasGems && (!r.ok || d.error)) {
@@ -1497,8 +1492,28 @@ presetToggleHtml(data) +
         scheduleSync();
       }).catch(function () { scheduleSync(); /* transient — keep watching */ });
     }
+    function finishWatch(d) {                                 // refresh done -> render the fresh loadout
+      stopPoll(); clearRefreshBanner();
+      lastLoadout = d; grPreset = "raid"; grMode = defaultModeFor(d);
+      var rb = $("gr-pull-refresh"); if (rb) rb.style.display = "";
+      setPullStatus("Graded " + ((d.gems || []).length) + " gems.", "");
+      renderLoadout(d);
+    }
+    // 3) Long-poll: the worker returns the INSTANT the drain re-caches this char (a real push), so the
+    //    refresh banner clears within seconds instead of waiting for the 30s position tick.
+    function waitLoop() {
+      if (!grWatching) return;
+      var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
+      var url = WORKER_URL.replace(/\/+$/, "") + "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) + "&queue=1&wait=1&since=" + since + (k ? "&k=" + encodeURIComponent(k) : "");
+      fetch(url).then(function (resp) { return resp.json(); }).then(function (d) {
+        if (!grWatching) return;
+        if (d && d.done && Array.isArray(d.gems)) finishWatch(d);   // drain completed -> refresh now
+        else waitLoop();                                            // timed out -> reconnect
+      }).catch(function () { if (grWatching) setTimeout(waitLoop, 3000); }); // transient -> retry
+    }
     paint();
     scheduleSync();
+    waitLoop();
   }
 
   // The note under the pull buttons. Cached lookups are free & unlimited; NEW characters are paced to

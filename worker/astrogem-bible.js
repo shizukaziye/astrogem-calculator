@@ -916,6 +916,20 @@ export default {
     }
     const key = charKey(region, name);
 
+    // Long-poll "wait" endpoint: hold the connection (~25s) and return the MOMENT the drain re-caches
+    // this character newer than &since — a real "refresh done" signal, no client polling. Returns
+    // {done:false} on timeout so the client simply reconnects. Drives the grader's refresh banner.
+    if (u.searchParams.get("wait") === "1" && env.CHARS) {
+      const sinceMs = parseInt(u.searchParams.get("since"), 10) || 0;
+      const deadline = Date.now() + 25000;
+      while (Date.now() < deadline) {
+        const rec = await kvGetJson(env, key);
+        if (rec && Array.isArray(rec.gems) && (rec.pulledAt || 0) > sinceMs) return json(Object.assign({}, rec, { cached: true, done: true }), 200);
+        await new Promise(function (r) { setTimeout(r, 2500); });
+      }
+      return json({ done: false }, 200);
+    }
+
     const wantQueue = u.searchParams.get("queue") === "1";
     const wantPos = u.searchParams.get("pos") === "1"; // position/ETA cost 2 KV lists; the lookup + periodic re-syncs set &pos=1, the local countdown between them is free.
 
