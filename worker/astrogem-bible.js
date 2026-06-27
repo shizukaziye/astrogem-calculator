@@ -781,6 +781,39 @@ async function queuedResponse(env, region, name, tier, extra, wantPos) {
   return json(Object.assign({ queued: true, tier: tier, region: region, name: normalizeName(name) }, st || {}, extra || {}), 200);
 }
 
+// Fast-path KICK: fetch + cache ONE specific just-queued character directly — NO list(), so it dodges
+// KV list() eventual-consistency (the just-written queue key isn't visible to an immediate list, which
+// made the old drainQueue-kick silently process a stale list and miss the new char). The cron drainQueue
+// still does the full, paced, breaker-aware drain. Mirrors the drain's per-char ok/4xx branches; leaves
+// block/transient queued for the cron (which owns the circuit-breaker).
+async function kickFetch(env, region, name) {
+  if (!env || !env.CHARS) return;
+  try { const cfg = await getDrainConfig(env); if (cfg.mode !== "run") return; } catch (e) { return; } // off/probe -> don't touch lostark.bible
+  const key = charKey(region, name);
+  const t0 = Date.now();
+  let res = null;
+  try { res = await fetchCharacterData(region, name); } catch (e) { res = null; }
+  if (res && res.ok) {
+    try {
+      await env.CHARS.put(key, JSON.stringify(Object.assign({}, res.data, { pulledAt: Date.now() })));
+      await markDirty(env, key);
+      await env.CHARS.delete(QF + key); await env.CHARS.delete(QP + key);
+      await env.CHARS.put(LASTWRITE_KEY, String(Date.now()));
+      const m = new Date().toISOString().slice(0, 7);
+      const u = await kvGetJson(env, USAGE_KEY);
+      await env.CHARS.put(USAGE_KEY, JSON.stringify({ month: m, count: (u && u.month === m ? (u.count | 0) : 0) + 1 }), { expirationTtl: 40 * 24 * 3600 });
+      await appendDrainLog(env, { t: Date.now(), cached: [region + ":" + name], dropped: [], failed: [], stop: null, kick: true, ms: Date.now() - t0 }); // so the admin SEES it: a sub-2s kick drains before the live queue list() catches up
+    } catch (e) {}
+  } else if (res && res.status >= 400 && res.status < 500) {       // OUR 4xx = not-found(404)/no-Ark-Grid(422): drop + remember WHY
+    try {
+      await env.CHARS.delete(QF + key); await env.CHARS.delete(QP + key);
+      await env.CHARS.put(NOTFOUND_PREFIX + key, String((res.body && res.body.error) || ("HTTP " + res.status)).slice(0, 300), { expirationTtl: NOTFOUND_TTL_S });
+      await appendDrainLog(env, { t: Date.now(), cached: [], dropped: [{ region: region, name: name, status: res.status, msg: (res.body && res.body.error) || "dropped" }], failed: [], stop: null, kick: true, ms: Date.now() - t0 });
+    } catch (e) {}
+  }
+  // block (our 502 / upstream 4xx) or transient (5xx/network/timeout): leave it queued for the cron drain.
+}
+
 // Add a not-yet-cached character to the premium/free queue, gated by a GLOBAL enqueue rate so the
 // queue can't be filled faster than the drain empties it (keeps monthly writes bounded). region+name
 // stored as KV metadata (the drain reads them from list() without an extra get).
@@ -803,7 +836,7 @@ async function enqueueChar(env, region, name, premium, wantPos, ctx) {
       return json({ error: "We've reached this month's character-caching budget — new lookups resume next month. Cached characters and the leaderboard still work normally.", monthlyBudget: true }, 503);
     }
     try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
-    if (ctx && ctx.waitUntil) ctx.waitUntil(drainQueue(env)); // KICK: drain right now (snappy when the queue is idle) — drainQueue self-serializes via DRAIN_LOCK_KEY
+    if (ctx && ctx.waitUntil) ctx.waitUntil(kickFetch(env, region, name)); // KICK: fetch+cache THIS char now, directly (no list() -> immune to KV list lag). The cron drainQueue does the full paced drain.
     return queuedResponse(env, region, name, premium ? "premium" : "free", { justQueued: true }, wantPos);
   }
   return json({ queued: true, justQueued: true, tier: premium ? "premium" : "free", region: region, name: normalizeName(name) }, 200);
@@ -934,7 +967,7 @@ export default {
         if (rec && Array.isArray(rec.gems) && (rec.pulledAt || 0) > sinceMs) return json(Object.assign({}, rec, { cached: true, done: true }), 200);
         const miss = await env.CHARS.get(NOTFOUND_PREFIX + key);   // dropped (404/422...) while waiting -> stop + report why
         if (miss) return json({ done: false, notFound: true, error: (miss.length > 3 ? miss : "We couldn't find that character on lostark.bible.") }, 200);
-        await new Promise(function (r) { setTimeout(r, 2500); });
+        await new Promise(function (r) { setTimeout(r, 1500); });
       }
       return json({ done: false }, 200);
     }
@@ -972,8 +1005,11 @@ export default {
     // client asked (&pos=1), its live position/total/ETA. This is also the poll path the client hits
     // while it waits for the drain, kept list()-free so a waiting tab is nearly free to serve.
     if (wantQueue && env.CHARS) {
-      if ((await env.CHARS.get(QP + key)) !== null) return queuedResponse(env, region, name, "premium", { alreadyQueued: true }, wantPos);
-      if ((await env.CHARS.get(QF + key)) !== null) {
+      const qp = (await env.CHARS.get(QP + key)) !== null;
+      const qf = !qp && (await env.CHARS.get(QF + key)) !== null;
+      if (qp || qf) {
+        if (ctx && ctx.waitUntil) ctx.waitUntil(kickFetch(env, region, name)); // still waiting -> fetch it now (covers a kick that lost the KV-list race, and retries a transiently-failed one)
+        if (qp) return queuedResponse(env, region, name, "premium", { alreadyQueued: true }, wantPos);
         if (premium) { // a password lookup of a free-queued character bumps it to the premium queue
           try { await env.CHARS.put(QP + key, "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); await env.CHARS.delete(QF + key); } catch (e) {}
           return queuedResponse(env, region, name, "premium", { alreadyQueued: true, upgraded: true }, wantPos);

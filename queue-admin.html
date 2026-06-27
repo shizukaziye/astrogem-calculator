@@ -204,7 +204,7 @@
     var rows = log.slice().reverse().map(function(r){
       var c=(r.cached||[]).length, f=(r.failed||[]).length, dr=(r.dropped||[]).length;
       var stopCls = r.stop==="upstream" ? "bad" : (r.stop==="budget"||r.stop==="time" ? "warn" : "muted");
-      var stop = r.stop ? '<span class="'+stopCls+'">'+esc(r.stop)+'</span>' : '<span class="muted">ok</span>';
+      var stop = r.kick ? '<span class="good">kick</span>' : (r.stop ? '<span class="'+stopCls+'">'+esc(r.stop)+'</span>' : '<span class="muted">ok</span>');
       var names = (r.cached||[]).map(function(x){ var p=String(x).split(":"); return p[1]||x; }).join(", ");
       return '<tr><td class="muted" style="white-space:nowrap">'+fmtTime(r.t)+'</td>'+
         '<td class="'+(c?"good":"muted")+'">'+c+'</td>'+
@@ -236,7 +236,7 @@
     });
   }
 
-  function start(){ poll(); if(timer) clearInterval(timer); timer = setInterval(poll, 3000); } // 3s: keep the admin view snappy
+  function start(){ poll(); if(timer) clearInterval(timer); timer = setInterval(poll, 2000); } // 2s: keep the admin view snappy
 
   $("connect").addEventListener("click", function(){ var t = $("tok").value.trim(); if(t){ localStorage.setItem(TOKKEY, t); lastErr=""; start(); } });
   $("tok").addEventListener("keydown", function(e){ if(e.key === "Enter") $("connect").click(); });
