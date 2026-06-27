@@ -236,7 +236,7 @@
     });
   }
 
-  function start(){ poll(); if(timer) clearInterval(timer); timer = setInterval(poll, 10000); }
+  function start(){ poll(); if(timer) clearInterval(timer); timer = setInterval(poll, 3000); } // 3s: keep the admin view snappy
 
   $("connect").addEventListener("click", function(){ var t = $("tok").value.trim(); if(t){ localStorage.setItem(TOKKEY, t); lastErr=""; start(); } });
   $("tok").addEventListener("keydown", function(e){ if(e.key === "Enter") $("connect").click(); });

@@ -1482,12 +1482,7 @@ presetToggleHtml(data) +
         if ((d.cached || hasGems) && (d.pulledAt || 0) > since) { finishWatch(d); return; }
         if (d.queued && d.position > 0) {                      // re-sync true position, reset countdown
           pos = d.position; total = d.total || total; if (d.drainPerMin) perMin = d.drainPerMin; syncAt = Date.now();
-        } else if (!d.queued && !hasGems && (!r.ok || d.error)) {
-          stopPoll(); clearRefreshBanner();
-          setPullStatus(d.error || "Lookup ended.", "err");
-          if (!cachedRefresh) $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(d.error || "Lookup ended.") + '</div></div>';
-          return;
-        }
+        } else if (!d.queued && !hasGems && (!r.ok || d.error)) { endWatch(d.error); return; }
         paint();
         scheduleSync();
       }).catch(function () { scheduleSync(); /* transient — keep watching */ });
@@ -1499,6 +1494,11 @@ presetToggleHtml(data) +
       setPullStatus("Graded " + ((d.gems || []).length) + " gems.", "");
       renderLoadout(d);
     }
+    function endWatch(msg) {                                  // lookup ended (not found / 422 no gems / error) -> show why, stop
+      stopPoll(); clearRefreshBanner();
+      setPullStatus(msg || "Lookup ended.", "err");
+      if (!cachedRefresh) $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(msg || "Lookup ended.") + '</div></div>';
+    }
     // 3) Long-poll: the worker returns the INSTANT the drain re-caches this char (a real push), so the
     //    refresh banner clears within seconds instead of waiting for the 30s position tick.
     function waitLoop() {
@@ -1508,6 +1508,7 @@ presetToggleHtml(data) +
       fetch(url).then(function (resp) { return resp.json(); }).then(function (d) {
         if (!grWatching) return;
         if (d && d.done && Array.isArray(d.gems)) finishWatch(d);   // drain completed -> refresh now
+        else if (d && d.notFound) endWatch(d.error);                // dropped (404/422) -> stop + show why
         else waitLoop();                                            // timed out -> reconnect
       }).catch(function () { if (grWatching) setTimeout(waitLoop, 3000); }); // transient -> retry
     }

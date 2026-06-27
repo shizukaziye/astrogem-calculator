@@ -232,6 +232,7 @@ const PAUSE_PROBE_MS = 5 * 60 * 1000;        // fallback probe interval (old pau
 const PAUSE_PROBE_FIRST_MS = 60 * 1000;      // ADAPTIVE backoff: first probe ~1 min after pausing (catch a quick recovery),
 const PAUSE_PROBE_MAX_MS = 30 * 60 * 1000;   // then ×2 per failed probe, capped at 30 min — a long outage costs very few probes.
 const NOTFOUND_PREFIX = "nf:";               // short-lived "no such character" marker: a typo'd/deleted name isn't re-fetched in a loop.
+const DRAIN_LOCK_KEY = "drain:lock";         // serialize active drains (cron + enqueue-kicks) so two never overlap + double-fetch lostark.bible; auto-expires (crash safety).
 const NOTFOUND_TTL_S = 60 * 60;              // remember not-found for 1 hour (self-corrects if it was a transient 404).
 const Q_ORDER_KEY = "q:order";               // #1: cron-maintained ordered queue snapshot — lets position/metrics/probe skip the 2 KV list()s.
 const Q_ORDER_TTL_MS = 90 * 1000;            // trust the snapshot for 90s (rewritten each active drain minute); older -> re-list for correctness.
@@ -664,7 +665,10 @@ async function drainQueue(env) {
   }
 
   if (used >= MONTHLY_CHAR_BUDGET) { run.stop = "budget"; run.ms = 0; await appendDrainLog(env, run); return; }
+  // serialize active drains (the cron + enqueue-kicks) so two never overlap and double-fetch lostark.bible.
+  try { if (await env.CHARS.get(DRAIN_LOCK_KEY)) return; await env.CHARS.put(DRAIN_LOCK_KEY, "1", { expirationTtl: 55 }); } catch (e) {}
   const perRun = cfg.drainPerMin;                 // admin-set rate (chars per cron run = per minute)
+  const delayMs = Math.round(60000 / perRun);     // pace ONE fetch per (60/rate)s — e.g. 15/min => one every 4s (one character at a time)
   let processed = 0, cached = 0, failed = 0, consecFail = 0, stop = false;
   // #1: list BOTH queues ONCE, up front, in drain order — then write the q:order snapshot at the end
   // so position / metrics / probe reads can skip listing entirely (they read q:order instead).
@@ -681,11 +685,12 @@ async function drainQueue(env) {
       const record = Object.assign({}, res.data, { pulledAt: Date.now() });
       try { await env.CHARS.put(charKey(it.r, it.n), JSON.stringify(record)); await markDirty(env, charKey(it.r, it.n)); await env.CHARS.delete(it.k); cached++; removed.add(it.k); run.cached.push(it.r + ":" + it.n); } catch (e) {}
     } else if (res && res.status >= 400 && res.status < 500) {
-      // not found / bad request -> drop. REMEMBER a 404 (short TTL) so a typo'd or deleted name
-      // isn't re-enqueued + re-fetched in a loop; enqueueChar checks this marker.
+      // ANY 4xx -> drop AND remember it (short TTL) so the page can't re-enqueue + re-fetch the same
+      // dead name forever: 404 = no such character, 422 = the page has no Ark Grid astrogems to grade.
+      // Store the reason so enqueueChar / the wait long-poll can tell the user WHY (instead of spinning).
       consecFail = 0;
       try { await env.CHARS.delete(it.k); } catch (e) {} removed.add(it.k);
-      if (res.status === 404) { try { await env.CHARS.put(NOTFOUND_PREFIX + charKey(it.r, it.n), "1", { expirationTtl: NOTFOUND_TTL_S }); } catch (e) {} }
+      try { await env.CHARS.put(NOTFOUND_PREFIX + charKey(it.r, it.n), String((res.body && res.body.error) || ("HTTP " + res.status)).slice(0, 300), { expirationTtl: NOTFOUND_TTL_S }); } catch (e) {}
       run.dropped.push({ region: it.r, name: it.n, status: res.status, msg: (res.body && res.body.error) || "dropped" });
     } else if (upstream >= 400 && upstream < 500) {
       // a BLOCK: any 4xx refusal from lostark.bible (401/403/418/429/451 — their anti-bot rotates the
@@ -716,7 +721,7 @@ async function drainQueue(env) {
       }
     }
     processed++;
-    if (processed < perRun) await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
+    if (processed < perRun) await new Promise(function (r) { setTimeout(r, delayMs); });
   }
   // #1: refresh the q:order snapshot = items still queued after this run (drain order preserved), so
   // queueStatus / metrics / probe read it instead of listing. (Skipped while paused — early return above.)
@@ -730,6 +735,7 @@ async function drainQueue(env) {
     try { await env.CHARS.put(LASTWRITE_KEY, String(Date.now())); } catch (e) {}
     try { await env.CHARS.put(USAGE_KEY, JSON.stringify({ month: month, count: used + cached }), { expirationTtl: 40 * 24 * 3600 }); } catch (e) {}
   }
+  try { await env.CHARS.delete(DRAIN_LOCK_KEY); } catch (e) {}  // release the serialize lock for the next drain/kick
 }
 
 // #1: the ordered queue (premium first, then free; each oldest-ts first) as [{k,r,n,t,a,p}].
@@ -778,14 +784,14 @@ async function queuedResponse(env, region, name, tier, extra, wantPos) {
 // Add a not-yet-cached character to the premium/free queue, gated by a GLOBAL enqueue rate so the
 // queue can't be filled faster than the drain empties it (keeps monthly writes bounded). region+name
 // stored as KV metadata (the drain reads them from list() without an extra get).
-async function enqueueChar(env, region, name, premium, wantPos) {
+async function enqueueChar(env, region, name, premium, wantPos, ctx) {
   if (env.CHARS) {                                   // one round-trip: drain mode + known-missing (recent 404)?
     const [cfg, miss] = await Promise.all([
       getDrainConfig(env),
       env.CHARS.get(NOTFOUND_PREFIX + charKey(region, name))
     ]);
     if (cfg.mode !== "run") return json({ unavailable: true, error: UNAVAILABLE_MSG }, 503);       // off/probe -> "lookups temporarily unavailable" notice
-    if (miss) return json({ error: "We couldn't find that character on lostark.bible — double-check the name and region.", notFound: true }, 404); // #6: don't re-queue a known-missing name
+    if (miss) return json({ error: (typeof miss === "string" && miss.length > 3) ? miss : "We couldn't find that character on lostark.bible — double-check the name and region.", notFound: true }, 404); // #6: known-missing/unparseable -> don't re-queue, and say WHY
   }
   if (env.ENQUEUE_GATE) {
     const g = await env.ENQUEUE_GATE.limit({ key: "enqueue" });
@@ -797,6 +803,7 @@ async function enqueueChar(env, region, name, premium, wantPos) {
       return json({ error: "We've reached this month's character-caching budget — new lookups resume next month. Cached characters and the leaderboard still work normally.", monthlyBudget: true }, 503);
     }
     try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
+    if (ctx && ctx.waitUntil) ctx.waitUntil(drainQueue(env)); // KICK: drain right now (snappy when the queue is idle) — drainQueue self-serializes via DRAIN_LOCK_KEY
     return queuedResponse(env, region, name, premium ? "premium" : "free", { justQueued: true }, wantPos);
   }
   return json({ queued: true, justQueued: true, tier: premium ? "premium" : "free", region: region, name: normalizeName(name) }, 200);
@@ -880,7 +887,7 @@ export default {
       // #1: read the q:order snapshot (1 cheap read; lists only if stale) + the small state keys,
       // all independent -> one parallel round-trip.
       const [items, usage0, lw, dlog, cfg] = await Promise.all([
-        readQueueOrder(env).catch(function () { return []; }),
+        listQueueOrder(env).catch(function () { return []; }), // admin: always the LIVE queue (1 owner; fresh > cached so new enqueues show immediately)
         kvGetJson(env, USAGE_KEY).catch(function () { return null; }),
         env.CHARS.get(LASTWRITE_KEY).catch(function () { return null; }),
         kvGetJson(env, DRAIN_LOG_KEY).catch(function () { return null; }),
@@ -894,7 +901,7 @@ export default {
       const list = items.slice(0, 500).map(function (it) { return { region: it.r, name: it.n, tier: it.p ? "premium" : "free", waitedS: it.t > 1e12 ? Math.round((now - it.t) / 1000) : null }; }); // ts<=1e12 = a front-sentinel (e.g. requeued ts=1), not a real wait
       return json({
         ok: true, nowMs: Date.now(),
-        drain: { perRun: cfg.drainPerMin, delayMs: DRAIN_DELAY_MS, perMin: cfg.drainPerMin },
+        drain: { perRun: cfg.drainPerMin, delayMs: Math.round(60000 / cfg.drainPerMin), perMin: cfg.drainPerMin },
         mode: cfg.mode,
         queue: { premium: premiumCount, free: freeCount, total: items.length, list: list },
         usage: { month: usage.month || "", count: (usage.count | 0), budget: MONTHLY_CHAR_BUDGET },
@@ -925,6 +932,8 @@ export default {
       while (Date.now() < deadline) {
         const rec = await kvGetJson(env, key);
         if (rec && Array.isArray(rec.gems) && (rec.pulledAt || 0) > sinceMs) return json(Object.assign({}, rec, { cached: true, done: true }), 200);
+        const miss = await env.CHARS.get(NOTFOUND_PREFIX + key);   // dropped (404/422...) while waiting -> stop + report why
+        if (miss) return json({ done: false, notFound: true, error: (miss.length > 3 ? miss : "We couldn't find that character on lostark.bible.") }, 200);
         await new Promise(function (r) { setTimeout(r, 2500); });
       }
       return json({ done: false }, 200);
@@ -982,7 +991,7 @@ export default {
       const t = await env.LOOKUP_THROTTLE.limit({ key: ip });
       if (!t.success) return json({ error: "One new-character lookup every 5 seconds — please wait a moment (cached characters are unlimited).", rateLimited: true, retryAfterMs: 5000, throttled: true }, 429);
     }
-    if (wantQueue) return enqueueChar(env, region, name, premium, wantPos);
+    if (wantQueue) return enqueueChar(env, region, name, premium, wantPos, ctx);
     return handleCharacter(env, region, name, refresh, { premium: premium, nextMs: 5000 });
   },
 
