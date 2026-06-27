@@ -222,7 +222,7 @@ const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent 
 const BUILTAT_KEY = "lb:builtat";            // ms timestamp the snapshot was last rebuilt by the cron.
 const QP = "q:p:";                           // premium lookup-queue key prefix (region+name ride in KV metadata).
 const QF = "q:f:";                           // free lookup-queue key prefix.
-const DRAIN_PER_RUN = 6;                      // max characters cached per cron run (~6/min) — deliberately gentle on lostark.bible (an aggressive rate just gets rate-limited/timed-out, which FAILS more than it caches). Time-budgeted below so it never overruns the 60s cron; monthly guard caps the total.
+const DRAIN_PER_RUN = 10;                     // DEFAULT chars cached per cron run (= per minute); admin-configurable at runtime via the queue-admin Controls (drain:config.drainPerMin). Time-budgeted below so it never overruns the 60s cron; monthly guard caps the total.
 const MONTHLY_CHAR_BUDGET = 300000;          // hard cap on characters cached per calendar month (~2 writes each ≈ 66% of the 1M/mo write budget → no overage, ever).
 const USAGE_KEY = "usage:drained";           // {month:"YYYY-MM", count} — characters cached this month (the budget guard).
 const DRAIN_DELAY_MS = 3000;                 // pause between lostark.bible fetches (~1 req / 3s) — gentle enough to avoid upstream rate-limiting/timeouts, which cost more than they cache.
@@ -235,7 +235,8 @@ const NOTFOUND_PREFIX = "nf:";               // short-lived "no such character" 
 const NOTFOUND_TTL_S = 60 * 60;              // remember not-found for 1 hour (self-corrects if it was a transient 404).
 const Q_ORDER_KEY = "q:order";               // #1: cron-maintained ordered queue snapshot — lets position/metrics/probe skip the 2 KV list()s.
 const Q_ORDER_TTL_MS = 90 * 1000;            // trust the snapshot for 90s (rewritten each active drain minute); older -> re-list for correctness.
-const PAUSE_KEY = "drain:paused";            // present (JSON {since, lastProbe}) iff the queue is paused — gates enqueues + drives the client "lookups temporarily unavailable" notice.
+const DRAIN_CONFIG_KEY = "drain:config";      // admin drain state: { mode:"run"|"off"|"probe", drainPerMin, lastProbe?, interval? }. mode!="run" gates enqueues + drives the "lookups temporarily unavailable" notice. Set via ?control (owner-only).
+const DRAIN_MODES = ["run", "off", "probe"]; // run = draining; off = frozen (no upstream requests); probe = paused but periodically probing lostark.bible to auto-resume on recovery.
 const UNAVAILABLE_MSG = "Character lookups are temporarily unavailable";
 const MAX_FETCH_ATTEMPTS = 5;                // after this many failed fetches a queued character is DROPPED, so a permanently-broken entry (e.g. some KR names) can't sit at the head retrying forever and starving everyone behind it.
 const QUEUE_TTL_S = 7 * 24 * 60 * 60;        // a queued request expires after 7 days if never drained.
@@ -588,9 +589,19 @@ async function requeueFront(env, items) {
 // lostark.bible is back. UP = a 200 (cache it) or a 404 (it responded — just no such character);
 // DOWN = a 502 (incl. the 401 IP block) / 5xx / network error.
 const CANARY = { region: "NA", name: "Paroxysmal" };
-// Fresh pause state for the circuit-breaker. `interval` is the ADAPTIVE probe gap, reset to the
-// first (fast ~1 min) step; it grows ×2 per failed probe (capped at PAUSE_PROBE_MAX_MS).
-function newPause(now) { return { since: now, lastProbe: now, interval: PAUSE_PROBE_FIRST_MS }; }
+// Admin drain config (mode + per-minute rate + probe backoff state). Defaults to running at the
+// default rate when unset, so a fresh/empty KV simply drains normally.
+async function getDrainConfig(env) {
+  let c = null;
+  try { c = await kvGetJson(env, DRAIN_CONFIG_KEY); } catch (e) {}
+  c = c || {};
+  const mode = DRAIN_MODES.indexOf(c.mode) !== -1 ? c.mode : "run";
+  let rate = parseInt(c.drainPerMin, 10);
+  if (!Number.isFinite(rate) || rate < 1) rate = DRAIN_PER_RUN;
+  if (rate > 30) rate = 30;                       // (the time budget caps the effective rate ~16/run anyway)
+  return { mode: mode, drainPerMin: rate, lastProbe: c.lastProbe || 0, interval: c.interval || PAUSE_PROBE_FIRST_MS };
+}
+function setDrainConfig(env, cfg) { return env.CHARS.put(DRAIN_CONFIG_KEY, JSON.stringify(cfg)).catch(function () {}); }
 async function probeOldest(env) {
   // Use the q:order snapshot (one read) — STALE is fine, the probe only tests connectivity. Fall
   // back to a fresh list only if the snapshot is empty; a canary if the queue itself is empty.
@@ -625,22 +636,42 @@ async function drainQueue(env) {
   const t0 = Date.now();
   const run = { t: t0, cached: [], dropped: [], failed: [], stop: null }; // per-drain history entry
 
-  // PAUSED (circuit-breaker open): auto-probing is DISABLED — while paused the drain does nothing and
-  // makes NO lostark.bible requests at all. The queue stays paused until `drain:paused` is cleared
-  // (manually: `wrangler kv key delete "drain:paused" ... --remote`). Clearing it makes the very next
-  // drain try the queue once: it resumes + drains if lostark.bible has recovered, or re-pauses
-  // immediately on a 4xx block. (probeOldest / PAUSE_PROBE_* are kept but unused — re-enable here.)
-  const pause = await kvGetJson(env, PAUSE_KEY);
-  if (pause && pause.since) return;
+  // Admin drain MODE (set via ?control on the queue-admin page):
+  //   "off"   -> frozen: do nothing, ZERO lostark.bible requests (manual resume).
+  //   "probe" -> paused but probe the oldest queued char on a backoff; auto-resume (mode->run) on recovery.
+  //   "run"   -> drain normally at cfg.drainPerMin (the active path below).
+  const cfg = await getDrainConfig(env);
+  if (cfg.mode === "off") return;
+  if (cfg.mode === "probe") {
+    if (Date.now() - (cfg.lastProbe || 0) < (cfg.interval || PAUSE_PROBE_FIRST_MS)) return; // not time to probe yet
+    const probe = await probeOldest(env);
+    run.ms = Date.now() - t0;
+    if (probe.up) {
+      await setDrainConfig(env, { mode: "run", drainPerMin: cfg.drainPerMin });   // RECOVERED -> resume draining
+      run.stop = "resumed";
+      if (probe.cached && probe.name) {
+        run.cached.push(probe.name);
+        try { await env.CHARS.put(LASTWRITE_KEY, String(Date.now())); } catch (e) {}
+        try { const u = await kvGetJson(env, USAGE_KEY); const c = (u && u.month === month ? (u.count | 0) : 0) + 1; await env.CHARS.put(USAGE_KEY, JSON.stringify({ month: month, count: c }), { expirationTtl: 40 * 24 * 3600 }); } catch (e) {}
+      }
+    } else {
+      await setDrainConfig(env, { mode: "probe", drainPerMin: cfg.drainPerMin, lastProbe: Date.now(), interval: Math.min((cfg.interval || PAUSE_PROBE_FIRST_MS) * 2, PAUSE_PROBE_MAX_MS) }); // still down -> back off ×2
+      run.stop = "probe";
+      if (probe.entry) run.failed.push(probe.entry);
+    }
+    await appendDrainLog(env, run);
+    return;
+  }
 
   if (used >= MONTHLY_CHAR_BUDGET) { run.stop = "budget"; run.ms = 0; await appendDrainLog(env, run); return; }
+  const perRun = cfg.drainPerMin;                 // admin-set rate (chars per cron run = per minute)
   let processed = 0, cached = 0, failed = 0, consecFail = 0, stop = false;
   // #1: list BOTH queues ONCE, up front, in drain order — then write the q:order snapshot at the end
   // so position / metrics / probe reads can skip listing entirely (they read q:order instead).
   const items = await listQueueOrder(env);     // [{k,r,n,t,a,p}] premium-first, oldest-ts first
   const removed = new Set();                    // queue keys cached or dropped this run (gone from the snapshot)
   for (const it of items) {
-    if (processed >= DRAIN_PER_RUN || Date.now() - t0 > DRAIN_BUDGET_MS) { run.stop = processed >= DRAIN_PER_RUN ? "full" : "time"; stop = true; break; }
+    if (processed >= perRun || Date.now() - t0 > DRAIN_BUDGET_MS) { run.stop = processed >= perRun ? "full" : "time"; stop = true; break; }
     if (!it.r || !it.n) { try { await env.CHARS.delete(it.k); } catch (e) {} removed.add(it.k); continue; } // malformed -> drop
     let res = null;
     try { res = await fetchCharacterData(it.r, it.n); } catch (e) { res = null; } // ONE fetch — no blind retry (gentler on lostark.bible; a real outage trips the breaker below)
@@ -662,7 +693,7 @@ async function drainQueue(env) {
       // immediately instead of burning the full fail streak to discover it. Re-queue this run at the front.
       run.failed.push({ region: it.r, name: it.n, status: res ? res.status : 0, upstream: upstream, msg: (res.body && res.body.error) || "blocked", att: 1 });
       await requeueFront(env, run.failed);
-      try { await env.CHARS.put(PAUSE_KEY, JSON.stringify(newPause(Date.now()))); } catch (e) {}
+      await setDrainConfig(env, { mode: "off", drainPerMin: cfg.drainPerMin }); // breaker -> OFF (admin re-enables, or switches to probe mode for auto-recovery)
       run.stop = "blocked"; stop = true; break;
     } else {
       // transient 5xx / network / timeout: SKIP this character (leave it queued) so one bad or slow
@@ -677,15 +708,15 @@ async function drainQueue(env) {
         else await env.CHARS.put(it.k, "", { metadata: { region: it.r, name: it.n, ts: it.t, attempts: att }, expirationTtl: QUEUE_TTL_S }); // preserve ts (keep FIFO place)
       } catch (e) {}
       if (++consecFail >= PAUSE_FAIL_LIMIT) {
-        // circuit-breaker: PAUSE the queue — re-queue this run's failures at the FRONT (attempts
-        // reset; the upstream being down isn't the character's fault), back off to adaptive probes.
+        // circuit-breaker: turn the queue OFF — re-queue this run's failures at the FRONT (attempts
+        // reset; the upstream being down isn't the character's fault). Admin re-enables / picks probe mode.
         await requeueFront(env, run.failed);
-        try { await env.CHARS.put(PAUSE_KEY, JSON.stringify(newPause(Date.now()))); } catch (e) {}
+        await setDrainConfig(env, { mode: "off", drainPerMin: cfg.drainPerMin });
         run.stop = "paused"; stop = true; break;
       }
     }
     processed++;
-    if (processed < DRAIN_PER_RUN) await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
+    if (processed < perRun) await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
   }
   // #1: refresh the q:order snapshot = items still queued after this run (drain order preserved), so
   // queueStatus / metrics / probe read it instead of listing. (Skipped while paused — early return above.)
@@ -729,7 +760,8 @@ async function queueStatus(env, region, name, tier) {
   const idx = items.findIndex(function (it) { return it.k === fullKey; });
   const position = (idx >= 0 ? idx : items.length) + 1;     // not-yet-listed -> tail (next poll corrects)
   const total = Math.max(items.length, position);
-  return { position: position, total: total, etaMinutes: Math.ceil(position / DRAIN_PER_RUN), drainPerMin: DRAIN_PER_RUN };
+  const dpm = (await getDrainConfig(env)).drainPerMin;     // ETA uses the admin-set rate
+  return { position: position, total: total, etaMinutes: Math.ceil(position / dpm), drainPerMin: dpm };
 }
 
 // A "queued" JSON response carrying the live queue status (position / total / ETA). Used both
@@ -747,12 +779,12 @@ async function queuedResponse(env, region, name, tier, extra, wantPos) {
 // queue can't be filled faster than the drain empties it (keeps monthly writes bounded). region+name
 // stored as KV metadata (the drain reads them from list() without an extra get).
 async function enqueueChar(env, region, name, premium, wantPos) {
-  if (env.CHARS) {                                   // one round-trip: queue PAUSED? + known-missing (recent 404)?
-    const [paused, miss] = await Promise.all([
-      kvGetJson(env, PAUSE_KEY),
+  if (env.CHARS) {                                   // one round-trip: drain mode + known-missing (recent 404)?
+    const [cfg, miss] = await Promise.all([
+      getDrainConfig(env),
       env.CHARS.get(NOTFOUND_PREFIX + charKey(region, name))
     ]);
-    if (paused && paused.since) return json({ unavailable: true, error: UNAVAILABLE_MSG }, 503);   // -> "lookups temporarily unavailable" notice
+    if (cfg.mode !== "run") return json({ unavailable: true, error: UNAVAILABLE_MSG }, 503);       // off/probe -> "lookups temporarily unavailable" notice
     if (miss) return json({ error: "We couldn't find that character on lostark.bible — double-check the name and region.", notFound: true }, 404); // #6: don't re-queue a known-missing name
   }
   if (env.ENQUEUE_GATE) {
@@ -804,11 +836,27 @@ export default {
     // Public status (no token): is the lookup queue PAUSED (lostark.bible unreachable)? Drives the
     // grader's "lookups temporarily unavailable" notice.
     if (u.searchParams.get("status") === "1") {
-      const p = env.CHARS ? await kvGetJson(env, PAUSE_KEY) : null;
+      const cfg = env.CHARS ? await getDrainConfig(env) : { mode: "run" };
       // SHORT browser cache: keeps the banner fresh (~30s, in line with the queue re-sync cadence) for
-      // active users, while deduping rapid focus re-checks so the load+focus client logic can't itself
-      // become a spam source. The real fix for idle/resting tabs is the client no-interval change, not this.
-      return json({ ok: true, paused: !!(p && p.since), since: (p && p.since) || 0, message: UNAVAILABLE_MSG }, 200, { "Cache-Control": "public, max-age=30" });
+      // active users, while deduping rapid focus re-checks. paused = the drain isn't in "run" mode.
+      return json({ ok: true, paused: cfg.mode !== "run", mode: cfg.mode, message: UNAVAILABLE_MSG }, 200, { "Cache-Control": "public, max-age=30" });
+    }
+
+    // Owner-only drain CONTROL: set the mode (run/off/probe) and/or the per-minute rate. Drives the
+    // queue-admin Controls panel. e.g. ?control=1&k=<token>&mode=off  or  &rate=10
+    if (u.searchParams.get("control") === "1") {
+      if (!premium) return json({ error: "Forbidden — owner token required." }, 403);
+      const cur = await getDrainConfig(env);
+      const next = { mode: cur.mode, drainPerMin: cur.drainPerMin };
+      const mode = u.searchParams.get("mode");
+      if (mode && DRAIN_MODES.indexOf(mode) !== -1) {
+        next.mode = mode;
+        if (mode === "probe") { next.lastProbe = 0; next.interval = PAUSE_PROBE_FIRST_MS; } // probe immediately, then back off
+      }
+      const rate = parseInt(u.searchParams.get("rate"), 10);
+      if (Number.isFinite(rate) && rate >= 1 && rate <= 30) next.drainPerMin = rate;
+      await setDrainConfig(env, next);
+      return json({ ok: true, config: next }, 200);
     }
 
     // Leaderboard — open to everyone, throttled vs spam-refresh; free clients cut while degraded.
@@ -828,28 +876,28 @@ export default {
       if (!premium) return json({ error: "Forbidden — owner token required." }, 403);
       // #1: read the q:order snapshot (1 cheap read; lists only if stale) + the small state keys,
       // all independent -> one parallel round-trip.
-      const [items, usage0, lw, dlog, pz] = await Promise.all([
+      const [items, usage0, lw, dlog, cfg] = await Promise.all([
         readQueueOrder(env).catch(function () { return []; }),
         kvGetJson(env, USAGE_KEY).catch(function () { return null; }),
         env.CHARS.get(LASTWRITE_KEY).catch(function () { return null; }),
         kvGetJson(env, DRAIN_LOG_KEY).catch(function () { return null; }),
-        kvGetJson(env, PAUSE_KEY).catch(function () { return null; })
+        getDrainConfig(env).catch(function () { return { mode: "run", drainPerMin: DRAIN_PER_RUN }; })
       ]);
       const usage = usage0 || {}, lastWrite = parseInt(lw, 10) || 0;
       const drainLog = Array.isArray(dlog) ? dlog : [];
-      const paused = (pz && pz.since) ? pz : null;
       const now = Date.now();
       const premiumCount = items.filter(function (it) { return it.p; }).length;
       const freeCount = items.length - premiumCount;
       const list = items.slice(0, 500).map(function (it) { return { region: it.r, name: it.n, tier: it.p ? "premium" : "free", waitedS: it.t > 1e12 ? Math.round((now - it.t) / 1000) : null }; }); // ts<=1e12 = a front-sentinel (e.g. requeued ts=1), not a real wait
       return json({
         ok: true, nowMs: Date.now(),
-        drain: { perRun: DRAIN_PER_RUN, delayMs: DRAIN_DELAY_MS, perMin: DRAIN_PER_RUN },
+        drain: { perRun: cfg.drainPerMin, delayMs: DRAIN_DELAY_MS, perMin: cfg.drainPerMin },
+        mode: cfg.mode,
         queue: { premium: premiumCount, free: freeCount, total: items.length, list: list },
         usage: { month: usage.month || "", count: (usage.count | 0), budget: MONTHLY_CHAR_BUDGET },
         lastWriteMs: lastWrite,
         drainLog: drainLog,
-        paused: paused
+        paused: cfg.mode !== "run"
       }, 200);
     }
 

@@ -35,6 +35,10 @@
   #status{font-size:12px;color:var(--dim)}
   .hide{display:none}
   .bm{display:inline-block;background:var(--accent);color:#08111c;padding:6px 14px;border-radius:8px;text-decoration:none;font-weight:700;cursor:grab}
+  .mode{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+  #m-run.on{background:var(--good);color:#08111c;border-color:var(--good)}
+  #m-off.on{background:var(--bad);color:#08111c;border-color:var(--bad)}
+  #m-probe.on{background:var(--warn);color:#08111c;border-color:var(--warn)}
 </style>
 </head>
 <body>
@@ -47,6 +51,23 @@
   </div>
 
   <div id="app" class="hide">
+    <div class="panel">
+      <h2>Controls</h2>
+      <div style="padding:14px 16px">
+        <div class="row" style="gap:8px;align-items:center">
+          <span class="muted">Queue</span>
+          <button class="mode" id="m-run">Run</button>
+          <button class="mode" id="m-off">Off</button>
+          <button class="mode" id="m-probe">Probe</button>
+          <span style="flex:1 1 16px"></span>
+          <span class="muted">Drain</span>
+          <input id="rate" type="number" min="1" max="30" style="min-width:62px;flex:0 0 62px">
+          <span class="muted">/min</span>
+          <button id="rateapply">Set</button>
+        </div>
+        <p class="muted" id="ctlnote" style="margin:9px 0 0;font-size:12px">Run = draining · Off = frozen (no lostark.bible requests) · Probe = paused but auto-resumes when lostark.bible recovers.</p>
+      </div>
+    </div>
     <div class="cards" id="cards"></div>
     <p class="sub" id="note"></p>
     <div class="panel">
@@ -126,7 +147,24 @@
     }
     renderErrors(j.drainLog);
     renderDrainHistory(j.drainLog);
+    renderControls(j);
     setStatus();
+  }
+
+  // Controls: reflect the live mode + rate, and POST changes to the owner-only ?control endpoint.
+  function renderControls(j){
+    var mode = j.mode || (j.paused ? "off" : "run");
+    ["run","off","probe"].forEach(function(m){ var b=$("m-"+m); if(b) b.classList.toggle("on", m===mode); });
+    var rate = j.drain && j.drain.perMin;
+    if(rate != null && document.activeElement !== $("rate")) $("rate").value = rate;
+  }
+  function applyControl(qs){
+    var tok = localStorage.getItem(TOKKEY) || ""; if(!tok) return;
+    $("ctlnote").textContent = "Applying…";
+    fetch(WORKER + "/?control=1&k=" + encodeURIComponent(tok) + "&" + qs).then(function(r){ return r.json(); }).then(function(j){
+      if(j && j.ok){ $("ctlnote").textContent = "Set — mode: " + j.config.mode + " · " + j.config.drainPerMin + "/min."; poll(); }
+      else { $("ctlnote").textContent = "Failed: " + ((j && j.error) || "error"); }
+    }).catch(function(e){ $("ctlnote").textContent = "Failed: " + e.message; });
   }
 
   function fmtTime(ms){ try { return new Date(ms).toLocaleTimeString(); } catch(e){ return "—"; } }
@@ -199,6 +237,9 @@
   $("tok").addEventListener("keydown", function(e){ if(e.key === "Enter") $("connect").click(); });
   $("refresh").addEventListener("click", poll);
   $("logout").addEventListener("click", function(){ localStorage.removeItem(TOKKEY); lastOk=0; lastErr=""; showAuth(); });
+  ["run","off","probe"].forEach(function(m){ $("m-"+m).addEventListener("click", function(){ applyControl("mode="+m); }); });
+  $("rateapply").addEventListener("click", function(){ var v=parseInt($("rate").value,10); if(v>=1 && v<=30) applyControl("rate="+v); else $("ctlnote").textContent="Rate must be 1–30."; });
+  $("rate").addEventListener("keydown", function(e){ if(e.key==="Enter") $("rateapply").click(); });
   setInterval(setStatus, 1000);
 
   // One-click importer bookmarklet (admin-only — this page is token-gated). Drag it to the bookmarks
