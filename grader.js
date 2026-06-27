@@ -334,8 +334,8 @@
   // Worker response's cached / pulledAt fields.
   function cacheNoteHtml(data) {
     if (!data || data.cached == null) return "";
-    var txt = data.cached
-      ? ("Cached &middot; pulled " + esc(ageLabel(data.pulledAt)))
+    var txt = data.source === "import" ? "Imported"
+      : data.cached ? ("Cached &middot; pulled " + esc(ageLabel(data.pulledAt)))
       : "Freshly pulled";
     return ' <span class="gr-cache' + (data.cached ? "" : " fresh") + '">' + txt + '</span>';
   }
@@ -401,6 +401,13 @@
 '  #tab-grader .gr-refresh-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px;padding:9px 13px;border-radius:9px;background:rgba(127,127,127,0.10);border:1px solid var(--axis,var(--accent));font-size:13px}' +
 '  #tab-grader .gr-unavail{margin:0 0 14px;padding:12px 15px;border-radius:10px;background:rgba(232,181,74,0.10);border:1px solid rgba(232,181,74,0.5);font-size:13px;line-height:1.5}' +
 '  #tab-grader .gr-unavail b{color:#e8b54a}' +
+'  #tab-grader .gr-import-toggle{background:none;border:none;color:var(--dim);font:inherit;font-size:12px;cursor:pointer;padding:4px 0;text-align:left}' +
+'  #tab-grader .gr-import-toggle:hover{color:var(--axis,var(--accent))}' +
+'  #tab-grader .gr-import-body{font-size:12px;color:var(--dim);line-height:1.55}' +
+'  #tab-grader .gr-import-body p{margin:2px 0 6px}' +
+'  #tab-grader .gr-import-body ul{margin:0;padding-left:18px}' +
+'  #tab-grader .gr-import-body li{margin:3px 0}' +
+'  #tab-grader .gr-import-body code{background:rgba(127,127,127,0.18);padding:1px 4px;border-radius:3px}' +
 '  #tab-grader .gr-refresh-bar b{color:var(--axis,var(--accent))}' +
 '  #tab-grader .gr-rb-dim{color:var(--dim)}' +
 '  #tab-grader .gr-rb-spin{display:inline-block;animation:gr-rb-spin 1.1s linear infinite}' +
@@ -1563,6 +1570,90 @@ presetToggleHtml(data) +
     }).catch(function () { /* network blip — leave the notice as-is */ });
   }
 
+  // ---- IMPORT a lostark.bible / lopec.kr loadout WITHOUT the Worker (drop / paste / bookmarklet) ----
+  // lostark.bible blocks our Worker and sends no CORS, so the user brings the page SOURCE over and we
+  // parse it client-side via window.BibleImport, then render through the normal renderLoadout path.
+  function importFromText(text, hint, where) {
+    if (!window.BibleImport) return false;
+    var lo = null;
+    try { lo = window.BibleImport.parse(text, hint); } catch (e) { lo = null; }
+    if (!lo || !lo.gems || !lo.gems.length) {
+      if (where === "drop" || where === "paste") {
+        var looksBible = /lostark\.bible|arkGridCores|use_13_\d/.test(text || "");
+        setPullStatus(looksBible
+          ? "That lostark.bible page is missing the gem data — browsers strip it when you Save Page. Paste the page's View-Source (⌘-U / Ctrl-U) instead — that carries everything."
+          : "That didn't look like a lostark.bible character page. Open your character there, then paste its View-Source, or drag a saved page.", "err");
+      }
+      return false;
+    }
+    var charData = {
+      region: lo.region, name: lo.name,
+      gems: lo.gems, chaosGems: lo.chaosGems,
+      itemLevel: lo.itemLevel, class: lo.class, warnings: lo.warnings,
+      pulledAt: Date.now(), cached: false, source: "import"
+    };
+    window.graderShowLoadout(charData);
+    var rb = $("gr-pull-refresh"); if (rb) rb.style.display = "none"; // re-pull would hit the blocked Worker
+    setPullStatus("Imported " + (lo.name || "loadout") + (lo.region ? " (" + lo.region + ")" : "") + " from " + (lo.source || "lostark.bible") + " — graded locally, no server.", "ok");
+    return true;
+  }
+
+  // Wire drop (onto the loadout square + pull controls), global paste (page-source only), and the
+  // bookmarklet's #import= landing, then render the small import helper under the controls.
+  function setupImport() {
+    if (!window.BibleImport) return;
+    var MARK = /arkGridCores:\[|use_13_\d+\.png/;
+    function onDragOver(ev) { if (ev.dataTransfer) { ev.preventDefault(); ev.dataTransfer.dropEffect = "copy"; } }
+    function onDrop(ev) {
+      var dt = ev.dataTransfer; if (!dt) return;
+      ev.preventDefault();
+      var file = dt.files && dt.files[0];
+      if (file) { var fr = new FileReader(); fr.onload = function () { importFromText(String(fr.result || ""), null, "drop"); }; fr.readAsText(file); return; }
+      importFromText(dt.getData("text/plain") || dt.getData("text/html") || dt.getData("text/uri-list") || "", null, "drop");
+    }
+    ["gr-result", "gr-body-pull"].forEach(function (id) {
+      var el = $(id); if (!el) return;
+      el.addEventListener("dragover", onDragOver);
+      el.addEventListener("drop", onDrop);
+    });
+    // Global paste, but ONLY for a page-source paste (the marker) so ordinary pastes are untouched.
+    document.addEventListener("paste", function (ev) {
+      var t = $("tab-grader"); if (!t || t.offsetParent === null) return; // grader tab not visible
+      var cd = ev.clipboardData || window.clipboardData;
+      var text = cd ? cd.getData("text") : "";
+      if (text && MARK.test(text)) { ev.preventDefault(); importFromText(text, null, "paste"); }
+    });
+    // Bookmarklet landing: #import=<encoded {src,region,name}>.
+    function consumeHash() {
+      var m = (location.hash || "").match(/[#&]import=([^&]+)/);
+      if (!m) return;
+      var payload = null;
+      try { payload = JSON.parse(decodeURIComponent(m[1])); } catch (e) {}
+      try { history.replaceState(null, "", location.pathname + location.search); } catch (e) { location.hash = ""; }
+      if (payload && payload.src) importFromText(payload.src, { region: payload.region, name: payload.name }, "hash");
+    }
+    consumeHash();
+    window.addEventListener("hashchange", consumeHash);
+    renderImportHelper();
+  }
+
+  // Small, unobtrusive helper under the pull controls (NOT on the square): how to import a loadout by
+  // paste or file-drop. (The one-click bookmarklet is admin-only — it lives on queue-admin.html.)
+  function renderImportHelper() {
+    var host = $("gr-pull-note"); if (!host) return;
+    host.innerHTML =
+      '<button type="button" class="gr-import-toggle" id="gr-import-toggle">lostark.bible not loading? Import a character &rsaquo;</button>' +
+      '<div class="gr-import-body" id="gr-import-body" style="display:none">' +
+        '<p>Your browser can reach lostark.bible even when our server can’t. Bring a loadout over — it grades instantly, no server:</p>' +
+        '<ul>' +
+          '<li><b>Paste (most reliable):</b> on your character page, View Source (⌘-U / Ctrl-U), Select All, Copy, then paste here.</li>' +
+          '<li><b>Or drag a file:</b> Save Page (⌘/Ctrl-S) and drag the <code>.html</code> onto the box above. <i>Some browsers strip the gem data when saving — if it doesn’t work, paste the View-Source instead.</i></li>' +
+        '</ul>' +
+      '</div>';
+    var tog = $("gr-import-toggle"), body = $("gr-import-body");
+    if (tog && body) tog.addEventListener("click", function () { body.style.display = body.style.display === "none" ? "" : "none"; });
+  }
+
   function init() {
     var elTab = $("tab-grader");
     if (!elTab) return;
@@ -1610,7 +1701,11 @@ presetToggleHtml(data) +
     $("gr-name").addEventListener("keydown", function (e) { if (e.key === "Enter" && WORKER_URL) runPull(false); });
 
     checkLookupStatus();                            // show the "lookups unavailable" notice if the queue is paused
-    setInterval(checkLookupStatus, 60000);         // re-check every minute — auto-hides when it recovers
+    // Re-check only when the user opens or returns to the tab — NOT on a 60s interval. Idle/background
+    // tabs no longer poll, which removes ~all the steady /?status=1 traffic; the banner still refreshes
+    // the moment someone looks at the page. (focus + visibility can both fire on return — an extra tiny read is fine.)
+    window.addEventListener("focus", checkLookupStatus);
+    document.addEventListener("visibilitychange", function () { if (!document.hidden) checkLookupStatus(); });
 
     // Public hook for the Leaderboard tab: switch to the Grader tab (pull mode) and
     // render a previously stored loadout WITHOUT re-fetching. charData is a Worker
@@ -1639,6 +1734,8 @@ presetToggleHtml(data) +
     // first paint: open in "Pull from lostark.bible" mode (the primary mode). Custom
     // mode is fully wired above (effect lists built), one toggle-click away.
     selectMode("pull");
+
+    setupImport(); // drag / paste / bookmarklet import of a lostark.bible loadout (graderShowLoadout is defined above)
   }
 
   if (document.readyState === "loading") {

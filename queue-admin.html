@@ -34,6 +34,7 @@
   .muted{color:var(--dim)} .good{color:var(--good)} .warn{color:var(--warn)} .bad{color:var(--bad)}
   #status{font-size:12px;color:var(--dim)}
   .hide{display:none}
+  .bm{display:inline-block;background:var(--accent);color:#08111c;padding:6px 14px;border-radius:8px;text-decoration:none;font-weight:700;cursor:grab}
 </style>
 </head>
 <body>
@@ -59,6 +60,10 @@
     <div class="panel">
       <h2 id="qhead">Queue</h2>
       <div id="qbody" style="max-height:58vh;overflow:auto"></div>
+    </div>
+    <div class="panel">
+      <h2>Import bookmarklet</h2>
+      <div id="bmbody" style="padding:14px 16px"></div>
     </div>
     <div class="row" style="margin-top:14px">
       <button class="ghost" id="refresh">Refresh now</button>
@@ -195,6 +200,36 @@
   $("refresh").addEventListener("click", poll);
   $("logout").addEventListener("click", function(){ localStorage.removeItem(TOKKEY); lastOk=0; lastErr=""; showAuth(); });
   setInterval(setStatus, 1000);
+
+  // One-click importer bookmarklet (admin-only — this page is token-gated). Drag it to the bookmarks
+  // bar, then click it on a lostark.bible character page: it grabs the gem blob + item level + class,
+  // and opens the calculator with them in #import=, which grades it client-side (no Worker, no CORS).
+  function renderBookmarklet(){
+    var host = $("bmbody"); if(!host) return;
+    var calcUrl = location.origin + location.pathname.replace(/[^/]*$/, "index.html");
+    function bmSource(){
+      var h = document.documentElement.innerHTML;
+      var ci = h.indexOf('classification:"most_recent_raid"');
+      var i = h.indexOf('arkGridCores:[', ci < 0 ? 0 : ci);
+      if (i < 0) i = h.indexOf('arkGridCores:[');
+      if (i < 0) { alert('Open a character page on lostark.bible first, then click this.'); return; }
+      var s = i + 13, d = 0, e = -1;
+      for (var k = s; k < h.length; k++) { var c = h[k]; if (c === '[') d++; else if (c === ']') { d--; if (d === 0) { e = k + 1; break; } } }
+      if (e < 0) { alert('Could not read the gem data on this page.'); return; }
+      var im = h.match(/ilvl:\d+/);
+      var cm = h.match(/bg-neutral-900 px-2 py-1 text-sm">[^<]+<\/p>/g);
+      var meta = (im ? im[0] + ' ' : '') + (cm ? cm.join(' ') : '');
+      var p = location.pathname.split('/');
+      var o = { src: meta + ' arkGridCores:' + h.slice(s, e), region: (p[2] || ''), name: decodeURIComponent(p[3] || '') };
+      location.href = '__CALC__#import=' + encodeURIComponent(JSON.stringify(o));
+    }
+    var bm = "javascript:(" + bmSource.toString().split("__CALC__").join(calcUrl) + ")();";
+    host.innerHTML = '<p class="muted" style="margin:0 0 10px">Drag this to your bookmarks bar, then click it on any lostark.bible character page — it sends the loadout (gems, item level, class) straight to the calculator and grades it client-side, no Worker.</p>';
+    var a = document.createElement("a");
+    a.className = "bm"; a.textContent = "⚡ Grade on Astrogem"; a.setAttribute("href", bm);
+    host.appendChild(a);
+  }
+  renderBookmarklet();
 
   if(localStorage.getItem(TOKKEY)) start(); else showAuth();
 })();
