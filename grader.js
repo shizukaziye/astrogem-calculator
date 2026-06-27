@@ -1438,9 +1438,9 @@ presetToggleHtml(data) +
       '</div></div>';
   }
   // Queue watch: a LOCAL position countdown (drops ~1 per 60/perMin seconds — the drain rate, no
-  // server cost) PLUS a server RE-SYNC of the true position every 30s, or every 10s once you're near
-  // the front (< 3 in line). The re-sync also detects completion. `st` = the worker's initial
-  // {position,total,etaMinutes,drainPerMin}; `cachedRefresh` routes UI to the banner vs the panel.
+  // server cost) PLUS a server RE-SYNC of the true position every 30s WHILE QUEUED (the re-sync also
+  // detects completion, then stops — it never polls when you're not waiting). `st` = the worker's
+  // initial {position,total,etaMinutes,drainPerMin}; `cachedRefresh` routes UI to the banner vs panel.
   function startQueueWatch(region, name, since, cachedRefresh, st) {
     stopPoll();
     since = since || 0;
@@ -1461,9 +1461,8 @@ presetToggleHtml(data) +
     }
     grPaintTimer = setInterval(paint, 1000);                  // 1) free local display tick
 
-    function scheduleSync() {                                 // 2) adaptive server re-sync
-      var p = curPos();
-      grPollTimer = setTimeout(doSync, (p != null && p < 3) ? 10000 : 30000);
+    function scheduleSync() {                                 // 2) server re-sync — flat 30s while queued
+      grPollTimer = setTimeout(doSync, 30000);
     }
     function doSync() {
       if (Date.now() - started > MAX_MS) {
