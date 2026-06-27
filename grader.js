@@ -399,6 +399,8 @@
 '  #tab-grader #gr-queued-timer{color:var(--axis,var(--accent))}' +
 '  #tab-grader #gr-refresh-banner:empty{display:none}' +
 '  #tab-grader .gr-refresh-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px;padding:9px 13px;border-radius:9px;background:rgba(127,127,127,0.10);border:1px solid var(--axis,var(--accent));font-size:13px}' +
+'  #tab-grader .gr-unavail{margin:0 0 14px;padding:12px 15px;border-radius:10px;background:rgba(232,181,74,0.10);border:1px solid rgba(232,181,74,0.5);font-size:13px;line-height:1.5}' +
+'  #tab-grader .gr-unavail b{color:#e8b54a}' +
 '  #tab-grader .gr-refresh-bar b{color:var(--axis,var(--accent))}' +
 '  #tab-grader .gr-rb-dim{color:var(--dim)}' +
 '  #tab-grader .gr-rb-spin{display:inline-block;animation:gr-rb-spin 1.1s linear infinite}' +
@@ -621,6 +623,9 @@
 '    </div>' +
 '  </div>' +
 '</div>' +
+
+// ---- LOOKUPS UNAVAILABLE NOTICE (shown when the worker reports the queue is paused) ----
+'<div id="gr-unavailable" class="gr-unavail" style="display:none"></div>' +
 
 // ---- RESULTS ----
 '<div id="gr-refresh-banner"></div>' +
@@ -1351,6 +1356,7 @@ presetToggleHtml(data) +
       return resp.json().then(function (data) { return { ok: resp.ok, data: data }; });
     }).then(function (r) {
       var d = r.data || {};
+      if (d.unavailable) { setUnavailable(true, d.error); setPullStatus(d.error || "Lookups are temporarily unavailable.", "err"); return; }
       // The cached loadout to SHOW (if any): from this response (Grade loadout on a cached char),
       // or the one already on screen (manual Refresh, answered with a queued response). Flow: cached
       // data renders whenever we have it; a queue banner/panel layers on whenever it's queued.
@@ -1542,6 +1548,21 @@ presetToggleHtml(data) +
     caret.innerHTML = hidden ? "&#9662;" : "&#9656;";
   };
 
+  // ---- "Lookups temporarily unavailable" notice (worker-reported queue pause) ----
+  function setUnavailable(on, msg) {
+    var el = $("gr-unavailable"); if (!el) return;
+    if (on) {
+      el.innerHTML = '<b>&#9888;&#65039; Lookups temporarily unavailable.</b> ' + esc(msg || "lostark.bible isn’t responding right now.") + ' Characters already cached still grade normally below.';
+      el.style.display = "";
+    } else { el.style.display = "none"; }
+  }
+  function checkLookupStatus() {
+    if (!WORKER_URL) return;
+    fetch(WORKER_URL.replace(/\/+$/, "") + "/?status=1").then(function (r) { return r.json(); }).then(function (j) {
+      setUnavailable(!!(j && j.paused), j && j.message);
+    }).catch(function () { /* network blip — leave the notice as-is */ });
+  }
+
   function init() {
     var elTab = $("tab-grader");
     if (!elTab) return;
@@ -1587,6 +1608,9 @@ presetToggleHtml(data) +
     $("gr-pull-go").addEventListener("click", function () { runPull(false); });
     $("gr-pull-refresh").addEventListener("click", function () { runPull(true); });
     $("gr-name").addEventListener("keydown", function (e) { if (e.key === "Enter" && WORKER_URL) runPull(false); });
+
+    checkLookupStatus();                            // show the "lookups unavailable" notice if the queue is paused
+    setInterval(checkLookupStatus, 60000);         // re-check every minute — auto-hides when it recovers
 
     // Public hook for the Leaderboard tab: switch to the Grader tab (pull mode) and
     // render a previously stored loadout WITHOUT re-fetching. charData is a Worker

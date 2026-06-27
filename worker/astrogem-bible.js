@@ -225,7 +225,10 @@ const MONTHLY_CHAR_BUDGET = 300000;          // hard cap on characters cached pe
 const USAGE_KEY = "usage:drained";           // {month:"YYYY-MM", count} — characters cached this month (the budget guard).
 const DRAIN_DELAY_MS = 3000;                 // pause between lostark.bible fetches (~1 req / 3s) — gentle enough to avoid upstream rate-limiting/timeouts, which cost more than they cache.
 const DRAIN_BUDGET_MS = 50000;               // stop a drain run after ~50s no matter the count, so it never overruns the 60s cron (margin for the snapshot rebuild + no overlapping runs).
-const UPSTREAM_FAIL_LIMIT = 6;               // consecutive fetch failures before assuming lostark.bible is down/limiting and backing off this run (one bad/slow character is skipped, not fatal — no head-of-line blocking).
+const PAUSE_FAIL_LIMIT = 5;                   // consecutive fetch failures that PAUSE the whole queue (circuit-breaker): the streak is re-queued at the FRONT, new lookups get the "unavailable" notice, and the drain backs off to a single probe every PAUSE_PROBE_MS until one succeeds.
+const PAUSE_PROBE_MS = 5 * 60 * 1000;        // while paused, attempt lostark.bible at most once every 5 min (one probe of the oldest queued character).
+const PAUSE_KEY = "drain:paused";            // present (JSON {since, lastProbe}) iff the queue is paused — gates enqueues + drives the client "lookups temporarily unavailable" notice.
+const UNAVAILABLE_MSG = "Character lookups are temporarily unavailable — lostark.bible isn't responding. Cached characters still work; we retry automatically and this clears the moment it recovers.";
 const MAX_FETCH_ATTEMPTS = 5;                // after this many failed fetches a queued character is DROPPED, so a permanently-broken entry (e.g. some KR names) can't sit at the head retrying forever and starving everyone behind it.
 const QUEUE_TTL_S = 7 * 24 * 60 * 60;        // a queued request expires after 7 days if never drained.
 const SNAPSHOT_MIN_INTERVAL_MS = 30 * 60 * 1000; // rebuild the leaderboard snapshot at most every ~30 min (the read-heavy part).
@@ -537,6 +540,39 @@ async function appendDrainLog(env, run) {
   } catch (e) {}
 }
 
+// Re-queue characters at the FRONT of the free queue (oldest ts=1, attempts reset) so a paused
+// queue resumes by retrying exactly the lookups that failed, first. Dedupes by region:name.
+async function requeueFront(env, items) {
+  const seen = {};
+  for (const it of (items || [])) {
+    if (!it || !it.region || !it.name) continue;
+    const k = QF + charKey(it.region, it.name);
+    if (seen[k]) continue; seen[k] = 1;
+    try { await env.CHARS.put(k, "", { metadata: { region: it.region, name: it.name, ts: 1 }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
+  }
+}
+
+// PAUSE probe: try the OLDEST queued character once (or a canary if the queue is empty) to see if
+// lostark.bible is back. UP = a 200 (cache it) or a 404 (it responded — just no such character);
+// DOWN = a 502 (incl. the 401 IP block) / 5xx / network error.
+const CANARY = { region: "NA", name: "Paroxysmal" };
+async function probeOldest(env) {
+  let keys = [];
+  try { keys = (await env.CHARS.list({ prefix: QP })).keys.concat((await env.CHARS.list({ prefix: QF })).keys); } catch (e) {}
+  keys.sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); });
+  const k = keys[0];
+  const md = k ? (k.metadata || {}) : CANARY;
+  if (k && (!md.region || !md.name)) { try { await env.CHARS.delete(k.name); } catch (e) {} return { up: false, result: "skip" }; }
+  let res = null;
+  try { res = await fetchCharacterData(md.region, md.name); } catch (e) { res = null; }
+  if (res && res.ok) {
+    if (k) { try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(Object.assign({}, res.data, { pulledAt: Date.now() }))); await env.CHARS.delete(k.name); } catch (e) {} }
+    return { up: true, cached: !!k, name: md.region + ":" + md.name };
+  }
+  if (res && res.status === 404) { if (k) { try { await env.CHARS.delete(k.name); } catch (e) {} } return { up: true, cached: false, name: md.region + ":" + md.name }; }
+  return { up: false, result: "down", entry: { region: md.region, name: md.name, status: res ? res.status : 0, upstream: (res && res.body && res.body.upstreamStatus) || null, msg: (res && res.body && res.body.error) || "network/timeout" } };
+}
+
 // Cron drain: cache up to DRAIN_PER_RUN queued characters per run, PREMIUM queue first then FREE,
 // paced ~DRAIN_DELAY_MS apart so we never trip lostark.bible. region+name ride in the key metadata,
 // so listing needs no per-key read. A transient upstream error (5xx / upstream 429) stops the run
@@ -551,6 +587,31 @@ async function drainQueue(env) {
   let used = (usage && usage.month === month) ? (usage.count | 0) : 0;
   const t0 = Date.now();
   const run = { t: t0, cached: [], dropped: [], failed: [], stop: null }; // per-drain history entry
+
+  // PAUSED (circuit-breaker open after a fail streak): probe lostark.bible at most once every
+  // PAUSE_PROBE_MS. UP -> clear the pause and resume normal draining next run; DOWN -> stay paused.
+  const pause = await kvGetJson(env, PAUSE_KEY);
+  if (pause && pause.since) {
+    if (Date.now() - (pause.lastProbe || pause.since) < PAUSE_PROBE_MS) return; // not time to probe yet
+    const probe = await probeOldest(env);
+    run.ms = Date.now() - t0;
+    if (probe.up) {
+      try { await env.CHARS.delete(PAUSE_KEY); } catch (e) {}                    // RESUME
+      run.stop = "resumed";
+      if (probe.cached && probe.name) {
+        run.cached.push(probe.name);
+        try { await env.CHARS.put(LASTWRITE_KEY, String(Date.now())); } catch (e) {}
+        try { const u = await kvGetJson(env, USAGE_KEY); const c = (u && u.month === month ? (u.count | 0) : 0) + 1; await env.CHARS.put(USAGE_KEY, JSON.stringify({ month: month, count: c }), { expirationTtl: 40 * 24 * 3600 }); } catch (e) {}
+      }
+    } else {
+      try { await env.CHARS.put(PAUSE_KEY, JSON.stringify({ since: pause.since, lastProbe: Date.now() })); } catch (e) {} // stay paused
+      run.stop = "paused";
+      if (probe.entry) run.failed.push(probe.entry);
+    }
+    await appendDrainLog(env, run);
+    return;
+  }
+
   if (used >= MONTHLY_CHAR_BUDGET) { run.stop = "budget"; run.ms = 0; await appendDrainLog(env, run); return; }
   let processed = 0, cached = 0, failed = 0, consecFail = 0, stop = false;
   for (const prefix of [QP, QF]) {
@@ -594,7 +655,13 @@ async function drainQueue(env) {
           if (att >= MAX_FETCH_ATTEMPTS) await env.CHARS.delete(k.name);                                  // give up — drop it
           else await env.CHARS.put(k.name, "", { metadata: { region: md.region, name: md.name, ts: md.ts, attempts: att }, expirationTtl: QUEUE_TTL_S }); // preserve ts (keep FIFO place)
         } catch (e) {}
-        if (++consecFail >= UPSTREAM_FAIL_LIMIT) { run.stop = "upstream"; stop = true; break; } // sustained streak -> upstream down, back off
+        if (++consecFail >= PAUSE_FAIL_LIMIT) {
+          // circuit-breaker: PAUSE the queue — re-queue this run's failures at the FRONT (attempts
+          // reset; the upstream being down isn't the character's fault), back off to a 5-min probe.
+          await requeueFront(env, run.failed);
+          try { await env.CHARS.put(PAUSE_KEY, JSON.stringify({ since: Date.now(), lastProbe: Date.now() })); } catch (e) {}
+          run.stop = "paused"; stop = true; break;
+        }
       }
       processed++;
       if (processed < DRAIN_PER_RUN) await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
@@ -648,6 +715,10 @@ async function queuedResponse(env, region, name, tier, extra, wantPos) {
 // queue can't be filled faster than the drain empties it (keeps monthly writes bounded). region+name
 // stored as KV metadata (the drain reads them from list() without an extra get).
 async function enqueueChar(env, region, name, premium, wantPos) {
+  if (env.CHARS) {                                   // queue PAUSED -> don't enqueue, return the notice
+    const paused = await kvGetJson(env, PAUSE_KEY);
+    if (paused && paused.since) return json({ unavailable: true, error: UNAVAILABLE_MSG }, 503);
+  }
   if (env.ENQUEUE_GATE) {
     const g = await env.ENQUEUE_GATE.limit({ key: "enqueue" });
     if (!g.success) return json({ error: "The lookup queue is busy right now — please try again in a moment.", queueBusy: true, rateLimited: true, retryAfterMs: 30000 }, 429);
@@ -694,6 +765,13 @@ export default {
     }
     const busyMsg = "The site is very busy right now — free access is paused. Enter the password for limited access, or try again shortly.";
 
+    // Public status (no token): is the lookup queue PAUSED (lostark.bible unreachable)? Drives the
+    // grader's "lookups temporarily unavailable" notice.
+    if (u.searchParams.get("status") === "1") {
+      const p = env.CHARS ? await kvGetJson(env, PAUSE_KEY) : null;
+      return json({ ok: true, paused: !!(p && p.since), since: (p && p.since) || 0, message: UNAVAILABLE_MSG }, 200);
+    }
+
     // Leaderboard — open to everyone, throttled vs spam-refresh; free clients cut while degraded.
     if (u.searchParams.get("list") === "1") {
       if (degraded && !premium) return json({ error: busyMsg, rateLimited: true, degraded: true }, 429);
@@ -711,15 +789,17 @@ export default {
       if (!premium) return json({ error: "Forbidden — owner token required." }, 403);
       // all four reads are independent -> one parallel round-trip instead of four sequential awaits
       const emptyList = function () { return { keys: [] }; };
-      const [rqp, rqf, usage0, lw, dlog] = await Promise.all([
+      const [rqp, rqf, usage0, lw, dlog, pz] = await Promise.all([
         env.CHARS.list({ prefix: QP }).catch(emptyList),
         env.CHARS.list({ prefix: QF }).catch(emptyList),
         kvGetJson(env, USAGE_KEY).catch(function () { return null; }),
         env.CHARS.get(LASTWRITE_KEY).catch(function () { return null; }),
-        kvGetJson(env, DRAIN_LOG_KEY).catch(function () { return null; })
+        kvGetJson(env, DRAIN_LOG_KEY).catch(function () { return null; }),
+        kvGetJson(env, PAUSE_KEY).catch(function () { return null; })
       ]);
       const qp = rqp.keys, qf = rqf.keys, usage = usage0 || {}, lastWrite = parseInt(lw, 10) || 0;
       const drainLog = Array.isArray(dlog) ? dlog : [];
+      const paused = (pz && pz.since) ? pz : null;
       const now = Date.now();
       const mapq = function (keys, tier) {
         return keys.slice().sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); })
@@ -732,7 +812,8 @@ export default {
         queue: { premium: qp.length, free: qf.length, total: qp.length + qf.length, list: list },
         usage: { month: usage.month || "", count: (usage.count | 0), budget: MONTHLY_CHAR_BUDGET },
         lastWriteMs: lastWrite,
-        drainLog: drainLog
+        drainLog: drainLog,
+        paused: paused
       }, 200);
     }
 
