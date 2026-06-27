@@ -805,11 +805,10 @@ export default {
     // grader's "lookups temporarily unavailable" notice.
     if (u.searchParams.get("status") === "1") {
       const p = env.CHARS ? await kvGetJson(env, PAUSE_KEY) : null;
-      // Cache-Control lets the BROWSER serve repeat polls from its own HTTP cache instead of hitting the
-      // Worker every time — the ONLY lever for already-loaded ("resting") tabs whose JS we can't change.
-      // The pause-state is slow-moving and a live lookup always returns the true state, so a few minutes
-      // of banner staleness is fine; this cuts the steady /?status=1 traffic reaching Cloudflare ~5x.
-      return json({ ok: true, paused: !!(p && p.since), since: (p && p.since) || 0, message: UNAVAILABLE_MSG }, 200, { "Cache-Control": "public, max-age=300" });
+      // SHORT browser cache: keeps the banner fresh (~30s, in line with the queue re-sync cadence) for
+      // active users, while deduping rapid focus re-checks so the load+focus client logic can't itself
+      // become a spam source. The real fix for idle/resting tabs is the client no-interval change, not this.
+      return json({ ok: true, paused: !!(p && p.since), since: (p && p.since) || 0, message: UNAVAILABLE_MSG }, 200, { "Cache-Control": "public, max-age=30" });
     }
 
     // Leaderboard — open to everyone, throttled vs spam-refresh; free clients cut while degraded.
