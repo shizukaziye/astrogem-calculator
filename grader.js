@@ -1329,7 +1329,6 @@ presetToggleHtml(data) +
     var refreshingCached = !!(refresh && lastLoadout && Array.isArray(lastLoadout.gems) && lastLoadout.gems.length &&
                  lastLoadout.region === region &&
                  String(lastLoadout.name || "").toLowerCase() === name.toLowerCase());
-    var since = refreshingCached ? (lastLoadout.pulledAt || 0) : 0;
 
     setPullStatus((refresh ? "Re-pulling " : "Fetching ") + name + " (" + region + ")…", "working");
     $("gr-pull-go").disabled = true;

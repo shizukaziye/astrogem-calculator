@@ -679,18 +679,21 @@ export default {
     // list()s + two small get()s, NO big snapshot read — so the private dashboard can poll it often.
     if (u.searchParams.get("metrics") === "1") {
       if (!premium) return json({ error: "Forbidden — owner token required." }, 403);
-      let qp = [], qf = [];
-      try { qp = (await env.CHARS.list({ prefix: QP })).keys; } catch (e) {}
-      try { qf = (await env.CHARS.list({ prefix: QF })).keys; } catch (e) {}
+      // all four reads are independent -> one parallel round-trip instead of four sequential awaits
+      const emptyList = function () { return { keys: [] }; };
+      const [rqp, rqf, usage0, lw] = await Promise.all([
+        env.CHARS.list({ prefix: QP }).catch(emptyList),
+        env.CHARS.list({ prefix: QF }).catch(emptyList),
+        kvGetJson(env, USAGE_KEY).catch(function () { return null; }),
+        env.CHARS.get(LASTWRITE_KEY).catch(function () { return null; })
+      ]);
+      const qp = rqp.keys, qf = rqf.keys, usage = usage0 || {}, lastWrite = parseInt(lw, 10) || 0;
       const now = Date.now();
       const mapq = function (keys, tier) {
         return keys.slice().sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); })
           .map(function (k) { const m = k.metadata || {}; return { region: m.region || "", name: m.name || "", tier: tier, waitedS: m.ts ? Math.round((now - m.ts) / 1000) : null }; });
       };
       const list = mapq(qp, "premium").concat(mapq(qf, "free")).slice(0, 500);
-      const usage = (await kvGetJson(env, USAGE_KEY)) || {};
-      let lastWrite = 0;
-      try { lastWrite = parseInt(await env.CHARS.get(LASTWRITE_KEY), 10) || 0; } catch (e) {}
       return json({
         ok: true, nowMs: Date.now(),
         drain: { perRun: DRAIN_PER_RUN, delayMs: DRAIN_DELAY_MS, perMin: DRAIN_PER_RUN },
@@ -726,8 +729,8 @@ export default {
         if (!wantQueue) {
           if (fresh) return json(Object.assign({}, cached, { cached: true }), 200); // legacy client: fresh only
         } else {
-          let tier = ((await env.CHARS.get(QP + key)) !== null) ? "premium"
-                   : (((await env.CHARS.get(QF + key)) !== null) ? "free" : null);
+          const [inQP, inQF] = await Promise.all([env.CHARS.get(QP + key), env.CHARS.get(QF + key)]); // one round-trip, not two
+          let tier = (inQP !== null) ? "premium" : (inQF !== null ? "free" : null);
           if (!tier && !fresh) { // stale (>7d) and not queued -> auto-enqueue a refresh (FIFO ts stamp)
             try { await env.CHARS.put((premium ? QP : QF) + key, "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
             tier = premium ? "premium" : "free";
