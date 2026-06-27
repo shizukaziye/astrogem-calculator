@@ -341,10 +341,15 @@
 '</div>' +
 '<details class="method">' +
 '  <summary>How the leaderboard ranks characters</summary>' +
-'  <p>Every character pulled in the Grader is cached server-side (a Cloudflare Worker + KV). This tab lists them all and ranks each by its <b>average grade</b> — the mean of every equipped gem’s 0–100 grade (the same grade the Grader shows). Click a row to open that loadout in the Grader.</p>' +
-'  <p>The <b>DPS</b> / <b>Support</b> toggle switches the scoring axis. DPS ranks <b>every</b> character by Total dmg% — at any grade — except support mains (a support class whose support build outranks its DPS build by 2+ ranks, e.g. B- DPS but B+ support). Support keeps only the four support classes — Bard, Paladin, Artist, Valkyrie (every one of them, even DPS-built) — and ranks them by average <b>support</b> grade, with a Party dmg% column.</p>' +
-'  <p>At most 100 characters show per page; use Prev / Next or the jump box to page through the rest. Favorites are listed in full above the table.</p>' +
-'  <p class="note">The list reflects whatever characters have been pulled so far; pull a new one in the Grader and it appears here after a refresh.</p>' +
+'  <p>Every character pulled in the Grader is cached and listed here. Each contributes two numbers, both rolled up from its gems (see the Grader’s “How a gem is graded”). Click a row to open that loadout in the Grader.</p>' +
+'  <ul>' +
+'    <li><b>Total dmg %</b> — <i>the ranking key.</i> The real damage the whole 6-core grid adds over no grid: effect levels pool into stat buckets that multiply over your gear (diminishing returns), and order/chaos counts per core above a ~17-point floor, the six cores multiplying. The best grids land ~13–14%.</li>' +
+'    <li><b>Avg grade</b> — a quality score that’s <i>pairing-invariant</i> (it doesn’t matter which gem sits in which core): the geometric mean of the gems’ values mapped to 0–100. It’s separate from total damage — “how clean is the build,” not “how much it does.”</li>' +
+'  </ul>' +
+'  <p>The board <b>sorts by Total dmg %</b> (descending) and is <b>floorless</b> — every graded character shows, at any rank. The name search finds anyone by name, at any grade, with their true overall rank.</p>' +
+'  <p><b>DPS / Support toggle.</b> DPS ranks everyone by Total dmg%. Support keeps only the four support classes — Bard, Paladin, Artist, Valkyrie (every one of them, even DPS-built) — ranked by their support grade, with a Party dmg% column (shown ÷3, per-ally).</p>' +
+'  <p><b>Support mains move off the DPS board.</b> A support-class character whose <i>support</i> build outranks its <i>DPS</i> build by 2+ sub-ranks (e.g. B− DPS but B+ support) is a genuine support and is dropped from DPS — they belong on the Support board. A support within 1 sub-rank, or whose DPS is as good or better, stays on both boards.</p>' +
+'  <p class="note">At most 100 rows per page (Prev / Next or the jump box for the rest; favorites in full above the table). The list reflects characters pulled so far — pull a new one in the Grader and it appears here.</p>' +
 '</details>';
   }
 
