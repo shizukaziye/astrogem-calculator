@@ -693,7 +693,7 @@ async function drainQueue(env) {
       // immediately instead of burning the full fail streak to discover it. Re-queue this run at the front.
       run.failed.push({ region: it.r, name: it.n, status: res ? res.status : 0, upstream: upstream, msg: (res.body && res.body.error) || "blocked", att: 1 });
       await requeueFront(env, run.failed);
-      await setDrainConfig(env, { mode: "off", drainPerMin: cfg.drainPerMin }); // breaker -> OFF (admin re-enables, or switches to probe mode for auto-recovery)
+      await setDrainConfig(env, { mode: "probe", drainPerMin: cfg.drainPerMin, lastProbe: Date.now(), interval: PAUSE_PROBE_FIRST_MS }); // breaker -> PROBE: auto-recovers when lostark.bible is back (admin can force Run/Off)
       run.stop = "blocked"; stop = true; break;
     } else {
       // transient 5xx / network / timeout: SKIP this character (leave it queued) so one bad or slow
@@ -708,10 +708,10 @@ async function drainQueue(env) {
         else await env.CHARS.put(it.k, "", { metadata: { region: it.r, name: it.n, ts: it.t, attempts: att }, expirationTtl: QUEUE_TTL_S }); // preserve ts (keep FIFO place)
       } catch (e) {}
       if (++consecFail >= PAUSE_FAIL_LIMIT) {
-        // circuit-breaker: turn the queue OFF — re-queue this run's failures at the FRONT (attempts
-        // reset; the upstream being down isn't the character's fault). Admin re-enables / picks probe mode.
+        // circuit-breaker -> PROBE: re-queue this run's failures at the FRONT (attempts reset; the
+        // upstream being down isn't the character's fault), then auto-recover via probes. Admin can force Run/Off.
         await requeueFront(env, run.failed);
-        await setDrainConfig(env, { mode: "off", drainPerMin: cfg.drainPerMin });
+        await setDrainConfig(env, { mode: "probe", drainPerMin: cfg.drainPerMin, lastProbe: Date.now(), interval: PAUSE_PROBE_FIRST_MS });
         run.stop = "paused"; stop = true; break;
       }
     }
@@ -803,7 +803,7 @@ async function enqueueChar(env, region, name, premium, wantPos) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders() });
     }
@@ -849,13 +849,16 @@ export default {
       const cur = await getDrainConfig(env);
       const next = { mode: cur.mode, drainPerMin: cur.drainPerMin };
       const mode = u.searchParams.get("mode");
+      let modeChanged = false;
       if (mode && DRAIN_MODES.indexOf(mode) !== -1) {
-        next.mode = mode;
+        next.mode = mode; modeChanged = true;
         if (mode === "probe") { next.lastProbe = 0; next.interval = PAUSE_PROBE_FIRST_MS; } // probe immediately, then back off
       }
       const rate = parseInt(u.searchParams.get("rate"), 10);
       if (Number.isFinite(rate) && rate >= 1 && rate <= 30) next.drainPerMin = rate;
       await setDrainConfig(env, next);
+      // Resume/probe RIGHT NOW instead of waiting for the next cron tick — e.g. "Run" -> immediate drain.
+      if (modeChanged && next.mode !== "off" && ctx && ctx.waitUntil) { try { ctx.waitUntil(drainQueue(env)); } catch (e) {} }
       return json({ ok: true, config: next }, 200);
     }
 
