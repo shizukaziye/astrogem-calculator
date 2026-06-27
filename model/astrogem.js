@@ -460,30 +460,41 @@
   // ==================== SUPPORT SCORING AXIS ====================
   // A parallel score for SUPPORT gems, mirroring the DPS scoring structure exactly
   // but swapping in support coefficients. The DPS scoring above is UNCHANGED; these
-  // are purely additive functions. Values are on a PARTY-DAMAGE scale with the ×3
-  // (3 DPS in the party) ALREADY baked into the coefficients below.
+  // are purely additive functions. Values are PER-DPS party-buff contributions: the
+  // earlier ×3 (3 DPS in the party) double-counts under the multiplicative model, so
+  // every damage coefficient below is its base party-buff value ÷3. Net effect: support
+  // gold, leaderboard party%, and grade thresholds all scale down by 3. Willpower is a
+  // per-DPS efficiency ratio (NOT a party buff), so it is NOT divided.
   //
   // Mapping to the DPS structure:
-  //   * Effect per-level values (additive, like the DPS D-values):
-  //       Ally Attack Enh.  0.0596   (party attack buff)
-  //       Brand Power       0.0434   (brand amp)
-  //       Ally Damage Enh.  0.0195   (party damage buff)
+  //   * Effect per-level values (additive, like the DPS D-values), base ÷3:
+  //       Ally Attack Enh.  0.0596/3   (party attack buff)
+  //       Brand Power       0.0434/3   (brand amp)
+  //       Ally Damage Enh.  0.0195/3   (party damage buff)
   //     The DPS effects (Attack Power / Additional Damage / Boss Damage) -> 0.
-  //   * Order/Chaos point: 0.0747 per orderLevel point (replaces DPS's 0.159872).
+  //   * Order/Chaos point: 0.0747/3 = 0.0249 per orderLevel point.
   //   * Willpower: exactly (2/3) × the DPS willpower contribution — same
   //     willpowerScore mechanic, same willpowerCost = baseCost − wpLevel, same 4.25
-  //     neutral, just scaled by 2/3.
+  //     neutral, just scaled by 2/3 (not party-scaled, so not ÷3).
   var SUPPORT_SCORING = {
-    orderPerPoint: 0.0747,                 // support order: flat per point
-    willpowerFactor: 2 / 3,                // support willpower = (2/3) × DPS willpower
-    allyAttackEnh: 0.0596,
-    brandPower: 0.0434,
-    allyDamageEnh: 0.0195,
+    orderPerPoint: 0.0747 / 3,             // support order: flat per point (party buff ÷3 = 0.0249)
+    willpowerFactor: 2 / 3,                // support willpower = (2/3) × DPS willpower (not party-scaled)
+    allyAttackEnh: 0.0596 / 3,
+    brandPower: 0.0434 / 3,
+    allyDamageEnh: 0.0195 / 3,
     // DPS-only effects contribute nothing to support:
     attackPower: 0,
     additionalDamage: 0,
     bossDamage: 0
   };
+
+  // A support gem buffs the whole party (3 DPS). The coefficients above are PER-DPS (the
+  // ×3 removed so grades/leaderboard are correct), so the party benefit is reapplied as an
+  // explicit ×3 on gold-per-damage at the VALUE step only: support grades stay per-DPS while
+  // the pipeline's gold sits on the original (party) scale. i.e. a "1.5M gold / 1% damage"
+  // tier is computed as 4.5M for support gems. DPS is unaffected (multiplier applies only
+  // when axis === "support").
+  var SUPPORT_GPD_MULTIPLIER = 3;
 
   // Support willpower contribution = (2/3) × the DPS willpowerScore (reuses the same
   // willpowerCost = baseCost − wpLevel and the same 4.25 neutral).
@@ -525,8 +536,8 @@
   }
 
   // supportRelValue(config): support value ABOVE the neutral baseline (parallel to
-  // relDamage). This × gpd × (already-baked ×3) = gold, using the SAME gpd tiers as
-  // DPS. May be negative for a sub-baseline gem.
+  // relDamage). This × gpd = gold (per-DPS scale, coefficients already ÷3), using the
+  // SAME gpd tiers as DPS. May be negative for a sub-baseline gem.
   function supportRelValue(config) {
     return supportScore(config) - supportBaseline(config.baseCost);
   }
@@ -537,12 +548,12 @@
   // gem grade uses the AVERAGE (SUPPORT_SCORING.orderPerPoint ≈ 0.0747); the whole-grid
   // total (the leaderboard) uses the PER-CORE value (keyed by core base id 10001-10006).
   var SUPPORT_ORDER_PER_CORE = {
-    10001: 0.0694, // Order Sun   (Ally Attack)
-    10002: 0.0640, // Order Moon  (Ally Damage)
-    10003: 0.0486, // Order Star  (serenade)
-    10004: 0.0753, // Chaos Sun   (Ally Damage)
-    10005: 0.1044, // Chaos Moon  (Brand — strongest)
-    10006: 0.0869  // Chaos Star  (Weapon Power)
+    10001: 0.0694 / 3, // Order Sun   (Ally Attack)
+    10002: 0.0640 / 3, // Order Moon  (Ally Damage)
+    10003: 0.0486 / 3, // Order Star  (serenade)
+    10004: 0.0753 / 3, // Chaos Sun   (Ally Damage)
+    10005: 0.1044 / 3, // Chaos Moon  (Brand — strongest)
+    10006: 0.0869 / 3  // Chaos Star  (Weapon Power)
   };
   function supportOrderValueForCore(coreBase) {
     var v = SUPPORT_ORDER_PER_CORE[coreBase];
@@ -960,6 +971,7 @@
   function _solveJointEV(baseline, goldPerDamage, axis) {
     var key = baseline + "_" + goldPerDamage + "_" + (axis === "support" ? "support" : "dps");
     if (_jointEVCache[key]) return _jointEVCache[key];
+    if (axis === "support") goldPerDamage *= SUPPORT_GPD_MULTIPLIER;  // 3-DPS party benefit at the gold step (coefficients are per-DPS)
 
     var tiers = ["legendary", "relic", "ancient"];
     var FC = COSTS.fusion;
@@ -1144,6 +1156,7 @@
     supportEffectScore: supportEffectScore,
     supportOrderScore: supportOrderScore,
     SUPPORT_ORDER_PER_CORE: SUPPORT_ORDER_PER_CORE,
+    SUPPORT_GPD_MULTIPLIER: SUPPORT_GPD_MULTIPLIER,
     supportOrderValueForCore: supportOrderValueForCore,
     supportDamage: supportDamage,
     supportWillpowerMultiplier: supportWillpowerMultiplier,

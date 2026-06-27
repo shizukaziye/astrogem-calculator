@@ -316,23 +316,31 @@ def gem_rank(config):
 
 # ==================== SUPPORT SCORING AXIS ====================
 # Parallel score for SUPPORT gems, mirroring astrogem.js's SUPPORT axis exactly.
-# The DPS scoring above is UNCHANGED; these are purely additive. Party-damage scale
-# with the x3 (3 DPS in the party) ALREADY baked into the coefficients.
-#   Effect per-level: Ally Attack Enh. 0.0596, Brand Power 0.0434, Ally Damage Enh.
-#     0.0195; DPS effects (Attack Power / Additional Damage / Boss Damage) -> 0.
-#   Order: 0.0747 per orderLevel point (replaces DPS's 0.159872).
+# The DPS scoring above is UNCHANGED; these are purely additive. PER-DPS party-buff
+# scale: the earlier x3 (3 DPS in the party) double-counts under the multiplicative
+# model, so every damage coefficient is its base party-buff value / 3. Willpower is a
+# per-DPS efficiency ratio (not a party buff), so it is NOT divided.
+#   Effect per-level: Ally Attack Enh. 0.0596/3, Brand Power 0.0434/3, Ally Damage
+#     Enh. 0.0195/3; DPS effects (Attack Power / Additional Damage / Boss Damage) -> 0.
+#   Order: 0.0747/3 = 0.0249 per orderLevel point.
 #   Willpower: exactly (2/3) x the DPS willpower contribution (same willpower_score
-#     mechanic, same willpowerCost = baseCost - wpLevel, same 4.25 neutral).
+#     mechanic, same willpowerCost = baseCost - wpLevel, same 4.25 neutral; not / 3).
 SUPPORT_SCORING = {
-    "orderPerPoint": 0.0747,
+    "orderPerPoint": 0.0747 / 3,
     "willpowerFactor": 2 / 3,
-    "allyAttackEnh": 0.0596,
-    "brandPower": 0.0434,
-    "allyDamageEnh": 0.0195,
+    "allyAttackEnh": 0.0596 / 3,
+    "brandPower": 0.0434 / 3,
+    "allyDamageEnh": 0.0195 / 3,
     "attackPower": 0,
     "additionalDamage": 0,
     "bossDamage": 0,
 }
+
+# A support gem buffs the whole party (3 DPS). Coefficients are PER-DPS (×3 removed so
+# grades/leaderboard are correct); the party benefit is re-applied as an explicit ×3 on
+# gold-per-damage at the VALUE step only, so pipeline gold sits on the original scale.
+# i.e. a "1.5M gold / 1% damage" tier is computed as 4.5M for support gems.
+SUPPORT_GPD_MULTIPLIER = 3
 
 
 def support_willpower_score(wp_cost):
@@ -378,12 +386,12 @@ def support_rel_value(config):
 
 # ---- SUPPORT multiplicative grading (parallel to the DPS gem_value model) ----
 SUPPORT_ORDER_PER_CORE = {
-    10001: 0.0694,  # Order Sun   (Ally Attack)
-    10002: 0.0640,  # Order Moon  (Ally Damage)
-    10003: 0.0486,  # Order Star  (serenade)
-    10004: 0.0753,  # Chaos Sun   (Ally Damage)
-    10005: 0.1044,  # Chaos Moon  (Brand - strongest)
-    10006: 0.0869,  # Chaos Star  (Weapon Power)
+    10001: 0.0694 / 3,  # Order Sun   (Ally Attack)
+    10002: 0.0640 / 3,  # Order Moon  (Ally Damage)
+    10003: 0.0486 / 3,  # Order Star  (serenade)
+    10004: 0.0753 / 3,  # Chaos Sun   (Ally Damage)
+    10005: 0.1044 / 3,  # Chaos Moon  (Brand - strongest)
+    10006: 0.0869 / 3,  # Chaos Star  (Weapon Power)
 }
 
 
@@ -763,6 +771,8 @@ def _solve_joint_ev(baseline, gold_per_damage, axis="dps"):
     key = (baseline, gold_per_damage, "support" if axis == "support" else "dps")
     if key in _JOINT_EV_CACHE:
         return _JOINT_EV_CACHE[key]
+    if axis == "support":  # 3-DPS party benefit at the gold step (coefficients are per-DPS)
+        gold_per_damage *= SUPPORT_GPD_MULTIPLIER
 
     tiers = ["legendary", "relic", "ancient"]
     fc = COSTS["fusion"]

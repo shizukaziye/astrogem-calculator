@@ -96,12 +96,10 @@
   var COND_SCORE = /*__COND_SCORE__*/ null;
 
   var AXIS = "dps";         // 'dps' | 'support' — which bake to display (toggle in the bar)
-  // The Support axis is fully wired (toggle + bake + pipelineAdvice forcing), but its lvl-0
-  // value scale isn't reconciled with the DPS scale yet — support cut-EVs come out orders of
-  // magnitude smaller, so a shipped Support tab would look broken and disagree with the
-  // (new-model) Grader. Keep the toggle hidden until the support model is recalibrated and
-  // re-baked into a healthy data/pipeline-support.json, then flip this to true.
-  var SUPPORT_ENABLED = false;
+  // The Support axis: per-DPS coefficients + a ×3 gpd multiplier put support gold back on
+  // the original (party) scale, matching DPS magnitudes. Baked into data/pipeline-support.json
+  // and reconciled with the Grader/Leaderboard, so the toggle is live.
+  var SUPPORT_ENABLED = true;
   var DATA = null;          // the CURRENT axis's baked grid (data/pipeline[-support].json)
   var DATA_CACHE = {};      // axis -> baked grid (cached, so toggling back never re-fetches)
   var DATA_LOADING = {};    // axis -> in-flight flag

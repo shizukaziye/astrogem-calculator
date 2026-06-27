@@ -150,7 +150,11 @@
   // ---------------- gem value (direct or fusion-fodder) ----------------
 
   function calculateGemValue(scoreVal, baseline, goldPerDamage, config, axis) {
-    var direct = A.goldValue(scoreVal, baseline, goldPerDamage);
+    // Support gems buff 3 DPS: coefficients are per-DPS, the party benefit is re-applied as
+    // a ×3 on gpd at the gold step (DPS unaffected). fusionValueForTier does its own ×3
+    // internally (via _solveJointEV), so pass it the UNMULTIPLIED gpd.
+    var directGpd = (axis === "support") ? goldPerDamage * A.SUPPORT_GPD_MULTIPLIER : goldPerDamage;
+    var direct = A.goldValue(scoreVal, baseline, directGpd);
     if (direct > 0) return direct;
     if (!config) return 0;
     var baseCost = config.baseCost != null ? config.baseCost : 10;
