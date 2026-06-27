@@ -367,8 +367,18 @@ async function fetchCharacterData(region, name) {
     resp = await fetch(url, {
       headers: {
         "User-Agent": BROWSER_UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": isKR ? "ko-KR,ko;q=0.9" : "en-US,en;q=0.9"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": isKR ? "ko-KR,ko;q=0.9" : "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": isKR ? "https://lopec.kr/" : "https://lostark.bible/",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "sec-ch-ua": "\"Google Chrome\";v=\"124\", \"Chromium\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\"macOS\""
       },
       // Follow SvelteKit redirects (region casing etc.).
       redirect: "follow"
