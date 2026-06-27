@@ -216,6 +216,8 @@ function coresToGems(cores) {
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // a cached character is "fresh" for 7 days.
 const INDEX_KEY = "__index__";               // KV key holding a JSON array of all char keys.
 const SNAPSHOT_KEY = "lb:snapshot";          // single KV key holding the whole leaderboard list (?list=1 serves it).
+const DIRTY_PREFIX = "lb:dirty:";            // #3: per-character "changed since last snapshot" marker — the cron merges only these instead of re-reading every character.
+const SNAPSHOT_DIRTY_TTL_S = 7 * 24 * 3600;  // a dirty marker self-expires after 7 days (safety net; the rebuild normally clears it).
 const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent character write (plain overwrite, race-free).
 const BUILTAT_KEY = "lb:builtat";            // ms timestamp the snapshot was last rebuilt by the cron.
 const QP = "q:p:";                           // premium lookup-queue key prefix (region+name ride in KV metadata).
@@ -472,8 +474,8 @@ async function handleCharacter(env, region, name, refresh, extra) {
   if (env && env.CHARS) {
     try {
       await env.CHARS.put(key, JSON.stringify(record));
-      // Bump the leaderboard "last write" stamp so the next cron run rebuilds the snapshot.
-      // handleList enumerates keys via KV list() (race-free); no per-key index to maintain.
+      await markDirty(env, key);                              // #3: queue this char for the incremental snapshot
+      // Bump the leaderboard "last write" stamp (informational for the dashboard).
       await env.CHARS.put(LASTWRITE_KEY, String(Date.now()));
     } catch (e) {
       // Storage failure is non-fatal: still return the freshly fetched data.
@@ -482,8 +484,11 @@ async function handleCharacter(env, region, name, refresh, extra) {
   return json(Object.assign({}, record, { cached: false }, extra), 200);
 }
 
-// Rebuild the leaderboard list from a race-free KV enumeration. This is the EXPENSIVE path
-// (~one KV read per stored character) — handleList only calls it when the snapshot is stale.
+// #3: mark a character changed so the next snapshot rebuild merges JUST it (not all ~4000 records).
+function markDirty(env, ck) { return env.CHARS.put(DIRTY_PREFIX + ck, "1", { expirationTtl: SNAPSHOT_DIRTY_TTL_S }).catch(function () {}); }
+
+// Full rebuild of the leaderboard list from a race-free KV enumeration. This is the EXPENSIVE path
+// (~one KV read per stored character) — used only for the FIRST build; later builds are incremental.
 async function buildCharacterList(env) {
   const keys = [];
   let cursor;
@@ -513,22 +518,43 @@ async function handleList(env) {
   return json({ characters: characters, builtAt: (snap && snap.builtAt) || 0 }, 200);
 }
 
-// Cron entry: rebuild the leaderboard snapshot, but ONLY when a character was written since the
-// last build (lastWrite > builtAt) — so idle 10-min windows cost ~2 small reads instead of a
-// full re-read of every stored character. Race-free: lastWrite is a plain overwrite and the
-// build is a fresh list() enumeration. Stamps builtAt at the START so a write landing mid-build
-// re-triggers next run. Never pins an empty result (e.g. a throttled read).
+// Cron entry: refresh the leaderboard snapshot INCREMENTALLY. The dirty markers (lb:dirty:<key>,
+// written whenever a character is cached) are the change log — list them (one list), read ONLY those
+// records, and upsert them into the existing snapshot, instead of re-reading all ~4000 characters.
+// The FIRST build (no snapshot yet) still does a full read. Throttled to ~every 30 min. Markers added
+// mid-build keep their marker (only the ones we listed are cleared), so nothing is lost.
 async function rebuildSnapshotIfChanged(env) {
   if (!env || !env.CHARS) return;
-  const lastWrite = parseInt((await env.CHARS.get(LASTWRITE_KEY)) || "0", 10);
+  let dirty;
+  try { dirty = await env.CHARS.list({ prefix: DIRTY_PREFIX }); } catch (e) { return; }
   const builtAt = parseInt((await env.CHARS.get(BUILTAT_KEY)) || "0", 10);
-  if (builtAt > 0 && lastWrite <= builtAt) return; // nothing changed since the last build
+  if (builtAt > 0 && !dirty.keys.length) return;                                // nothing changed since the last build
   if (builtAt > 0 && (Date.now() - builtAt) < SNAPSHOT_MIN_INTERVAL_MS) return; // throttle: rebuild at most ~every 30 min
   const startedAt = Date.now();
-  const characters = await buildCharacterList(env);
+  const snap = await kvGetJson(env, SNAPSHOT_KEY);
+  let characters;
+  if (snap && Array.isArray(snap.characters) && snap.characters.length) {
+    // INCREMENTAL: merge only the changed characters into the existing snapshot (upsert by region:name).
+    characters = snap.characters.slice();
+    const idx = {};
+    for (let i = 0; i < characters.length; i++) { const c = characters[i]; idx[(c.region + ":" + c.name).toLowerCase()] = i; }
+    const charKeys = dirty.keys.map(function (k) { return k.name.slice(DIRTY_PREFIX.length); });
+    const recs = await Promise.all(charKeys.map(function (ck) { return kvGetJson(env, ck); }));
+    for (const c of recs) {
+      if (c && Array.isArray(c.gems)) {
+        const e = { region: c.region, name: c.name, gems: c.gems, pulledAt: c.pulledAt, itemLevel: c.itemLevel, class: c.class };
+        const id = (c.region + ":" + c.name).toLowerCase();
+        if (idx[id] != null) characters[idx[id]] = e; else { idx[id] = characters.length; characters.push(e); }
+      }
+    }
+  } else {
+    characters = await buildCharacterList(env);                                  // first build -> full read
+  }
   if (!characters.length) return;
   await env.CHARS.put(SNAPSHOT_KEY, JSON.stringify({ builtAt: startedAt, characters: characters }));
   await env.CHARS.put(BUILTAT_KEY, String(startedAt));
+  // clear ONLY the markers we listed (any written mid-build keep theirs -> picked up next rebuild).
+  await Promise.all(dirty.keys.map(function (k) { return env.CHARS.delete(k.name).catch(function () {}); }));
 }
 
 // Rolling per-drain history (~last hour) for the admin dashboard: every cron drain appends one
@@ -577,7 +603,7 @@ async function probeOldest(env) {
   let res = null;
   try { res = await fetchCharacterData(md.region, md.name); } catch (e) { res = null; }
   if (res && res.ok) {
-    if (qkey) { try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(Object.assign({}, res.data, { pulledAt: Date.now() }))); await env.CHARS.delete(qkey); } catch (e) {} }
+    if (qkey) { try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(Object.assign({}, res.data, { pulledAt: Date.now() }))); await markDirty(env, charKey(md.region, md.name)); await env.CHARS.delete(qkey); } catch (e) {} }
     return { up: true, cached: !!qkey, name: md.region + ":" + md.name };
   }
   if (res && res.status === 404) { if (qkey) { try { await env.CHARS.delete(qkey); } catch (e) {} } return { up: true, cached: false, name: md.region + ":" + md.name }; }
@@ -638,7 +664,7 @@ async function drainQueue(env) {
     if (res && res.ok) {
       consecFail = 0;
       const record = Object.assign({}, res.data, { pulledAt: Date.now() });
-      try { await env.CHARS.put(charKey(it.r, it.n), JSON.stringify(record)); await env.CHARS.delete(it.k); cached++; removed.add(it.k); run.cached.push(it.r + ":" + it.n); } catch (e) {}
+      try { await env.CHARS.put(charKey(it.r, it.n), JSON.stringify(record)); await markDirty(env, charKey(it.r, it.n)); await env.CHARS.delete(it.k); cached++; removed.add(it.k); run.cached.push(it.r + ":" + it.n); } catch (e) {}
     } else if (res && res.status >= 400 && res.status < 500) {
       // not found / bad request -> drop. REMEMBER a 404 (short TTL) so a typo'd or deleted name
       // isn't re-enqueued + re-fetched in a loop; enqueueChar checks this marker.
@@ -866,11 +892,10 @@ export default {
           if (fresh) return json(Object.assign({}, cached, { cached: true }), 200); // legacy client: fresh only
         } else {
           const [inQP, inQF] = await Promise.all([env.CHARS.get(QP + key), env.CHARS.get(QF + key)]); // one round-trip, not two
-          let tier = (inQP !== null) ? "premium" : (inQF !== null ? "free" : null);
-          if (!tier && !fresh) { // stale (>7d) and not queued -> auto-enqueue a refresh (FIFO ts stamp)
-            try { await env.CHARS.put((premium ? QP : QF) + key, "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
-            tier = premium ? "premium" : "free";
-          }
+          const tier = (inQP !== null) ? "premium" : (inQF !== null ? "free" : null);
+          // #8: do NOT auto-enqueue a refresh for stale (>7d) data — just flag it `stale` and let the
+          // user hit Re-pull (refresh=1) on demand. Gem grids rarely change, so constantly re-fetching
+          // every old character in the background isn't worth the lostark.bible load.
           const out = Object.assign({}, cached, { cached: true, stale: !fresh });
           if (tier) { out.queued = true; out.tier = tier; if (wantPos) Object.assign(out, await queueStatus(env, region, name, tier)); }
           return json(out, 200);
