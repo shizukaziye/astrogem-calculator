@@ -401,13 +401,6 @@
 '  #tab-grader .gr-refresh-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px;padding:9px 13px;border-radius:9px;background:rgba(127,127,127,0.10);border:1px solid var(--axis,var(--accent));font-size:13px}' +
 '  #tab-grader .gr-unavail{margin:0 0 14px;padding:12px 15px;border-radius:10px;background:rgba(232,181,74,0.10);border:1px solid rgba(232,181,74,0.5);font-size:13px;line-height:1.5}' +
 '  #tab-grader .gr-unavail b{color:#e8b54a}' +
-'  #tab-grader .gr-import-toggle{background:none;border:none;color:var(--dim);font:inherit;font-size:12px;cursor:pointer;padding:4px 0;text-align:left}' +
-'  #tab-grader .gr-import-toggle:hover{color:var(--axis,var(--accent))}' +
-'  #tab-grader .gr-import-body{font-size:12px;color:var(--dim);line-height:1.55}' +
-'  #tab-grader .gr-import-body p{margin:2px 0 6px}' +
-'  #tab-grader .gr-import-body ul{margin:0;padding-left:18px}' +
-'  #tab-grader .gr-import-body li{margin:3px 0}' +
-'  #tab-grader .gr-import-body code{background:rgba(127,127,127,0.18);padding:1px 4px;border-radius:3px}' +
 '  #tab-grader .gr-refresh-bar b{color:var(--axis,var(--accent))}' +
 '  #tab-grader .gr-rb-dim{color:var(--dim)}' +
 '  #tab-grader .gr-rb-spin{display:inline-block;animation:gr-rb-spin 1.1s linear infinite}' +
@@ -1634,24 +1627,6 @@ presetToggleHtml(data) +
     }
     consumeHash();
     window.addEventListener("hashchange", consumeHash);
-    renderImportHelper();
-  }
-
-  // Small, unobtrusive helper under the pull controls (NOT on the square): how to import a loadout by
-  // paste or file-drop. (The one-click bookmarklet is admin-only — it lives on queue-admin.html.)
-  function renderImportHelper() {
-    var host = $("gr-pull-note"); if (!host) return;
-    host.innerHTML =
-      '<button type="button" class="gr-import-toggle" id="gr-import-toggle">lostark.bible not loading? Import a character &rsaquo;</button>' +
-      '<div class="gr-import-body" id="gr-import-body" style="display:none">' +
-        '<p>Your browser can reach lostark.bible even when our server can’t. Bring a loadout over — it grades instantly, no server:</p>' +
-        '<ul>' +
-          '<li><b>Paste (most reliable):</b> on your character page, View Source (⌘-U / Ctrl-U), Select All, Copy, then paste here.</li>' +
-          '<li><b>Or drag a file:</b> Save Page (⌘/Ctrl-S) and drag the <code>.html</code> onto the box above. <i>Some browsers strip the gem data when saving — if it doesn’t work, paste the View-Source instead.</i></li>' +
-        '</ul>' +
-      '</div>';
-    var tog = $("gr-import-toggle"), body = $("gr-import-body");
-    if (tog && body) tog.addEventListener("click", function () { body.style.display = body.style.display === "none" ? "" : "none"; });
   }
 
   function init() {
