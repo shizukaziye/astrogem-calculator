@@ -97,7 +97,7 @@
   var WORKER = "https://astrogem-bible.shizukaziye.workers.dev";
   var TOKKEY = "astrogem_admin_token";
   var $ = function(id){ return document.getElementById(id); };
-  var timer = null, lastOk = 0, lastErr = "";
+  var timer = null, lastOk = 0, lastErr = "", curMode = "", curRate = 0;
 
   function fmtAgo(ms){
     if(!ms) return "never";
@@ -115,7 +115,8 @@
     if(lastErr){ $("status").innerHTML = '<span class="dot off"></span>'+esc(lastErr); return; }
     if(!lastOk){ $("status").textContent = ""; return; }
     var stale = (Date.now()-lastOk) > 25000;
-    $("status").innerHTML = '<span class="dot'+(stale?' stale':'')+'"></span>live · updated '+fmtAgo(lastOk);
+    var drain = curMode ? (' · drain <b class="'+(curMode==="run"?"good":curMode==="off"?"bad":"warn")+'">'+curMode.toUpperCase()+(curMode==="run"?" "+curRate+"/min":"")+'</b>') : '';
+    $("status").innerHTML = '<span class="dot'+(stale?' stale':'')+'"></span>live'+drain+' · updated '+fmtAgo(lastOk);
   }
 
   function render(j){
@@ -124,11 +125,15 @@
     var clearMin = d.perMin>0 ? Math.ceil(q.total/d.perMin) : 0;
     var ago = (j.nowMs - j.lastWriteMs)/1000;
     var drainCls = (!j.lastWriteMs) ? "bad" : (ago<180 ? "good" : (ago<900 ? "warn" : "bad"));
+    var mode = j.mode || (j.paused ? "off" : "run");
+    var modeCls = mode === "run" ? "good" : (mode === "off" ? "bad" : "warn");
+    var modeDetail = mode === "run" ? (d.perMin + "/min") : (mode === "probe" ? "probing · auto-resumes" : "frozen");
+    curMode = mode; curRate = d.perMin;                       // feed the always-on status line
     $("cards").innerHTML =
       card("Free backlog", num(q.free)) +
       card("Premium", num(q.premium)) +
       card("Total queued", num(q.total) + (q.total ? ' <small>&#8776;'+clearMin+' min to clear</small>' : '')) +
-      card("Drain rate", d.perMin + ' <small>/min &middot; 1 req/'+(d.delayMs/1000)+'s</small>') +
+      card("Drain", '<span class="'+modeCls+'">'+mode.toUpperCase()+'</span> <small>'+modeDetail+'</small>') +
       card("Last drain", '<span class="'+drainCls+'">'+fmtAgo(j.lastWriteMs)+'</span>') +
       card("Cached this month", num(u.count) + ' <small>/ '+num(u.budget)+'</small>');
     $("note").textContent = q.total
