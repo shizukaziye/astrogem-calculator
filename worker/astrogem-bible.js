@@ -672,8 +672,9 @@ async function drainQueue(env) {
       try { await env.CHARS.delete(it.k); } catch (e) {} removed.add(it.k);
       if (res.status === 404) { try { await env.CHARS.put(NOTFOUND_PREFIX + charKey(it.r, it.n), "1", { expirationTtl: NOTFOUND_TTL_S }); } catch (e) {} }
       run.dropped.push({ region: it.r, name: it.n, status: res.status, msg: (res.body && res.body.error) || "dropped" });
-    } else if (upstream === 401 || upstream === 403) {
-      // a BLOCK (lostark.bible refusing the Worker's IP) — it won't fix itself on a retry, so PAUSE
+    } else if (upstream >= 400 && upstream < 500) {
+      // a BLOCK: any 4xx refusal from lostark.bible (401/403/418/429/451 — their anti-bot rotates the
+      // code; 404 is already handled above as "not found"). It won't fix itself on a retry, so PAUSE
       // immediately instead of burning the full fail streak to discover it. Re-queue this run at the front.
       run.failed.push({ region: it.r, name: it.n, status: res ? res.status : 0, upstream: upstream, msg: (res.body && res.body.error) || "blocked", att: 1 });
       await requeueFront(env, run.failed);
