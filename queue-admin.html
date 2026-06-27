@@ -49,6 +49,14 @@
     <div class="cards" id="cards"></div>
     <p class="sub" id="note"></p>
     <div class="panel">
+      <h2 id="ehead">Errors</h2>
+      <div id="ebody" style="max-height:30vh;overflow:auto"></div>
+    </div>
+    <div class="panel">
+      <h2 id="hhead">Drain history (last hour)</h2>
+      <div id="hbody" style="max-height:36vh;overflow:auto"></div>
+    </div>
+    <div class="panel">
       <h2 id="qhead">Queue</h2>
       <div id="qbody" style="max-height:58vh;overflow:auto"></div>
     </div>
@@ -111,7 +119,54 @@
       }).join("");
       $("qbody").innerHTML = '<table><thead><tr><th>#</th><th>Tier</th><th>Region</th><th>Character</th><th>Waited</th></tr></thead><tbody>'+rows+'</tbody></table>';
     }
+    renderErrors(j.drainLog);
+    renderDrainHistory(j.drainLog);
     setStatus();
+  }
+
+  function fmtTime(ms){ try { return new Date(ms).toLocaleTimeString(); } catch(e){ return "—"; } }
+
+  // Detailed error log (newest first) — flattens every failed fetch across the last hour of drains,
+  // with the worker status + the real upstream status (e.g. lostark.bible 401) + the message.
+  function renderErrors(log){
+    log = log || [];
+    var errs = [];
+    log.forEach(function(r){ (r.failed||[]).forEach(function(e){ errs.push({ t:r.t, e:e }); }); });
+    errs.reverse();
+    $("ehead").innerHTML = errs.length ? 'Errors — <span class="bad">'+errs.length+' in the last hour</span>' : 'Errors';
+    if(!errs.length){ $("ebody").innerHTML = '<p class="good" style="padding:16px;margin:0">&#10003; No drain errors in the last hour.</p>'; return; }
+    var rows = errs.slice(0,100).map(function(x){
+      var e = x.e;
+      var st = e.upstream ? (e.status+' <span class="bad">(upstream '+e.upstream+')</span>') : (''+e.status);
+      return '<tr><td class="muted" style="white-space:nowrap">'+fmtTime(x.t)+'</td>'+
+        '<td style="white-space:nowrap">'+esc(e.region)+'/'+esc(e.name)+'</td>'+
+        '<td class="bad" style="white-space:nowrap">HTTP '+st+'</td>'+
+        '<td class="muted">'+esc(e.msg||"")+((e.att>1)?' <span class="warn">(attempt '+e.att+')</span>':'')+'</td></tr>';
+    }).join("");
+    $("ebody").innerHTML = '<table><thead><tr><th>Time</th><th>Character</th><th>Status</th><th>Detail</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  }
+
+  // Per-drain history (newest first): what each cron run cached / failed / dropped + why it stopped.
+  function renderDrainHistory(log){
+    log = log || [];
+    var tot=0, cac=0, fail=0;
+    log.forEach(function(r){ tot++; cac += (r.cached||[]).length; fail += (r.failed||[]).length; });
+    $("hhead").textContent = "Drain history (last hour) — "+tot+" drains · "+cac+" cached · "+fail+" failed";
+    if(!log.length){ $("hbody").innerHTML = '<p class="muted" style="padding:16px;margin:0">No drains logged yet (the cron runs every minute).</p>'; return; }
+    var rows = log.slice().reverse().map(function(r){
+      var c=(r.cached||[]).length, f=(r.failed||[]).length, dr=(r.dropped||[]).length;
+      var stopCls = r.stop==="upstream" ? "bad" : (r.stop==="budget"||r.stop==="time" ? "warn" : "muted");
+      var stop = r.stop ? '<span class="'+stopCls+'">'+esc(r.stop)+'</span>' : '<span class="muted">ok</span>';
+      var names = (r.cached||[]).map(function(x){ var p=String(x).split(":"); return p[1]||x; }).join(", ");
+      return '<tr><td class="muted" style="white-space:nowrap">'+fmtTime(r.t)+'</td>'+
+        '<td class="'+(c?"good":"muted")+'">'+c+'</td>'+
+        '<td class="'+(f?"bad":"muted")+'">'+f+'</td>'+
+        '<td class="muted">'+dr+'</td>'+
+        '<td>'+stop+'</td>'+
+        '<td class="muted">'+(r.ms!=null?(r.ms/1000).toFixed(1)+"s":"—")+'</td>'+
+        '<td class="muted" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(names)+'">'+esc(names||"—")+'</td></tr>';
+    }).join("");
+    $("hbody").innerHTML = '<table><thead><tr><th>Time</th><th>&#10003;</th><th>&#10007;</th><th>&#8856;</th><th>Stop</th><th>Dur</th><th>Cached</th></tr></thead><tbody>'+rows+'</tbody></table>';
   }
 
   function showAuth(){ $("auth").classList.remove("hide"); $("app").classList.add("hide"); if(timer){ clearInterval(timer); timer=null; } }

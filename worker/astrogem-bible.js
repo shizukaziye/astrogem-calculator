@@ -522,6 +522,21 @@ async function rebuildSnapshotIfChanged(env) {
   await env.CHARS.put(BUILTAT_KEY, String(startedAt));
 }
 
+// Rolling per-drain history (~last hour) for the admin dashboard: every cron drain appends one
+// entry (what it cached / dropped / failed + why it stopped, with upstream status + message per
+// error) so the owner can watch drain activity and diagnose upstream issues without reading logs.
+const DRAIN_LOG_KEY = "drain:log";
+const DRAIN_LOG_MAX_MS = 60 * 60 * 1000;     // keep ~1 hour of entries
+async function appendDrainLog(env, run) {
+  try {
+    const log = (await kvGetJson(env, DRAIN_LOG_KEY)) || [];
+    log.push(run);
+    const cut = Date.now() - DRAIN_LOG_MAX_MS;
+    const kept = log.filter(function (e) { return e && e.t >= cut; }).slice(-240); // 1h window + hard cap
+    await env.CHARS.put(DRAIN_LOG_KEY, JSON.stringify(kept));
+  } catch (e) {}
+}
+
 // Cron drain: cache up to DRAIN_PER_RUN queued characters per run, PREMIUM queue first then FREE,
 // paced ~DRAIN_DELAY_MS apart so we never trip lostark.bible. region+name ride in the key metadata,
 // so listing needs no per-key read. A transient upstream error (5xx / upstream 429) stops the run
@@ -534,9 +549,10 @@ async function drainQueue(env) {
   const month = new Date().toISOString().slice(0, 7);
   const usage = await kvGetJson(env, USAGE_KEY);
   let used = (usage && usage.month === month) ? (usage.count | 0) : 0;
-  if (used >= MONTHLY_CHAR_BUDGET) return;
-  let processed = 0, cached = 0, failed = 0, consecFail = 0, stop = false;
   const t0 = Date.now();
+  const run = { t: t0, cached: [], dropped: [], failed: [], stop: null }; // per-drain history entry
+  if (used >= MONTHLY_CHAR_BUDGET) { run.stop = "budget"; run.ms = 0; await appendDrainLog(env, run); return; }
+  let processed = 0, cached = 0, failed = 0, consecFail = 0, stop = false;
   for (const prefix of [QP, QF]) {
     if (stop || processed >= DRAIN_PER_RUN) break;
     let list;
@@ -546,7 +562,7 @@ async function drainQueue(env) {
     // as oldest, so they clear first). The queue is gate-bounded, so one unpaged list() is plenty.
     const ordered = list.keys.slice().sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); });
     for (const k of ordered) {
-      if (processed >= DRAIN_PER_RUN || Date.now() - t0 > DRAIN_BUDGET_MS) { stop = true; break; }
+      if (processed >= DRAIN_PER_RUN || Date.now() - t0 > DRAIN_BUDGET_MS) { run.stop = processed >= DRAIN_PER_RUN ? "full" : "time"; stop = true; break; }
       const md = k.metadata || {};
       if (!md.region || !md.name) { await env.CHARS.delete(k.name); continue; } // malformed -> drop
       let res = null;
@@ -560,10 +576,11 @@ async function drainQueue(env) {
       if (res && res.ok) {
         consecFail = 0;
         const record = Object.assign({}, res.data, { pulledAt: Date.now() });
-        try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(record)); await env.CHARS.delete(k.name); cached++; } catch (e) {}
+        try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(record)); await env.CHARS.delete(k.name); cached++; run.cached.push(md.region + ":" + md.name); } catch (e) {}
       } else if (res && res.status >= 400 && res.status < 500) {
         consecFail = 0;
         await env.CHARS.delete(k.name); // not found / bad request -> drop from queue
+        run.dropped.push({ region: md.region, name: md.name, status: res.status, msg: (res.body && res.body.error) || "dropped" });
       } else {
         // 5xx / network error / timeout: SKIP this character (leave it queued) so one bad or slow
         // character can't head-of-line-block the queue. Count attempts in its metadata so a
@@ -571,17 +588,20 @@ async function drainQueue(env) {
         // forever at the head, starving everyone behind it.
         failed++;
         const att = (md.attempts | 0) + 1;
+        run.failed.push({ region: md.region, name: md.name, status: res ? res.status : 0, upstream: (res && res.body && res.body.upstreamStatus) || null, msg: (res && res.body && res.body.error) || "network/timeout", att: att });
         console.log("[drain-fail] " + md.region + ":" + md.name + " status=" + (res ? res.status : "throw") + " att=" + att);
         try {
           if (att >= MAX_FETCH_ATTEMPTS) await env.CHARS.delete(k.name);                                  // give up — drop it
-          else await env.CHARS.put(k.name, "", { metadata: { region: md.region, name: md.name, attempts: att }, expirationTtl: QUEUE_TTL_S });
+          else await env.CHARS.put(k.name, "", { metadata: { region: md.region, name: md.name, ts: md.ts, attempts: att }, expirationTtl: QUEUE_TTL_S }); // preserve ts (keep FIFO place)
         } catch (e) {}
-        if (++consecFail >= UPSTREAM_FAIL_LIMIT) { stop = true; break; } // sustained streak -> upstream down, back off
+        if (++consecFail >= UPSTREAM_FAIL_LIMIT) { run.stop = "upstream"; stop = true; break; } // sustained streak -> upstream down, back off
       }
       processed++;
       if (processed < DRAIN_PER_RUN) await new Promise(function (r) { setTimeout(r, DRAIN_DELAY_MS); });
     }
   }
+  run.ms = Date.now() - t0;
+  await appendDrainLog(env, run);
   if (processed > 0 || failed > 0) console.log("[drain] processed=" + processed + " cached=" + cached + " failed=" + failed + (stop ? " (backed off)" : ""));
   if (cached > 0) {
     try { await env.CHARS.put(LASTWRITE_KEY, String(Date.now())); } catch (e) {}
@@ -691,13 +711,15 @@ export default {
       if (!premium) return json({ error: "Forbidden — owner token required." }, 403);
       // all four reads are independent -> one parallel round-trip instead of four sequential awaits
       const emptyList = function () { return { keys: [] }; };
-      const [rqp, rqf, usage0, lw] = await Promise.all([
+      const [rqp, rqf, usage0, lw, dlog] = await Promise.all([
         env.CHARS.list({ prefix: QP }).catch(emptyList),
         env.CHARS.list({ prefix: QF }).catch(emptyList),
         kvGetJson(env, USAGE_KEY).catch(function () { return null; }),
-        env.CHARS.get(LASTWRITE_KEY).catch(function () { return null; })
+        env.CHARS.get(LASTWRITE_KEY).catch(function () { return null; }),
+        kvGetJson(env, DRAIN_LOG_KEY).catch(function () { return null; })
       ]);
       const qp = rqp.keys, qf = rqf.keys, usage = usage0 || {}, lastWrite = parseInt(lw, 10) || 0;
+      const drainLog = Array.isArray(dlog) ? dlog : [];
       const now = Date.now();
       const mapq = function (keys, tier) {
         return keys.slice().sort(function (a, b) { return ((a.metadata && a.metadata.ts) || 0) - ((b.metadata && b.metadata.ts) || 0); })
@@ -709,7 +731,8 @@ export default {
         drain: { perRun: DRAIN_PER_RUN, delayMs: DRAIN_DELAY_MS, perMin: DRAIN_PER_RUN },
         queue: { premium: qp.length, free: qf.length, total: qp.length + qf.length, list: list },
         usage: { month: usage.month || "", count: (usage.count | 0), budget: MONTHLY_CHAR_BUDGET },
-        lastWriteMs: lastWrite
+        lastWriteMs: lastWrite,
+        drainLog: drainLog
       }, 200);
     }
 
