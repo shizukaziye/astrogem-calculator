@@ -80,7 +80,7 @@
   // Baseline grades (rank C- … S+), each -> a %-damage threshold via gradeToScore. The
   // bake stores one exact DP solve per grade at baseline = gradeToScore(grade), read by
   // direct key lookup (no interpolation).
-  var GRADE_ROWS = [52, 57, 62, 66, 70, 73, 77, 80, 83, 87, 92, 97];
+  var GRADE_ROWS = [40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95];
 
   // Verdict gold-EV bands.
   var V = { green: CONST.RESET_THRESHOLD, yellowHi: 10000, yellowMid: 5000, yellowLo: 1000 };
