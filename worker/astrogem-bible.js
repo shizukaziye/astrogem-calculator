@@ -600,7 +600,7 @@ async function queueStatus(env, region, name, tier) {
     position = premium.length + (fi >= 0 ? fi : free.length) + 1;  // free comes after all premium
   }
   const total = Math.max(premium.length + free.length, position);  // count self even if list() lags
-  return { position: position, total: total, etaMinutes: Math.ceil(position / DRAIN_PER_RUN) };
+  return { position: position, total: total, etaMinutes: Math.ceil(position / DRAIN_PER_RUN), drainPerMin: DRAIN_PER_RUN };
 }
 
 // A "queued" JSON response carrying the live queue status (position / total / ETA). Used both
@@ -712,20 +712,35 @@ export default {
     }
     const key = charKey(region, name);
 
-    // FREE + UNLIMITED: a cached character returns immediately (just a KV read) with NO rate
-    // limit — look up as many stored characters as you like. The limits below apply only to a
-    // MISS (a fresh lostark.bible fetch + DB write), which is the part that actually costs us.
+    const wantQueue = u.searchParams.get("queue") === "1";
+    const wantPos = u.searchParams.get("pos") === "1"; // position/ETA cost 2 KV lists; the lookup + periodic re-syncs set &pos=1, the local countdown between them is free.
+
+    // CACHED (any age): return the stored gems immediately (free — just a KV read). For &queue
+    // clients it's ALSO queue-aware so the page can show the cached grades AND a live refresh
+    // banner: if the character is already queued, OR its data is stale (>7d) and we now auto-enqueue
+    // a refresh, the response carries {queued, tier, stale, position?}. refresh=1 bypasses all this.
     if (!refresh && env.CHARS) {
       const cached = await kvGetJson(env, key);
-      if (cached && Array.isArray(cached.gems) && typeof cached.pulledAt === "number" && (Date.now() - cached.pulledAt) < CACHE_TTL_MS) {
-        return json(Object.assign({}, cached, { cached: true }), 200);
+      if (cached && Array.isArray(cached.gems) && typeof cached.pulledAt === "number") {
+        const fresh = (Date.now() - cached.pulledAt) < CACHE_TTL_MS;
+        if (!wantQueue) {
+          if (fresh) return json(Object.assign({}, cached, { cached: true }), 200); // legacy client: fresh only
+        } else {
+          let tier = ((await env.CHARS.get(QP + key)) !== null) ? "premium"
+                   : (((await env.CHARS.get(QF + key)) !== null) ? "free" : null);
+          if (!tier && !fresh) { // stale (>7d) and not queued -> auto-enqueue a refresh (FIFO ts stamp)
+            try { await env.CHARS.put((premium ? QP : QF) + key, "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
+            tier = premium ? "premium" : "free";
+          }
+          const out = Object.assign({}, cached, { cached: true, stale: !fresh });
+          if (tier) { out.queued = true; out.tier = tier; if (wantPos) Object.assign(out, await queueStatus(env, region, name, tier)); }
+          return json(out, 200);
+        }
       }
     }
 
-    // MISS. New clients send &queue=1 -> the character is QUEUED (cached later by the drain).
-    // Old clients (no &queue=1) keep the legacy synchronous fetch so nothing breaks mid-migration.
-    const wantQueue = u.searchParams.get("queue") === "1";
-    const wantPos = u.searchParams.get("pos") === "1"; // compute queue position/ETA (2 KV lists) only when asked — the initial lookup + manual refresh set &pos=1; the 8s auto-poll omits it, so waiting costs only cheap get()s.
+    // MISS (uncached). New clients (&queue=1) get QUEUED (cached later by the drain); old clients
+    // keep the legacy synchronous fetch so nothing breaks mid-migration.
 
     // Already in the queue? Don't re-add — confirm it's still queued (cheap get) and, only when the
     // client asked (&pos=1), its live position/total/ETA. This is also the poll path the client hits

@@ -188,7 +188,7 @@
   // The Pipeline tab bakes one DP solve per these 12 anchor grades; each maps 1:1
   // to a distinct rank (C- … S+), so the array IS a clean rank ladder. We mirror it
   // here so a gem's rank can be "bumped one rank up" by stepping to the next index.
-  var GRADE_ROWS = [52, 57, 62, 66, 70, 73, 77, 80, 83, 87, 92, 97];
+  var GRADE_ROWS = [40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95];
   // gpd tiers offered by the selector (must match gpdsInData() in pipeline.json).
   var GPD_TIERS = [500000, 1000000, 1500000, 2500000, 3500000, 5000000, 7500000, 10000000];
   var GPD_DEFAULT = 1500000;
@@ -1347,30 +1347,29 @@ presetToggleHtml(data) +
       return resp.json().then(function (data) { return { ok: resp.ok, data: data }; });
     }).then(function (r) {
       var d = r.data || {};
-      // Cached -> render the loadout (free, instant).
-      if (d.cached || (Array.isArray(d.gems) && d.gems.length)) {
-        lastLoadout = r.data;
-        grPreset = "raid";
-        grMode = defaultModeFor(r.data);
-        setPullStatus("Graded " + ((r.data.gems || []).length) + " gems.", "");
+      // The cached loadout to SHOW (if any): from this response (Grade loadout on a cached char),
+      // or the one already on screen (manual Refresh, answered with a queued response). Flow: cached
+      // data renders whenever we have it; a queue banner/panel layers on whenever it's queued.
+      var gems = Array.isArray(d.gems) && d.gems.length;
+      var cachedShow = gems ? r.data : (refreshingCached ? lastLoadout : null);
+      var sinceTs = cachedShow ? (cachedShow.pulledAt || 0) : 0;
+      if (cachedShow) {
+        lastLoadout = cachedShow; grPreset = "raid"; grMode = defaultModeFor(cachedShow);
         if (refreshBtn) refreshBtn.style.display = "";
-        renderLoadout(r.data);
-        return;
+        renderLoadout(cachedShow);
       }
-      // Not cached -> queued. A refresh of the shown character keeps the cached loadout visible
-      // under a queue banner; a first-time lookup shows the full "queued" panel.
       if (d.queued) {
-        if (refreshingCached) {
-          setPullStatus("Re-pulling " + name + "… (showing cached for now)", "working");
-          renderLoadout(lastLoadout);
+        if (cachedShow) {
+          setPullStatus((d.stale ? "Cached (stale) — refreshing " : "Cached — refreshing ") + name + "…", "");
           showRefreshBanner(region, name, d);
         } else {
-          setPullStatus((refresh ? "Re-queued — refreshing " : "Queued — fetching ") + name + "…", "");
+          setPullStatus("Queued — fetching " + name + "…", "");
           showQueued(region, name, d);
         }
-        startPoll(region, name, since, refreshingCached);
+        startQueueWatch(region, name, sinceTs, !!cachedShow, d);
         return;
       }
+      if (cachedShow) { setPullStatus("Graded " + cachedShow.gems.length + " gems.", ""); return; }
       // Anything else: an error / rate-limit / busy / monthly-budget message.
       var msg = d.error || "Worker returned an error.";
       setPullStatus(msg, "err");
@@ -1385,13 +1384,24 @@ presetToggleHtml(data) +
   }
 
   // ---------------- queue: show "queued", poll until the drain caches it ----------------
-  var grPollTimer = null;
-  function stopPoll() { if (grPollTimer) { clearInterval(grPollTimer); grPollTimer = null; } }
-  // "Position 3 of 12 · ~2 min" from the worker's queue status (empty if not provided).
+  var grPollTimer = null, grPaintTimer = null;
+  function stopPoll() {
+    if (grPollTimer) { clearTimeout(grPollTimer); grPollTimer = null; }
+    if (grPaintTimer) { clearInterval(grPaintTimer); grPaintTimer = null; }
+  }
+  function fmtEta(sec) {
+    if (sec == null) return "";
+    if (sec < 60) return "~" + Math.max(1, Math.round(sec)) + "s";
+    var m = Math.floor(sec / 60), s = Math.round(sec % 60);
+    return "~" + m + "m" + (s ? (" " + s + "s") : "");
+  }
+  // "Position 3 of 12 · ~50s" from a status object {position, total, drainPerMin}. ETA derives from
+  // the drain rate (default 6/min = 1 every 10s), so the local countdown and the server agree.
   function queueLine(d) {
-    if (!d || !(d.position > 0) || !(d.total > 0)) return "";
-    var eta = (d.etaMinutes > 0) ? (" · ~" + d.etaMinutes + " min") : "";
-    return (d.position === 1 ? "Next up" : ("Position " + d.position + " of " + d.total)) + eta;
+    if (!d || !(d.position > 0)) return "";
+    var perMin = d.drainPerMin || 6;
+    var head = d.position <= 1 ? "Next up" : ("Position " + d.position + " of " + Math.max(d.total || d.position, d.position));
+    return head + " · " + fmtEta(Math.ceil(d.position / perMin * 60));
   }
   function clearRefreshBanner() { var b = $("gr-refresh-banner"); if (b) b.innerHTML = ""; }
   // Refresh of a CACHED character: a thin bar ABOVE the (still-shown) cached loadout carrying the
@@ -1417,45 +1427,69 @@ presetToggleHtml(data) +
       '<div class="gr-queued-sub">Fetching it now — this updates automatically when it’s ready. <span id="gr-queued-timer">checking…</span></div></div>' +
       '</div></div>';
   }
-  function startPoll(region, name, since, cachedRefresh) {
+  // Queue watch: a LOCAL position countdown (drops ~1 per 60/perMin seconds — the drain rate, no
+  // server cost) PLUS a server RE-SYNC of the true position every 30s, or every 10s once you're near
+  // the front (< 3 in line). The re-sync also detects completion. `st` = the worker's initial
+  // {position,total,etaMinutes,drainPerMin}; `cachedRefresh` routes UI to the banner vs the panel.
+  function startQueueWatch(region, name, since, cachedRefresh, st) {
     stopPoll();
     since = since || 0;
-    var started = Date.now(), MAX_MS = 5 * 60 * 1000;
-    // update whichever progress line is on screen (the refresh banner's, or the queued panel's)
+    var perMin = (st && st.drainPerMin) || 6;
+    var pos = (st && st.position > 0) ? st.position : null;   // last server-known position
+    var total = (st && st.total) || null;
+    var syncAt = Date.now();                                  // when `pos` was last server-synced
+    var started = Date.now(), MAX_MS = 10 * 60 * 1000;
     function tick(html) { var t = $(cachedRefresh ? "gr-rb-timer" : "gr-queued-timer"); if (t) t.innerHTML = html; }
-    grPollTimer = setInterval(function () {
+    function curPos() {                                       // local countdown since the last sync
+      if (pos == null) return null;
+      return Math.max(1, pos - Math.floor((Date.now() - syncAt) / 1000 / (60 / perMin)));
+    }
+    function paint() {
+      var p = curPos();
+      var el = $(cachedRefresh ? "gr-rb-pos" : "gr-queued-pos");
+      if (el) el.innerHTML = (p == null) ? "checking…" : queueLine({ position: p, total: total, drainPerMin: perMin });
+    }
+    grPaintTimer = setInterval(paint, 1000);                  // 1) free local display tick
+
+    function scheduleSync() {                                 // 2) adaptive server re-sync
+      var p = curPos();
+      grPollTimer = setTimeout(doSync, (p != null && p < 3) ? 10000 : 30000);
+    }
+    function doSync() {
       if (Date.now() - started > MAX_MS) {
         stopPoll();
-        tick(cachedRefresh ? "still refreshing — try again in a bit." : "still queued — check back in a bit, or search again.");
+        tick(cachedRefresh ? "still refreshing — try again later." : "still queued — check back later, or search again.");
         return;
       }
       var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
-      var url = WORKER_URL.replace(/\/+$/, "") + "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) + "&queue=1" + (k ? "&k=" + encodeURIComponent(k) : "");
+      var url = WORKER_URL.replace(/\/+$/, "") + "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) + "&queue=1&pos=1" + (k ? "&k=" + encodeURIComponent(k) : "");
       fetch(url).then(function (resp) { return resp.json().then(function (data) { return { ok: resp.ok, data: data }; }); }).then(function (r) {
         var d = r.data || {};
         var hasGems = Array.isArray(d.gems) && d.gems.length;
-        // Done only when the cache is genuinely NEWER than what we're replacing. A refresh of a
-        // cached character returns the STALE cache on this poll until the drain re-fetches it —
-        // rendering that would look like the refresh did nothing, so we keep waiting instead.
+        // Done only once the cache is genuinely NEWER than what we're replacing (a stale-cache hit
+        // returns the same pulledAt until the drain re-fetches it).
         if ((d.cached || hasGems) && (d.pulledAt || 0) > since) {
           stopPoll(); clearRefreshBanner();
           lastLoadout = d; grPreset = "raid"; grMode = defaultModeFor(d);
           var rb = $("gr-pull-refresh"); if (rb) rb.style.display = "";
           setPullStatus("Graded " + ((d.gems || []).length) + " gems.", "");
           renderLoadout(d);
-        } else if (d.queued || d.cached || hasGems) {
-          // still working: genuinely queued (show live position) OR a stale-cache hit mid-refresh.
-          // cheap poll omits position; keep the one shown on enqueue.
-          if (d.queued && d.position) { var p = $(cachedRefresh ? "gr-rb-pos" : "gr-queued-pos"); if (p) p.innerHTML = queueLine(d); }
-          tick("checking… (" + Math.round((Date.now() - started) / 1000) + "s)");
-        } else if (!r.ok || (d.error && !hasGems)) {
-          stopPoll(); clearRefreshBanner();
-          setPullStatus(d.error || "Lookup failed.", "err");
-          // on a cached refresh keep the cached loadout on screen; only the full panel shows the error
-          if (!cachedRefresh) $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(d.error || "Lookup failed.") + '</div></div>';
+          return;
         }
-      }).catch(function () { /* transient — keep polling */ });
-    }, 8000);
+        if (d.queued && d.position > 0) {                      // re-sync true position, reset countdown
+          pos = d.position; total = d.total || total; if (d.drainPerMin) perMin = d.drainPerMin; syncAt = Date.now();
+        } else if (!d.queued && !hasGems && (!r.ok || d.error)) {
+          stopPoll(); clearRefreshBanner();
+          setPullStatus(d.error || "Lookup ended.", "err");
+          if (!cachedRefresh) $("gr-result").innerHTML = '<div class="panel"><div class="gr-status err">' + esc(d.error || "Lookup ended.") + '</div></div>';
+          return;
+        }
+        paint();
+        scheduleSync();
+      }).catch(function () { scheduleSync(); /* transient — keep watching */ });
+    }
+    paint();
+    scheduleSync();
   }
 
   // The note under the pull buttons. Cached lookups are free & unlimited; NEW characters are paced to
