@@ -1099,6 +1099,62 @@
     refreshPlanCards();
   };
 
+  // ---- "where does this loadout sit?" — rank vs every cached character ----
+  // Fetched once per session (compact fmt=2 snapshot; same endpoint the leaderboard uses)
+  // and reused across re-grades and axis flips. Decoder kept in lockstep with
+  // decodeSnapshotV2 in leaderboard.js (duplicated because the leaderboard is lazy-loaded).
+  var fieldSnapPromise = null;
+  var FR_SLOT = { 1: "Order Sun", 2: "Order Moon", 3: "Order Star", 4: "Chaos Sun", 5: "Chaos Moon", 6: "Chaos Star" };
+  function decodeFieldSnapshot(data) {
+    if (!data || data.v !== 2) return (data && data.characters) || [];
+    var classes = data.classes || [], effects = data.effects || [];
+    function eff(i) { return (typeof i === "number" && i > 0) ? (effects[i - 1] || null) : null; }
+    return (data.characters || []).map(function (a) {
+      return { region: a[0], name: a[1], class: (a[3] != null && a[3] >= 0) ? classes[a[3]] : null,
+        gems: (a[5] || []).map(function (t) {
+          var core = t[0] | 0;
+          return { slot: core ? FR_SLOT[core] : null, coreBase: core ? 10000 + core : null,
+            baseCost: t[1], gemType: t[2] ? "chaos" : "order", willpowerLevel: t[3], orderLevel: t[4],
+            effect1: eff(t[5]), effect1Level: t[6], effect2: eff(t[7]), effect2Level: t[8] };
+        }) };
+    });
+  }
+  function getFieldSnapshot() {
+    if (!fieldSnapPromise && WORKER_URL) {
+      var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
+      fieldSnapPromise = fetch(WORKER_URL.replace(/\/+$/, "") + "/?list=1&fmt=2" + (k ? "&k=" + encodeURIComponent(k) : ""))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(decodeFieldSnapshot)
+        .catch(function () { fieldSnapPromise = null; return null; });
+    }
+    return fieldSnapPromise || Promise.resolve(null);
+  }
+  function fillFieldRank(data, sup, rankDmg) {
+    if (rankDmg == null || !(A && A.gridDamage && A.validateConfig)) return;
+    getFieldSnapshot().then(function (chars) {
+      var el = $("gr-fieldrank"); // re-query: the pane may have re-rendered while fetching
+      if (!chars || !chars.length || !el) return;
+      var axis = sup ? "support" : "dps";
+      var better = 0, total = 0, classBetter = 0, classTotal = 0;
+      for (var i = 0; i < chars.length; i++) {
+        var g = (chars[i].gems || []).filter(function (x) { return A.validateConfig(x).valid; });
+        if (!g.length) continue;
+        var d = A.gridDamage(g, axis);
+        total++;
+        if (d > rankDmg) better++;
+        if (data.class && chars[i].class === data.class) { classTotal++; if (d > rankDmg) classBetter++; }
+      }
+      if (!total) return;
+      var bits = [];
+      if (data.class && classTotal >= 5) {
+        var pct = Math.max(1, Math.ceil(100 * (classBetter + 1) / (classTotal + 1)));
+        bits.push("Top " + pct + "% of " + esc(data.class) + "s (#" + (classBetter + 1) + " of " + classTotal + ")");
+      }
+      bits.push("#" + (better + 1) + " of " + total.toLocaleString() + " tracked characters" + (sup ? " (support axis)" : ""));
+      el.textContent = bits.join(" · ");
+    }).catch(function () {});
+  }
+
   function renderLoadout(data) {
     applyAxisTheme();
     var out = $("gr-result");
@@ -1132,6 +1188,7 @@
     var sumDmg = gridOk
       ? (sup ? A.gridDamage(valid, "support") / 3 : A.gridDamage(valid, "dps"))
       : valid.reduce(function (s, x) { return s + gRel(x); }, 0); // legacy-model fallback: a per-gem SUM, not the true grid total — flagged in the UI below
+    var rankDmg = gridOk ? (sup ? sumDmg * 3 : sumDmg) : null;    // RAW gridDamage for rank-vs-field (same scale the comparison loop uses)
     var avgGrade = valid.length ? sumGrade / valid.length : 0;
     var avgRank = rankFromGrade(avgGrade);
     var totalLabel = sup ? "Total % party dmg" : "Total % dmg";
@@ -1159,7 +1216,8 @@ presetToggleHtml(data) +
 '    <div class="stat"><span class="k">Avg grade</span><span class="v" style="color:var(--axis,var(--accent))">' + avgGrade.toFixed(1) + '</span></div>' +
 '    <div class="stat"><span class="k">Avg rank</span><span class="v">' + rankBadge(avgRank) + '</span></div>' +
 '    <div class="stat"><span class="k">' + totalLabel + (gridOk ? '' : ' <span title="Grid-total model unavailable — showing the per-gem sum, which overstates the true total. Hard-refresh to load the latest model.">⚠ estimate</span>') + '</span><span class="v" style="color:var(--axis,var(--accent))">' + sumDmg.toFixed(2) + '%</span></div>' +
-'  </div>';
+'  </div>' +
+'  <div class="gr-fieldrank" id="gr-fieldrank" style="margin-top:6px;font-size:12px;opacity:.75"></div>';
     if (data.warnings && data.warnings.length) {
       html += '<div class="gr-warn">' + data.warnings.length + ' parser warning(s): ' + esc(data.warnings.slice(0, 4).join("; ")) + (data.warnings.length > 4 ? "…" : "") + '</div>';
     }
@@ -1197,6 +1255,8 @@ presetToggleHtml(data) +
         else setGrMode(btn.getAttribute("data-axis"));
       });
     });
+
+    fillFieldRank(data, sup, rankDmg); // async: fills #gr-fieldrank once the field snapshot arrives
 
     // Weakest-3 rows scroll to + flash their gem card
     Array.prototype.forEach.call(out.querySelectorAll(".wk-row[data-target]"), function (row) {
@@ -1333,6 +1393,7 @@ presetToggleHtml(data) +
     var region = $("gr-region").value;
     var name = ($("gr-name").value || "").trim();
     if (!name) { setPullStatus("Enter a character name.", "err"); return; }
+    try { localStorage.setItem("ag_gr_last", JSON.stringify({ region: region, name: name })); } catch (e) {} // prefill next visit
     // For a refresh of the CURRENTLY-shown character, remember its pulledAt so the queue poll waits
     // for genuinely NEWER data instead of re-rendering the same stale cache the refresh is replacing.
     // Refreshing the character that's CURRENTLY shown (cached)? Keep its loadout on screen with a
@@ -1649,6 +1710,15 @@ presetToggleHtml(data) +
     var elTab = $("tab-grader");
     if (!elTab) return;
     elTab.innerHTML = tabMarkup();
+
+    // Prefill the last-pulled character (saved on every pull) so a return visit is one click.
+    try {
+      var last = JSON.parse(localStorage.getItem("ag_gr_last") || "null");
+      if (last && last.name && $("gr-name") && !$("gr-name").value) {
+        $("gr-name").value = last.name;
+        if (REGIONS.indexOf(last.region) !== -1) $("gr-region").value = last.region;
+      }
+    } catch (e) {}
 
     // pull-mode availability note (source-aware: lostark.bible / lopec.kr by region)
     var note = $("gr-pull-note");

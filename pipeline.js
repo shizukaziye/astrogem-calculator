@@ -109,6 +109,19 @@
   var GPD = null;           // currently-selected gpd (set after data loads)
   var GPD_LIST = [];        // gpds present in DATA.cells, ascending
 
+  // Remember the bar's settings across visits (saved by the setters below; GPD is applied
+  // after data loads since the tier list comes from the bake).
+  function plSaveState() {
+    try { localStorage.setItem("ag_pl_state", JSON.stringify({ axis: AXIS, region: REGION, roster: ROSTER, gpd: GPD })); } catch (e) {}
+  }
+  var PL_SAVED = null;
+  try { PL_SAVED = JSON.parse(localStorage.getItem("ag_pl_state") || "null"); } catch (e) {}
+  if (PL_SAVED) {
+    if (PL_SAVED.axis === "support" || PL_SAVED.axis === "dps") AXIS = PL_SAVED.axis;
+    if (PL_SAVED.region === "kr" || PL_SAVED.region === "global") REGION = PL_SAVED.region;
+    if (PL_SAVED.roster === "rb" || PL_SAVED.roster === "nrb") ROSTER = (REGION === "kr") ? "nrb" : PL_SAVED.roster;
+  }
+
   // ---------------------------------------------------------------------------
   // formatting
   // ---------------------------------------------------------------------------
@@ -1326,7 +1339,8 @@
       GPD_LIST = gpdsInData();
       if (GPD == null && GPD_LIST.length) {
         // default to 1.5M if present, else the middle tier
-        GPD = GPD_LIST.indexOf(1500000) >= 0 ? 1500000 : GPD_LIST[Math.floor(GPD_LIST.length / 2)];
+        GPD = (PL_SAVED && GPD_LIST.indexOf(PL_SAVED.gpd) >= 0) ? PL_SAVED.gpd
+          : (GPD_LIST.indexOf(1500000) >= 0 ? 1500000 : GPD_LIST[Math.floor(GPD_LIST.length / 2)]);
       }
       refreshInputs();
       renderBody();
@@ -1338,12 +1352,14 @@
   // ---------------------------------------------------------------------------
   window.__plSetGpd = function (g) {
     GPD = g;
+    plSaveState();
     var btns = document.querySelectorAll("#pl-gpd-row .gpd-btn");
     for (var i = 0; i < btns.length; i++) btns[i].classList.toggle("active", Number(btns[i].dataset.gpd) === g);
     renderBody();
   };
   window.__plSetRoster = function (rb) {
     ROSTER = rb;
+    plSaveState();
     var a = document.getElementById("pl-r-nrb"), b = document.getElementById("pl-r-rb");
     if (a) a.classList.toggle("active", rb === "nrb");
     if (b) b.classList.toggle("active", rb === "rb");
@@ -1355,6 +1371,7 @@
     var inp0 = document.getElementById("pl-inputs");
     var wasOpen = !!(inp0 && inp0.classList.contains("pl-open"));   // keep the bar open across the rebuild (mobile)
     AXIS = (ax === "support") ? "support" : "dps";
+    plSaveState();
     DATA = DATA_CACHE[AXIS] || null;   // switch to the cached grid (or null while it loads)
     refreshInputs();                   // flip the DPS/Support active state in the bar
     renderBody();                      // clear stale table (loading note if not cached yet)
@@ -1366,6 +1383,7 @@
     var wasOpen = !!(inp0 && inp0.classList.contains("pl-open"));   // keep the bar open across the rebuild (mobile)
     REGION = (rg === "kr") ? "kr" : "global";
     if (REGION === "kr") ROSTER = "nrb";   // KR has no roster-bound gems
+    plSaveState();
     refreshInputs();   // rebuild the bar (region/roster buttons, RB hidden in KR)
     renderBody();      // recompute the grid with the region's fusion economics
     if (wasOpen) { var inp1 = document.getElementById("pl-inputs"); if (inp1) inp1.classList.add("pl-open"); }
