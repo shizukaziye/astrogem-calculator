@@ -149,36 +149,82 @@
     "아군 공격 강화": "Ally Attack Enh.", "아군 피해 강화": "Ally Damage Enh.", "낙인력": "Brand Power"
   };
   const KR_SLOT = { order: ["Order Sun", "Order Moon", "Order Star"], chaos: ["Chaos Sun", "Chaos Moon", "Chaos Star"] };
+  // lopec core-name prefix -> the same core id lostark.bible uses, so KR gems carry a
+  // real coreBase and the model's per-core grid math groups them correctly.
+  const KR_CORE_ID = {
+    "질서의 해": 10001, "질서의 달": 10002, "질서의 별": 10003,
+    "혼돈의 해": 10004, "혼돈의 달": 10005, "혼돈의 별": 10006
+  };
 
   function parseLopecGems(html) {
     const u = html.replace(/\\"/g, '"');
     const gemRe = /use_13_(\d+)\.png","requiredWillpower":(\d+),"orderChaosPoint":(\d+),"effects":\[(.*?)\]\}/g;
     const effRe = /\{"name":"([^"]*)","level":(\d+)/g;
-    const gems = [], warnings = [], counts = { order: 0, chaos: 0 };
-    let m;
-    while ((m = gemRe.exec(u)) !== null) {
+    const gems = [], warnings = [];
+
+    function pushGem(m, coreBase, slot) {
       const icon = parseInt(m[1], 10), rel = icon - 202;
-      if (rel < 0 || rel > 5) { warnings.push("unexpected gem icon " + icon); continue; }
+      if (rel < 0 || rel > 5) { warnings.push("unexpected gem icon " + icon); return; }
       const baseCost = 8 + (rel % 3);
       const gemType = rel < 3 ? "order" : "chaos";
       const effs = [];
       let e;
+      effRe.lastIndex = 0;
       while ((e = effRe.exec(m[4])) !== null) {
         const en = KR_EFFECT[e[1]];
         if (!en) warnings.push("unknown KR effect '" + e[1] + "'");
         effs.push({ name: en || ("Effect:" + e[1]), level: parseInt(e[2], 10) });
       }
       const e1 = effs[0] || {}, e2 = effs[1] || {};
-      const slot = KR_SLOT[gemType][Math.floor(counts[gemType] / 4)] || (gemType + " gem");
-      counts[gemType]++;
       gems.push({
-        slot: slot, coreBase: null,
+        slot: slot, coreBase: coreBase,
         baseCost: baseCost, gemType: gemType,
         willpowerLevel: baseCost - parseInt(m[2], 10),
         orderLevel: parseInt(m[3], 10),
         effect1: e1.name, effect1Level: e1.level,
         effect2: e2.name, effect2Level: e2.level
       });
+    }
+
+    // Real core structure: six RSC objects, each "name":"질서의 해 코어 : …" … "gem":[…].
+    // Parse per-core so every gem gets its true coreBase (10001-10006); the old flat scan
+    // guessed cores positionally and left coreBase null, which collapsed all KR gems into
+    // one bucket in the grid totals and inflated KR damage.
+    const coreRe = /"name":"(질서의 해|질서의 달|질서의 별|혼돈의 해|혼돈의 달|혼돈의 별)[^"]*"/g;
+    const sections = [];
+    let cm;
+    while ((cm = coreRe.exec(u)) !== null) sections.push({ name: cm[1], at: cm.index });
+    for (let s = 0; s < sections.length; s++) {
+      const to = (s + 1 < sections.length) ? sections[s + 1].at : u.length;
+      const gemAt = u.indexOf('"gem":[', sections[s].at);
+      if (gemAt === -1 || gemAt >= to) continue;
+      let depth = 0, end = -1;
+      for (let k = gemAt + 6; k < to; k++) {
+        const c = u[k];
+        if (c === "[") depth++;
+        else if (c === "]") { depth--; if (depth === 0) { end = k + 1; break; } }
+      }
+      if (end === -1) continue;
+      const coreBase = KR_CORE_ID[sections[s].name];
+      const seg = u.slice(gemAt, end);
+      gemRe.lastIndex = 0;
+      let m;
+      while ((m = gemRe.exec(seg)) !== null) pushGem(m, coreBase, SLOT_LABEL[coreBase]);
+    }
+
+    // Fallback (layout change): flat scan with positional slots, no coreBase.
+    if (!gems.length) {
+      const counts = { order: 0, chaos: 0 };
+      let m;
+      gemRe.lastIndex = 0;
+      while ((m = gemRe.exec(u)) !== null) {
+        const icon = parseInt(m[1], 10), rel = icon - 202;
+        const gemType = (rel >= 0 && rel < 3) ? "order" : "chaos";
+        const slot = KR_SLOT[gemType][Math.floor(counts[gemType] / 4)] || (gemType + " gem");
+        counts[gemType]++;
+        pushGem(m, null, slot);
+      }
+      if (gems.length) warnings.push("lopec core headers not found — cores assigned positionally");
     }
     return { gems: gems, warnings: warnings };
   }

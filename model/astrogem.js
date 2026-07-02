@@ -414,6 +414,22 @@
   // 0.0016 × points-above-17 — and the 6 cores MULTIPLY (1.0048⁶≈2.9% for a maxed grid).
   // Diminishing returns + the 17-point core floor fall out naturally. NOTE: per-gem grades use
   // the lvl-30 marginal yardstick, so the per-gem numbers do NOT sum to this — by design.
+  // Per-core grouping key for the grid totals. lostark.bible gems carry the core id
+  // directly (coreBase 10001-10006); lopec.kr (KR) records cached before 2026-07 have
+  // coreBase:null and only the slot LABEL — map it back to the core id so KR grids
+  // group per-core instead of collapsing into one bucket (which applied the 17-point
+  // floor ONCE to ~110 points and inflated KR totals by >10% damage). Unknown labels
+  // still group BY LABEL (correct split, average support rate); only truly anonymous
+  // gems share bucket 0.
+  var SLOT_TO_CORE = {
+    "Order Sun": 10001, "Order Moon": 10002, "Order Star": 10003,
+    "Chaos Sun": 10004, "Chaos Moon": 10005, "Chaos Star": 10006
+  };
+  function coreKeyOf(g) {
+    if (g.coreBase != null) return g.coreBase;
+    if (g.slot != null && SLOT_TO_CORE[g.slot] != null) return SLOT_TO_CORE[g.slot];
+    return (g.slot != null) ? g.slot : 0;
+  }
   function gridDamage(gems, axis) {
     if (axis === "support") return supportGridDamage(gems);
     var B = STAT_BASELINES;
@@ -422,7 +438,7 @@
       var g = gems[i];
       if (lv[g.effect1] != null) lv[g.effect1] += g.effect1Level || 0;
       if (lv[g.effect2] != null) lv[g.effect2] += g.effect2Level || 0;
-      var cb = g.coreBase || 0; core[cb] = (core[cb] || 0) + (g.orderLevel || 0);
+      var cb = coreKeyOf(g); core[cb] = (core[cb] || 0) + (g.orderLevel || 0);
     }
     function buk(s, lvl) { return Math.log((1 + s.other + lvl * (s.gridAdd / s.levels)) / (1 + s.other)); }
     var d = buk(B.attackPower, lv["Attack Power"]) + buk(B.additionalDamage, lv["Additional Damage"]) + buk(B.bossDamage, lv["Boss Damage"]);
@@ -439,7 +455,7 @@
     for (var i = 0; i < gems.length; i++) {
       var g = gems[i];
       eff += supportEffectScore(g.effect1, g.effect1Level) + supportEffectScore(g.effect2, g.effect2Level);
-      var cb = g.coreBase || 0;
+      var cb = coreKeyOf(g);
       if (!core[cb]) core[cb] = { pts: 0, rate: Math.exp(supportOrderValueForCore(cb) / 100) - 1 };
       core[cb].pts += g.orderLevel || 0;
     }
@@ -1143,6 +1159,7 @@
     valueBounds: valueBounds,
     gridDamage: gridDamage,
     gridQuality: gridQuality,
+    coreKeyOf: coreKeyOf,
     grade: grade,
     gradeBounds: gradeBounds,
     gradeToScore: gradeToScore,

@@ -95,7 +95,7 @@
   // 4.25 floor; support subtracts the per-CORE order 4.25 floor, shown ÷3 (per-ally).
   function gRel(cfg) {
     if (isSupport()) {
-      var ov = (A && A.supportOrderValueForCore) ? A.supportOrderValueForCore(cfg.coreBase) : null;
+      var ov = (A && A.supportOrderValueForCore) ? A.supportOrderValueForCore(A.coreKeyOf ? A.coreKeyOf(cfg) : cfg.coreBase) : null;
       if (A && A.supportDamage && ov != null) return (A.supportDamage(cfg, ov) - 4.25 * ov) / 3;
       return supportRelValue(cfg) / 3;
     }
