@@ -215,7 +215,11 @@ function coresToGems(cores) {
 // ---- KV cache config + helpers ----
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // a cached character is "fresh" for 7 days.
 const INDEX_KEY = "__index__";               // KV key holding a JSON array of all char keys.
-const SNAPSHOT_KEY = "lb:snapshot";          // single KV key holding the whole leaderboard list (?list=1 serves it).
+const SNAPSHOT_KEY = "lb:snapshot";          // LEGACY plain-JSON snapshot key (read as a fallback, deleted after migration).
+const SNAPSHOT_GZ_KEY = "lb:snapshot:gz";    // the whole leaderboard list, stored GZIPPED. The plain JSON hit ~26.1MB at ~5k
+                                             // characters — 65KB under KV's 25MiB value cap (writes were days from silently
+                                             // failing and freezing the board). Gzip is ~1MB (≈25x headroom) and ?list=1
+                                             // serves the bytes as-is (Content-Encoding: gzip) — no 26MB parse+stringify per request.
 const DIRTY_PREFIX = "lb:dirty:";            // #3: per-character "changed since last snapshot" marker — the cron merges only these instead of re-reading every character.
 const SNAPSHOT_DIRTY_TTL_S = 7 * 24 * 3600;  // a dirty marker self-expires after 7 days (safety net; the rebuild normally clears it).
 const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent character write (plain overwrite, race-free).
@@ -236,6 +240,7 @@ const DRAIN_LOCK_KEY = "drain:lock";         // serialize active drains (cron + 
 const NOTFOUND_TTL_S = 60 * 60;              // remember not-found for 1 hour (self-corrects if it was a transient 404).
 const Q_ORDER_KEY = "q:order";               // #1: cron-maintained ordered queue snapshot — lets position/metrics/probe skip the 2 KV list()s.
 const Q_ORDER_TTL_MS = 90 * 1000;            // trust the snapshot for 90s (rewritten each active drain minute); older -> re-list for correctness.
+const Q_ORDER_IDLE_TTL_MS = 10 * 60 * 1000;  // an EMPTY snapshot short-circuits the whole cron drain for up to 10 min (enqueues invalidate it), so an idle queue costs ~1 read/min instead of writes+lists.
 const DRAIN_CONFIG_KEY = "drain:config";      // admin drain state: { mode:"run"|"off"|"probe", drainPerMin, lastProbe?, interval? }. mode!="run" gates enqueues + drives the "lookups temporarily unavailable" notice. Set via ?control (owner-only).
 const DRAIN_MODES = ["run", "off", "probe"]; // run = draining; off = frozen (no upstream requests); probe = paused but periodically probing lostark.bible to auto-resume on recovery.
 const UNAVAILABLE_MSG = "Character lookups are temporarily unavailable";
@@ -558,12 +563,48 @@ async function buildCharacterList(env) {
   return characters;
 }
 
-// GET /?list=1 — leaderboard list. Serves the snapshot key in a SINGLE read and NEVER rebuilds
-// on demand: the snapshot is maintained server-side by the cron (rebuildSnapshotIfChanged), so
-// reads are decoupled from how often the board is opened. Empty until the first cron build.
-async function handleList(env) {
+// gzip helpers for the snapshot (Workers-native CompressionStream — no library).
+async function gzipString(s) {
+  const cs = new CompressionStream("gzip");
+  return new Response(new Response(s).body.pipeThrough(cs)).arrayBuffer();
+}
+async function gunzipToJson(buf) {
+  const ds = new DecompressionStream("gzip");
+  return new Response(new Response(buf).body.pipeThrough(ds)).json();
+}
+// Read the snapshot object for MUTATION (the incremental rebuild): gz first, legacy plain fallback.
+async function readSnapshotObj(env) {
+  try {
+    const gz = await env.CHARS.get(SNAPSHOT_GZ_KEY, "arrayBuffer");
+    if (gz && gz.byteLength) return await gunzipToJson(gz);
+  } catch (e) {}
+  return kvGetJson(env, SNAPSHOT_KEY); // legacy (pre-gz) — read once, migrated on the next rebuild
+}
+
+// GET /?list=1 — leaderboard list. Serves the STORED GZIP BYTES as-is in a single read
+// (Content-Encoding: gzip; the edge transparently decompresses for non-gzip clients), so a
+// request costs one KV read and zero JSON work. NEVER rebuilds on demand: the snapshot is
+// maintained server-side by the cron (rebuildSnapshotIfChanged). Empty until the first build.
+async function handleList(env, acceptEncoding) {
   if (!env || !env.CHARS) return json({ characters: [] }, 200);
-  const snap = await kvGetJson(env, SNAPSHOT_KEY);
+  try {
+    const gz = await env.CHARS.get(SNAPSHOT_GZ_KEY, "arrayBuffer");
+    if (gz && gz.byteLength) {
+      if (!/gzip/i.test(acceptEncoding || "")) {
+        // rare non-gzip client (plain curl, odd scripts): decompress for them — the edge does NOT.
+        return new Response(new Response(gz).body.pipeThrough(new DecompressionStream("gzip")), {
+          status: 200,
+          headers: Object.assign({ "Content-Type": "application/json" }, corsHeaders())
+        });
+      }
+      return new Response(gz, {
+        status: 200,
+        encodeBody: "manual", // body is ALREADY gzip — without this the runtime re-encodes it (double-gzip) to honor the header
+        headers: Object.assign({ "Content-Type": "application/json", "Content-Encoding": "gzip" }, corsHeaders())
+      });
+    }
+  } catch (e) {}
+  const snap = await kvGetJson(env, SNAPSHOT_KEY); // legacy fallback until the first gz rebuild
   const characters = (snap && Array.isArray(snap.characters)) ? snap.characters : [];
   return json({ characters: characters, builtAt: (snap && snap.builtAt) || 0 }, 200);
 }
@@ -575,13 +616,15 @@ async function handleList(env) {
 // mid-build keep their marker (only the ones we listed are cleared), so nothing is lost.
 async function rebuildSnapshotIfChanged(env) {
   if (!env || !env.CHARS) return;
+  // Throttle FIRST (one cheap read): inside the 30-min window the outcome is "return" whether or
+  // not anything is dirty, so don't pay the dirty-prefix list() every minute (~43k lists/mo saved).
+  const builtAt = parseInt((await env.CHARS.get(BUILTAT_KEY)) || "0", 10);
+  if (builtAt > 0 && (Date.now() - builtAt) < SNAPSHOT_MIN_INTERVAL_MS) return; // throttle: rebuild at most ~every 30 min
   let dirty;
   try { dirty = await env.CHARS.list({ prefix: DIRTY_PREFIX }); } catch (e) { return; }
-  const builtAt = parseInt((await env.CHARS.get(BUILTAT_KEY)) || "0", 10);
   if (builtAt > 0 && !dirty.keys.length) return;                                // nothing changed since the last build
-  if (builtAt > 0 && (Date.now() - builtAt) < SNAPSHOT_MIN_INTERVAL_MS) return; // throttle: rebuild at most ~every 30 min
   const startedAt = Date.now();
-  const snap = await kvGetJson(env, SNAPSHOT_KEY);
+  const snap = await readSnapshotObj(env);
   let characters;
   if (snap && Array.isArray(snap.characters) && snap.characters.length) {
     // INCREMENTAL: merge only the changed characters into the existing snapshot (upsert by region:name).
@@ -601,7 +644,9 @@ async function rebuildSnapshotIfChanged(env) {
     characters = await buildCharacterList(env);                                  // first build -> full read
   }
   if (!characters.length) return;
-  await env.CHARS.put(SNAPSHOT_KEY, JSON.stringify({ builtAt: startedAt, characters: characters }));
+  const gzBytes = await gzipString(JSON.stringify({ builtAt: startedAt, characters: characters }));
+  await env.CHARS.put(SNAPSHOT_GZ_KEY, gzBytes);
+  try { await env.CHARS.delete(SNAPSHOT_KEY); } catch (e) {} // drop the 26MB legacy plain copy once gz exists
   await env.CHARS.put(BUILTAT_KEY, String(startedAt));
   // clear ONLY the markers we listed (any written mid-build keep theirs -> picked up next rebuild).
   await Promise.all(dirty.keys.map(function (k) { return env.CHARS.delete(k.name).catch(function () {}); }));
@@ -713,6 +758,14 @@ async function drainQueue(env) {
   }
 
   if (used >= MONTHLY_CHAR_BUDGET) { run.stop = "budget"; run.ms = 0; await appendDrainLog(env, run); return; }
+  // IDLE SHORT-CIRCUIT: a recently-confirmed-EMPTY q:order snapshot means nothing to drain — return
+  // after ONE read instead of paying the lock write + 2 list()s + snapshot write every idle minute
+  // (~130k writes+deletes and ~86k lists per month at rest). Trusted for Q_ORDER_IDLE_TTL_MS; a fresh
+  // enqueue DELETES q:order (see enqueueChar) so a new character defeats this immediately.
+  try {
+    const snap0 = await kvGetJson(env, Q_ORDER_KEY);
+    if (snap0 && Array.isArray(snap0.items) && !snap0.items.length && Date.now() - (snap0.ts || 0) < Q_ORDER_IDLE_TTL_MS) return;
+  } catch (e) {}
   // serialize active drains (the cron + enqueue-kicks) so two never overlap and double-fetch lostark.bible.
   try { if (await env.CHARS.get(DRAIN_LOCK_KEY)) return; await env.CHARS.put(DRAIN_LOCK_KEY, "1", { expirationTtl: 55 }); } catch (e) {}
   const perRun = cfg.drainPerMin;                 // admin-set rate (chars per cron run = per minute)
@@ -884,6 +937,7 @@ async function enqueueChar(env, region, name, premium, wantPos, ctx) {
       return json({ error: "We've reached this month's character-caching budget — new lookups resume next month. Cached characters and the leaderboard still work normally.", monthlyBudget: true }, 503);
     }
     try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
+    try { await env.CHARS.delete(Q_ORDER_KEY); } catch (e) {} // invalidate the queue snapshot: defeats the cron's empty-queue short-circuit AND stops position reads trusting a stale (pre-this-enqueue) order
     if (ctx && ctx.waitUntil) ctx.waitUntil(kickFetch(env, region, name)); // KICK: fetch+cache THIS char now, directly (no list() -> immune to KV list lag). The cron drainQueue does the full paced drain.
     return queuedResponse(env, region, name, premium ? "premium" : "free", { justQueued: true }, wantPos);
   }
@@ -957,7 +1011,7 @@ export default {
         const l = await env.LB_THROTTLE.limit({ key: ip });
         if (!l.success) return json({ error: "The leaderboard refreshes about every 10 minutes — please wait a moment.", rateLimited: true, retryAfterMs: 20000, lbThrottle: true }, 429);
       }
-      return handleList(env);
+      return handleList(env, request.headers.get("Accept-Encoding"));
     }
 
     // Owner-only QUEUE METRICS (gated by the token): backlog counts, the queued list in drain order

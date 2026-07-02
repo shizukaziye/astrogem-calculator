@@ -307,7 +307,7 @@ All are `GET`. "Owner" = requires `?k=<gate token>`.
 | `nf:<key>` | "Not found / no Ark Grid" marker + reason (TTL 1h). |
 | `usage:drained` | `{ month, count }` — characters cached this month (budget guard). |
 | `lb:lastwrite` / `lb:builtat` | Timestamps: last character write / last snapshot rebuild. |
-| `lb:snapshot` | The prebuilt leaderboard list (`?list=1` serves it). |
+| `lb:snapshot:gz` | The prebuilt leaderboard list, stored **gzipped** (`?list=1` serves the bytes as-is with `Content-Encoding: gzip`). The plain-JSON predecessor (`lb:snapshot`) outgrew KV's 25MiB value cap at ~5k characters and its writes silently failed — gzip is ~1.2MB (~25× headroom). |
 | `lb:dirty:<key>` | Per-character "changed since last snapshot" marker (incremental rebuild). |
 | `__index__` | JSON array of every cached character key. |
 
