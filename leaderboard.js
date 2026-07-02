@@ -274,7 +274,7 @@
 '    #tab-leaderboard .lc-ilvl{width:0 !important}#tab-leaderboard .lb-ilvl{padding-left:0 !important;padding-right:0 !important}' +
 '    #tab-leaderboard .lb-region{display:none}' +
 '    #tab-leaderboard img.lb-class-icon{width:16px;height:16px;margin-right:4px}' +
-'    #tab-leaderboard .lc-star{width:26px !important}#tab-leaderboard .lc-rank{width:28px !important}#tab-leaderboard .lc-grade{width:54px !important}#tab-leaderboard .lc-dmg{width:40px !important}' +
+'    #tab-leaderboard .lc-star{width:26px !important}#tab-leaderboard .lc-rank{width:28px !important}#tab-leaderboard .lc-grade{width:54px !important}#tab-leaderboard .lc-dmg{width:58px !important}' + // 58px: two-digit totals like "16.44%" clipped at the old 40px
 '    #tab-leaderboard td,#tab-leaderboard th{padding-left:3px;padding-right:3px}' +
 '  }' +
 '  #tab-leaderboard .lb-ilvl{color:var(--text);font-weight:700;font-variant-numeric:tabular-nums}' +

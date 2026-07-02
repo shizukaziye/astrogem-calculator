@@ -73,3 +73,17 @@ button.primary:hover{filter:brightness(1.08)}
 details.method{margin-top:26px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:6px 16px}
 details.method summary{cursor:pointer;font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);font-weight:700;padding:8px 0}
 details.method p,details.method li{font-size:13px;color:var(--text)}
+
+/* ---- small screens (phones) ----
+   The tab bar is the one shell element that can push the page wider than the viewport
+   (4 tabs at desktop padding ≈ 382px): let it scroll sideways itself, never the page.
+   Wide data tables are handled per-module with overflow-x wrappers. */
+@media (max-width:700px){
+  .wrap{padding:16px 10px 60px}
+  h1{font-size:21px}
+  .grid.c2,.grid.c3{grid-template-columns:1fr}
+  .tabbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .tabbar::-webkit-scrollbar{display:none}
+  .tab{padding:9px 11px;font-size:12.5px;flex:0 0 auto;white-space:nowrap}
+  th,td{padding:5px 6px}
+}

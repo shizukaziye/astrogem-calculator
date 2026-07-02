@@ -1162,6 +1162,9 @@
       + '#tab-pipeline #pl-inputs .pl-sep{width:1px;align-self:stretch;background:var(--border);margin:2px 4px}'
       + '#tab-pipeline #pl-inputs .pl-region,#tab-pipeline #pl-inputs .pl-axis{display:inline-flex;flex-wrap:wrap;gap:7px}'
       + '#tab-pipeline .tablewrap{overflow-x:auto;max-width:100%}'
+      // sticky grade column (td only — a sticky header cell pins a confusing "-COST" fragment
+      // mid-scroll): keeps row identity in view while the wide table scrolls (phones)
+      + '#tab-pipeline .tablewrap td:first-child{position:sticky;left:0;background:var(--panel);z-index:2}'
       // ---- hover popover (appended to <body>, so NOT scoped under #tab-pipeline) ----
       + '.pl-pop{position:absolute;z-index:9999;max-width:420px;min-width:330px;background:#10131c;'
       + 'border:1px solid #39414f;border-radius:10px;box-shadow:0 10px 34px #000a,0 0 0 1px #0006;'

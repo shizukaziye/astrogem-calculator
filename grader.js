@@ -528,7 +528,7 @@
 '  #tab-grader .gr-gpd .gpd-btn{min-width:46px;text-align:center;cursor:pointer}' +
 '  #tab-grader .gr-plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px}' +
 '  @media(max-width:680px){#tab-grader .gr-plan-grid{grid-template-columns:1fr}}' +
-'  #tab-grader .gr-plan-card{border:1px solid var(--border);border-radius:10px;background:var(--panel2);overflow:hidden}' +
+'  #tab-grader .gr-plan-card{border:1px solid var(--border);border-radius:10px;background:var(--panel2);overflow:hidden;overflow-x:auto}' +
 '  #tab-grader .gr-plan-card > .hd{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--panel)}' +
 '  #tab-grader .gr-plan-card > .hd .t{font-size:13px;font-weight:800;letter-spacing:.02em}' +
 '  #tab-grader .gr-plan-card > .hd .bl{font-size:11px;color:var(--dim);font-weight:600}' +
