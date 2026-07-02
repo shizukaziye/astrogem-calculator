@@ -637,6 +637,29 @@
 
   var loadedOnce = false;
 
+  // Decode the compact ?fmt=2 snapshot (gems as 9-slot tuples, names via the payload's own
+  // string tables) back into the classic character objects the rest of this file expects.
+  // See encodeSnapshotV2 in worker/astrogem-bible.js for the format.
+  var V2_SLOT = { 1: "Order Sun", 2: "Order Moon", 3: "Order Star", 4: "Chaos Sun", 5: "Chaos Moon", 6: "Chaos Star" };
+  function decodeSnapshotV2(data) {
+    var classes = data.classes || [], effects = data.effects || [];
+    function eff(i) { return (typeof i === "number" && i > 0) ? (effects[i - 1] || null) : null; }
+    return (data.characters || []).map(function (a) {
+      var gems = (a[5] || []).map(function (t) {
+        var core = t[0] | 0;
+        return {
+          slot: core ? V2_SLOT[core] : null,
+          coreBase: core ? 10000 + core : null,
+          baseCost: t[1], gemType: t[2] ? "chaos" : "order",
+          willpowerLevel: t[3], orderLevel: t[4],
+          effect1: eff(t[5]), effect1Level: t[6],
+          effect2: eff(t[7]), effect2Level: t[8]
+        };
+      });
+      return { region: a[0], name: a[1], itemLevel: a[2], class: (a[3] != null && a[3] >= 0) ? classes[a[3]] : null, pulledAt: a[4], gems: gems };
+    });
+  }
+
   function load() {
     // Open to everyone (the Worker throttles ?list=1 against spam-refresh).
     if (!WORKER_URL) {
@@ -647,7 +670,7 @@
     }
     setStatus("Loading characters…", "");
     var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
-    var url = WORKER_URL.replace(/\/+$/, "") + "/?list=1" + (k ? "&k=" + encodeURIComponent(k) : "");
+    var url = WORKER_URL.replace(/\/+$/, "") + "/?list=1&fmt=2" + (k ? "&k=" + encodeURIComponent(k) : "");
     fetch(url).then(function (resp) {
       return resp.json().then(function (data) { return { ok: resp.ok, data: data }; });
     }).then(function (r) {
@@ -658,7 +681,7 @@
         else { setStatus(em, "err"); if (!rawChars.length) renderEmpty("Could not load the leaderboard."); }
         return;
       }
-      var chars = (r.data && r.data.characters) || [];
+      var chars = (r.data && r.data.v === 2) ? decodeSnapshotV2(r.data) : ((r.data && r.data.characters) || []);
       if (!chars.length) {
         setStatus("", "");
         renderEmpty("No characters stored yet — pull one in the Grader.");
@@ -683,10 +706,15 @@
     // Name search: filter the table by name (matches at ANY grade, so sub-B- characters
     // are findable). Empty box restores the normal board. Favorites hide while searching.
     var searchEl = $("lb-search");
+    var searchTimer = null;
     if (searchEl) searchEl.addEventListener("input", function () {
-      searchQuery = searchEl.value || "";
-      page = 1;
-      if (rawChars.length) rebuild();
+      // Debounced: rebuild() re-filters + re-renders ~6k characters, too heavy per keystroke.
+      if (searchTimer) clearTimeout(searchTimer);
+      searchTimer = setTimeout(function () {
+        searchQuery = searchEl.value || "";
+        page = 1;
+        if (rawChars.length) rebuild();
+      }, 200);
     });
 
     // DPS / Support toggle: re-filter, re-rank, and reset to page 1. The Favorites

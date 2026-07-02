@@ -220,6 +220,9 @@ const SNAPSHOT_GZ_KEY = "lb:snapshot:gz";    // the whole leaderboard list, stor
                                              // characters — 65KB under KV's 25MiB value cap (writes were days from silently
                                              // failing and freezing the board). Gzip is ~1MB (≈25x headroom) and ?list=1
                                              // serves the bytes as-is (Content-Encoding: gzip) — no 26MB parse+stringify per request.
+const SNAPSHOT_GZ2_KEY = "lb:snapshot:gz2";  // the SAME list in compact format v2 (?list=1&fmt=2): gems as 9-slot tuples with
+                                             // table-indexed names — ~10x less JSON for the browser to parse (~3MB vs 30MB).
+                                             // v1 stays alongside for stale-cached clients; both rebuilt together.
 const DIRTY_PREFIX = "lb:dirty:";            // #3: per-character "changed since last snapshot" marker — the cron merges only these instead of re-reading every character.
 const SNAPSHOT_DIRTY_TTL_S = 7 * 24 * 3600;  // a dirty marker self-expires after 7 days (safety net; the rebuild normally clears it).
 const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent character write (plain overwrite, race-free).
@@ -563,6 +566,37 @@ async function buildCharacterList(env) {
   return characters;
 }
 
+// ---- snapshot format v2 (compact) ----
+// v1 stores every gem as a ~12-key object; at ~5.8k characters that's 30MB+ of JSON the
+// browser parses on every board open. v2 packs each gem into a 9-slot tuple with
+// table-indexed strings (~10x less JSON) and is SELF-DESCRIBING: the class/effect tables
+// ride in the payload, so client and worker can never drift.
+//   { v:2, builtAt, classes:[...], effects:[...], characters:[
+//       [region, name, itemLevel, classIdx, pulledAt, [ [core,cost,type,wp,order,e1,e1v,e2,e2v], ... ]], ... ] }
+//   core: 1-6 = coreBase-10000 (Order Sun..Chaos Star), 0 = unknown; type: 0=order 1=chaos;
+//   e1/e2: 1-based index into effects[], 0 = none; classIdx: -1 = none. gemId/idx (debug-only)
+//   are dropped — the grader pulls full records per character, only the board uses this.
+const CORE_ID_BY_LABEL = {};
+for (const _cid in SLOT_LABEL) CORE_ID_BY_LABEL[SLOT_LABEL[_cid]] = parseInt(_cid, 10);
+function encodeSnapshotV2(builtAt, characters) {
+  const classes = [], classIdx = {}, effects = [], effectIdx = {};
+  function ci(n) { if (!n) return -1; if (classIdx[n] == null) { classIdx[n] = classes.length; classes.push(n); } return classIdx[n]; }
+  function ei(n) { if (!n) return 0; if (effectIdx[n] == null) { effectIdx[n] = effects.length + 1; effects.push(n); } return effectIdx[n]; }
+  const chars = characters.map(function (c) {
+    const gems = (c.gems || []).map(function (g) {
+      let core = 0;
+      if (g.coreBase != null && SLOT_LABEL[g.coreBase]) core = g.coreBase - 10000;
+      else if (g.slot != null && CORE_ID_BY_LABEL[g.slot]) core = CORE_ID_BY_LABEL[g.slot] - 10000;
+      return [core, g.baseCost == null ? null : g.baseCost, g.gemType === "chaos" ? 1 : 0,
+        g.willpowerLevel == null ? null : g.willpowerLevel, g.orderLevel == null ? null : g.orderLevel,
+        ei(g.effect1), g.effect1Level == null ? null : g.effect1Level,
+        ei(g.effect2), g.effect2Level == null ? null : g.effect2Level];
+    });
+    return [c.region, c.name, c.itemLevel == null ? null : c.itemLevel, ci(c.class), c.pulledAt || 0, gems];
+  });
+  return { v: 2, builtAt: builtAt, classes: classes, effects: effects, characters: chars };
+}
+
 // gzip helpers for the snapshot (Workers-native CompressionStream — no library).
 async function gzipString(s) {
   const cs = new CompressionStream("gzip");
@@ -585,10 +619,13 @@ async function readSnapshotObj(env) {
 // (Content-Encoding: gzip; the edge transparently decompresses for non-gzip clients), so a
 // request costs one KV read and zero JSON work. NEVER rebuilds on demand: the snapshot is
 // maintained server-side by the cron (rebuildSnapshotIfChanged). Empty until the first build.
-async function handleList(env, acceptEncoding) {
+async function handleList(env, acceptEncoding, fmt) {
   if (!env || !env.CHARS) return json({ characters: [] }, 200);
   try {
-    const gz = await env.CHARS.get(SNAPSHOT_GZ_KEY, "arrayBuffer");
+    // fmt=2 -> the compact tuple snapshot; falls back to v1 until the first gz2 rebuild
+    // (the client's decoder branches on the payload's `v` field, so either shape works).
+    const gz = (fmt === "2" && await env.CHARS.get(SNAPSHOT_GZ2_KEY, "arrayBuffer"))
+      || await env.CHARS.get(SNAPSHOT_GZ_KEY, "arrayBuffer");
     if (gz && gz.byteLength) {
       if (!/gzip/i.test(acceptEncoding || "")) {
         // rare non-gzip client (plain curl, odd scripts): decompress for them — the edge does NOT.
@@ -646,6 +683,8 @@ async function rebuildSnapshotIfChanged(env) {
   if (!characters.length) return;
   const gzBytes = await gzipString(JSON.stringify({ builtAt: startedAt, characters: characters }));
   await env.CHARS.put(SNAPSHOT_GZ_KEY, gzBytes);
+  const gz2Bytes = await gzipString(JSON.stringify(encodeSnapshotV2(startedAt, characters)));
+  await env.CHARS.put(SNAPSHOT_GZ2_KEY, gz2Bytes);
   try { await env.CHARS.delete(SNAPSHOT_KEY); } catch (e) {} // drop the 26MB legacy plain copy once gz exists
   await env.CHARS.put(BUILTAT_KEY, String(startedAt));
   // clear ONLY the markers we listed (any written mid-build keep theirs -> picked up next rebuild).
@@ -1011,7 +1050,7 @@ export default {
         const l = await env.LB_THROTTLE.limit({ key: ip });
         if (!l.success) return json({ error: "The leaderboard refreshes about every 10 minutes — please wait a moment.", rateLimited: true, retryAfterMs: 20000, lbThrottle: true }, 429);
       }
-      return handleList(env, request.headers.get("Accept-Encoding"));
+      return handleList(env, request.headers.get("Accept-Encoding"), u.searchParams.get("fmt"));
     }
 
     // Owner-only QUEUE METRICS (gated by the token): backlog counts, the queued list in drain order

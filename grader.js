@@ -1128,9 +1128,10 @@
     valid.forEach(function (x) { sumGrade += gGrade(x); });
     // loadout TOTAL = the true lvl-0 grid damage (diminishing returns + the per-core order
     // floor), NOT Σ per-gem — per-gem figures are standalone and won't sum to it exactly.
-    var sumDmg = (A && A.gridDamage)
+    var gridOk = !!(A && A.gridDamage);
+    var sumDmg = gridOk
       ? (sup ? A.gridDamage(valid, "support") / 3 : A.gridDamage(valid, "dps"))
-      : valid.reduce(function (s, x) { return s + gRel(x); }, 0);
+      : valid.reduce(function (s, x) { return s + gRel(x); }, 0); // legacy-model fallback: a per-gem SUM, not the true grid total — flagged in the UI below
     var avgGrade = valid.length ? sumGrade / valid.length : 0;
     var avgRank = rankFromGrade(avgGrade);
     var totalLabel = sup ? "Total % party dmg" : "Total % dmg";
@@ -1157,7 +1158,7 @@ presetToggleHtml(data) +
 '  <div class="gr-sum">' +
 '    <div class="stat"><span class="k">Avg grade</span><span class="v" style="color:var(--axis,var(--accent))">' + avgGrade.toFixed(1) + '</span></div>' +
 '    <div class="stat"><span class="k">Avg rank</span><span class="v">' + rankBadge(avgRank) + '</span></div>' +
-'    <div class="stat"><span class="k">' + totalLabel + '</span><span class="v" style="color:var(--axis,var(--accent))">' + sumDmg.toFixed(2) + '%</span></div>' +
+'    <div class="stat"><span class="k">' + totalLabel + (gridOk ? '' : ' <span title="Grid-total model unavailable — showing the per-gem sum, which overstates the true total. Hard-refresh to load the latest model.">⚠ estimate</span>') + '</span><span class="v" style="color:var(--axis,var(--accent))">' + sumDmg.toFixed(2) + '%</span></div>' +
 '  </div>';
     if (data.warnings && data.warnings.length) {
       html += '<div class="gr-warn">' + data.warnings.length + ' parser warning(s): ' + esc(data.warnings.slice(0, 4).join("; ")) + (data.warnings.length > 4 ? "…" : "") + '</div>';
