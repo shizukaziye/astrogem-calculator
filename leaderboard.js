@@ -90,24 +90,6 @@
   }
   var classFilter = readCookieVal(LB_CLASS_COOKIE) || "";  // selected class name, or "" for all
 
-  // (just for laughs) the entire "Buff" crew made some... questionable gem choices,
-  // and is shown on the board no matter how bad it gets.
-  function isTrollTarget(c) { return !!(c && /^buff/i.test(c.name || "")); }
-  function trollGems(gems) {
-    var DEAD = { 8: ["Brand Power", "Ally Damage Enh."], 9: ["Ally Damage Enh.", "Ally Attack Enh."], 10: ["Brand Power", "Ally Attack Enh."] };
-    // even a gem-less target gets one terrible gem, so they still rank F (not "—").
-    var src = (gems && gems.length) ? gems : [{ baseCost: 10, gemType: "order" }];
-    return src.map(function (g, i) {
-      var dead = DEAD[g.baseCost]; // only swap effects when the cost is known (keeps it valid)
-      var r = (i * 2654435761) >>> 0; // deterministic per-gem "mistakes"
-      var out = Object.assign({}, g, {
-        willpowerLevel: 1, orderLevel: 1 + (r % 2),
-        effect1Level: 1, effect2Level: 1 + ((r >> 4) % 2)
-      });
-      if (dead) { out.effect1 = dead[0]; out.effect2 = dead[1]; }
-      return out;
-    });
-  }
   var mode = "dps";    // "dps" | "support" — which leaderboard is shown
   var page = 1;        // 1-based current page of the main (paginated) table
   var PAGE_SIZE = 100; // max rows per page of the All-characters table
@@ -556,12 +538,11 @@
       for (var i = 0; i < list.length; i++) list[i]._rank = i + 1;
       list = list.filter(function (c) { return (c.name || "").toLowerCase().indexOf(q) !== -1; });
     } else {
-      // Normal board: region chips, then per-axis membership (troll targets excepted — always on
-      // the DPS board, however bad it gets). BOTH boards are floorless now; the DPS board also
-      // drops support mains — a support class whose support build is >=2 sub-ranks above its DPS.
+      // Normal board: region chips, then per-axis membership. BOTH boards are floorless now;
+      // the DPS board also drops support mains — a support class whose support build is >=2
+      // sub-ranks above its DPS.
       list = base.filter(function (c) {
         if (!regions[c.region]) return false;
-        if (isTrollTarget(c)) return true;
         if (mode === "support") return c._savg != null;
         // DPS board: show all grades, but drop a support main — a support-class character whose
         // SUPPORT build outranks their DPS build by >=2 sub-ranks (e.g. B- DPS but B+ support).
@@ -600,7 +581,6 @@
     rawChars = chars;
     // pre-compute both axes' per-character figures once (used by sort + columns).
     rawChars.forEach(function (c) {
-      if (isTrollTarget(c)) c.gems = trollGems(c.gems); // >:)
       c._avg = avgGradeOf(c); c._dmg = totalDmgOf(c);
       c._savg = avgSupportGradeOf(c); c._pdmg = totalPartyDmgOf(c);
     });
