@@ -351,11 +351,13 @@
 
   // ORDER/CHAOS baseline from the 3rd-lowest-GRADE gem of that type, bumped one
   // rank up. <3 valid gems -> use the lowest available. Returns null if none.
+  // AXIS-AWARE (gGrade): in Support mode the baseline comes from support grades, so the
+  // support plan's bar is the support rank of your weakest kept gems.
   //   { srcGrade, srcRank, baseGrade, baseRank, count }
   function typeBaseline(gems, gemType) {
     var graded = (gems || []).filter(function (x) {
       return x.gemType === gemType && validateConfig(x).valid;
-    }).map(function (x) { return grade(x); }).sort(function (a, b) { return a - b; });
+    }).map(function (x) { return gGrade(x); }).sort(function (a, b) { return a - b; });
     if (!graded.length) return null;
     var src = graded.length >= 3 ? graded[2] : graded[0];
     var baseGrade = bumpedBaselineGrade(src);
@@ -1141,6 +1143,19 @@
       + '</div>';
   }
 
+  // The plan needs the CURRENT AXIS's baked grid (DPS or Support). Sync readiness check;
+  // when the grid isn't cached yet, kick off its fetch — the callback re-fills the cards.
+  function planAxisReady() {
+    if (typeof window.pipelineAdvice !== "function") return false;
+    var loaded = (typeof window.pipelineAxisLoaded === "function")
+      ? window.pipelineAxisLoaded(grMode)
+      : !!window.__grPipelineReady;   // stale-cached pipeline.js: DPS-only flag
+    if (!loaded && typeof window.pipelineReady === "function") {
+      window.pipelineReady(function () { window.__grPipelineReady = true; refreshPlanCards(); }, grMode);
+    }
+    return loaded;
+  }
+
   // The whole infographic (title + gpd selector + single baseline + one plan table + legend).
   // `base` = blanketBaseline(gems); pipeline data must be ready.
   function planSectionHtml(base) {
@@ -1155,8 +1170,8 @@
     // loadouts the global plan. Pass the LOADED CHARACTER's region, not the Pipeline
     // tab's toggle, so the infographic matches the character on screen.
     var rgn = planRegion(lastLoadout && lastLoadout.region);
-    var ready = (typeof window.pipelineAdvice === "function") && !!window.__grPipelineReady;
-    var adv = (ready && base) ? window.pipelineAdvice(base.baseGrade, grGpd, rgn, grRoster) : null;
+    var ready = planAxisReady();
+    var adv = (ready && base) ? window.pipelineAdvice(base.baseGrade, grGpd, rgn, grRoster, grMode) : null;
 
     var body;
     if (!base) {
@@ -1174,7 +1189,8 @@
       + '<span class="vpill vp-throw">Dismantle</span><span>not worth cutting</span>'
       + '</div>';
 
-    var econLabel = (rgn === "kr") ? "KR economy" : (grRoster === "rb" ? "RB" : "NRB");
+    var econLabel = (isSupport() ? "Support · " : "")
+      + ((rgn === "kr") ? "KR economy" : (grRoster === "rb" ? "RB" : "NRB"));
     // Roster toggle — global only (KR has no roster-bound gems). Defaults to
     // non-roster-bound on every page load; the choice is session-only (not persisted).
     var rosterRow = "";
@@ -1205,10 +1221,10 @@
     var base = blanketBaseline(gems);
     var headHost = document.getElementById("gr-baseline-host");
     if (headHost) headHost.innerHTML = baselineHeadHtml(base);
-    var ready = (typeof window.pipelineAdvice === "function") && !!window.__grPipelineReady;
+    var ready = planAxisReady();
     if (!ready || !base) return;   // still loading / no gems; ready-callback re-renders
     var rgn = planRegion(lastLoadout && lastLoadout.region);  // KR vs global plan
-    var adv = window.pipelineAdvice(base.baseGrade, grGpd, rgn, grRoster);
+    var adv = window.pipelineAdvice(base.baseGrade, grGpd, rgn, grRoster, grMode);
     // host may be the placeholder (with inline style) before data arrived; normalize.
     host.removeAttribute("style");
     host.className = "";
@@ -1230,7 +1246,7 @@
     var btns = document.querySelectorAll("#tab-grader .gr-roster .roster-btn");
     for (var i = 0; i < btns.length; i++) btns[i].classList.toggle("active", btns[i].getAttribute("data-roster") === grRoster);
     var lbl = document.getElementById("gr-econ-label");
-    if (lbl) lbl.textContent = (grRoster === "rb") ? "RB" : "NRB";
+    if (lbl) lbl.textContent = (isSupport() ? "Support · " : "") + ((grRoster === "rb") ? "RB" : "NRB");
     refreshPlanCards();
   };
 
@@ -1386,14 +1402,9 @@ presetToggleHtml(data) +
     // pair) + boxes. Baseline = one rank above the stronger of the two types' 3rd-lowest
     // gems, nudgeable ±1 rank with ◀▶. Numbers come from window.pipelineAdvice; the
     // section paints a "loading…" placeholder first and fills once pipelineReady fires
-    // (so it works even if Pipeline was never opened).
-    // Support mode: the cut/fuse plan is DPS cut-EV math, so it's hidden entirely (and
-    // window.pipelineAdvice is NOT called) — a short note stands in its place instead.
-    if (sup) {
-      html += '<div class="gr-plan-note">Cut / fuse planning is DPS-only for now.</div>';
-    } else {
-      html += planSectionHtml(blanketBaseline(gems));
-    }
+    // (so it works even if Pipeline was never opened). AXIS-AWARE: Support mode reads
+    // the SUPPORT bake (support cut-EVs + support-grade baseline) via grMode.
+    html += planSectionHtml(blanketBaseline(gems));
 
     // Gems by core, laid out as two sections (ORDER then CHAOS). Each section is a
     // 3-column grid: one column per core (Sun / Moon / Star), each column listing that
@@ -1444,14 +1455,14 @@ presetToggleHtml(data) +
       star.style.display = "none"; // Favorites store unavailable
     }
 
-    // Ensure pipeline data is loaded, then (re)fill the action-plan cards. Marks a
-    // global ready flag so re-renders/gpd changes can compute synchronously. Skipped in
-    // support mode — the cut/fuse infographic isn't shown there (DPS-only).
-    if (!sup && typeof window.pipelineReady === "function") {
+    // Ensure the CURRENT AXIS's pipeline grid is loaded, then (re)fill the action-plan
+    // cards. Each axis's bake loads lazily on first need (DPS: pipeline.json,
+    // Support: pipeline-support.json); flipping the axis re-runs this via renderLoadout.
+    if (typeof window.pipelineReady === "function") {
       window.pipelineReady(function () {
         window.__grPipelineReady = true;
         refreshPlanCards();
-      });
+      }, grMode);
     }
   }
 

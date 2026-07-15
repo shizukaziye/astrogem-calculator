@@ -208,7 +208,11 @@
   // lookup is exact regardless of later model drift. (Falls back to live for older bakes.)
   function bakedBaselineForRow(bi, grade) {
     var b = DATA && DATA.meta && DATA.meta.bakedBaselines;
-    return (b && b[bi] != null) ? b[bi] : window.gradeToScore(grade);
+    if (b && b[bi] != null) return b[bi];
+    // live fallback (older bakes without meta.bakedBaselines) — use THIS AXIS's inverse
+    return (AXIS === "support" && typeof window.supportGradeToScore === "function")
+      ? window.supportGradeToScore(grade)
+      : window.gradeToScore(grade);
   }
   function bakedCell(rarity, cost, bucket, baseline, gpd) {
     if (!DATA || !DATA.cells) return null;
@@ -413,7 +417,7 @@
   // ---------------------------------------------------------------------------
   function pTierAbove(cost, tier, bl) {
     if (typeof window.scoreDistributionForTier !== "function") return 0;
-    var dist = window.scoreDistributionForTier(cost, tier);
+    var dist = window.scoreDistributionForTier(cost, tier, AXIS);   // axis-correct distribution (bl is on AXIS's scale)
     var p = 0;
     dist.forEach(function (prob, sc) { if (sc > bl) p += prob; });
     return p;
@@ -711,7 +715,7 @@
     // (The raw L/R/A landing odds were dropped — the values + recipes are more useful.)
     var fodderBlock = "";
     if (typeof window.fusionValueForTier === "function" && typeof window.tierExpectedValue === "function") {
-      var tev = window.tierExpectedValue(cost, baseline, gpd);
+      var tev = window.tierExpectedValue(cost, baseline, gpd, AXIS);
       var fuRecipe = { legendary: "3L", relic: "R+2L", ancient: "A+2L" };
       var fuMix = { legendary: FUSE_3L, relic: FUSE_R2L, ancient: FUSE_A2L };
       var fuName = { legendary: "Legendary", relic: "Relic", ancient: "Ancient" };
@@ -720,7 +724,7 @@
       for (var ti = 0; ti < TIERS.length; ti++) {
         var t = TIERS[ti];
         frows += '<tr><td class="pt-pair"><b class="' + fuCls[t] + '">' + fuName[t] + '</b></td>'
-          + '<td class="pt-num">' + fmtGold(window.fusionValueForTier(t, cost, baseline, gpd)) + '</td>'
+          + '<td class="pt-num">' + fmtGold(window.fusionValueForTier(t, cost, baseline, gpd, AXIS)) + '</td>'
           + '<td class="pt-num">' + fuRecipe[t] + '</td>'
           + '<td class="pt-num">' + fmtGold(tev ? tev[t] : null) + '</td>'
           + '<td class="pt-num">' + fmtPct(fusionHit(baseline, fuMix[t])) + '</td></tr>';
@@ -893,19 +897,19 @@
       var fodL = 0, fodR = 0, fodA = 0, evL = 0, evR = 0, evA = 0;
       for (var ci = 0; ci < COSTS.length; ci++) {
         var c = COSTS[ci], cw = CONST.COST_MIX[c];
-        var tev = window.tierExpectedValue(c, bl, gpd);
-        fodL += cw * window.fusionValueForTier("legendary", c, bl, gpd);
-        fodR += cw * window.fusionValueForTier("relic", c, bl, gpd);
-        fodA += cw * window.fusionValueForTier("ancient", c, bl, gpd);
+        var tev = window.tierExpectedValue(c, bl, gpd, AXIS);
+        fodL += cw * window.fusionValueForTier("legendary", c, bl, gpd, AXIS);
+        fodR += cw * window.fusionValueForTier("relic", c, bl, gpd, AXIS);
+        fodA += cw * window.fusionValueForTier("ancient", c, bl, gpd, AXIS);
         evL += cw * tev.legendary; evR += cw * tev.relic; evA += cw * tev.ancient;
       }
       var hL = fusionHit(bl, FUSE_3L), hR = fusionHit(bl, FUSE_R2L), hA = fusionHit(bl, FUSE_A2L);
       function bestLeg(mix) {
         var bc = 8, bn = -Infinity;
         for (var k = 0; k < COSTS.length; k++) {
-          var cc = COSTS[k], tv = window.tierExpectedValue(cc, bl, gpd), net = 0;
+          var cc = COSTS[k], tv = window.tierExpectedValue(cc, bl, gpd, AXIS), net = 0;
           for (var ti = 0; ti < TIERS.length; ti++) net += mix[TIERS[ti]] * tv[TIERS[ti]];
-          net -= 2 * window.fusionValueForTier("legendary", cc, bl, gpd);
+          net -= 2 * window.fusionValueForTier("legendary", cc, bl, gpd, AXIS);
           if (net > bn) { bn = net; bc = cc; }
         }
         return bc;
@@ -1420,20 +1424,27 @@
   // per-bucket cut verdicts (no fuse rows, no boxes).
   // ===========================================================================
 
-  // pipelineReady(cb): ensure data/pipeline.json is loaded, then call cb once.
-  // If DATA is already present, cb runs synchronously. Otherwise we kick off (or
-  // join) the in-flight fetch and poll until DATA lands. Lets the Grader call
-  // pipelineAdvice even if the Pipeline tab was never opened.
-  window.pipelineReady = function (cb) {
+  // pipelineReady(cb, axis): ensure the baked grid for `axis` ("dps" default |
+  // "support") is loaded, then call cb once. If it's already cached, cb runs
+  // synchronously. Otherwise we kick off (or join) the in-flight fetch. Lets the
+  // Grader call pipelineAdvice even if the Pipeline tab was never opened.
+  window.pipelineReady = function (cb, axis) {
     if (typeof cb !== "function") return;
-    loadAxis("dps", function () { cb(); });   // the Grader's infographic is DPS-only — always load the DPS grid
+    loadAxis(axis === "support" ? "support" : "dps", function () { cb(); });
+  };
+  // Is the baked grid for `axis` already cached? (Sync readiness check for the Grader.)
+  window.pipelineAxisLoaded = function (axis) {
+    return !!DATA_CACHE[axis === "support" ? "support" : "dps"];
   };
 
-  // pipelineAdvice(baselineGrade, gpd, region, roster): the action plan for ONE baseline
-  // grade (a GRADE_ROWS value, e.g. 77) at ONE gpd tier, computed for `region`
-  // ("global" | "kr"; defaults to the current pipeline-tab REGION when omitted) and
-  // `roster` ("nrb" | "rb"; defaults to "nrb"). KR has no roster-bound gems, so a KR
-  // plan is always NRB regardless of the roster argument.
+  // pipelineAdvice(baselineGrade, gpd, region, roster, axis): the action plan for ONE
+  // baseline grade (a GRADE_ROWS value, e.g. 77) at ONE gpd tier, computed for `region`
+  // ("global" | "kr"; defaults to the current pipeline-tab REGION when omitted),
+  // `roster` ("nrb" | "rb"; defaults to "nrb") and `axis` ("dps" default | "support").
+  // KR has no roster-bound gems, so a KR plan is always NRB regardless of the roster
+  // argument. The support axis reads the SUPPORT bake (its own support-scale baselines);
+  // gpd stays the headline tier — the core model applies the ×3 party multiplier
+  // internally (SUPPORT_GPD_MULTIPLIER), and the bake was built the same way.
   // The Grader passes the LOADED CHARACTER's region so a KR loadout gets the KR plan
   // (no roster-bound gems; tradable-epic floor) regardless of the Pipeline tab's own
   // region toggle. We temporarily swap the module REGION while computing and restore it
@@ -1476,27 +1487,30 @@
   // These are Uncommon / Rare / Epic (the UNOPENED rarities), NOT the finished-gem
   // Legendary/Relic/Ancient processed-fusion tiers — do not conflate the two.
   // The Grader renders this as "fuse + 2× <addCost>-cost Uncommon" (the 2 you add).
-  window.pipelineAdvice = function (baselineGrade, gpd, region, roster) {
-    var dpsData = DATA_CACHE.dps;
-    if (!dpsData) return null;            // the Grader's infographic is DPS-only
+  window.pipelineAdvice = function (baselineGrade, gpd, region, roster, axis) {
+    axis = (axis === "support") ? "support" : "dps";
+    var grid = DATA_CACHE[axis];
+    if (!grid) return null;               // this axis's bake not loaded yet (see pipelineReady)
     if (gpd == null) gpd = GPD;
     roster = (roster === "rb") ? "rb" : "nrb";
-    // baselineGrade is an on-grid GRADE_ROWS anchor (the grader bumps to one), so use the DPS
-    // bake's EXACT baseline for it (positional) — recomputing gradeToScore here would drift off
-    // the baked keys and miss every cell, same failure mode bakedBaselineForRow guards against.
-    // (DATA isn't swapped to the DPS grid until below, so read dpsData's baselines directly.)
+    // baselineGrade is an on-grid GRADE_ROWS anchor (the grader bumps to one), so use THIS
+    // AXIS's bake EXACT baseline for it (positional) — recomputing (support)gradeToScore here
+    // would drift off the baked keys and miss every cell, same failure mode
+    // bakedBaselineForRow guards against. (DATA isn't swapped until below, so read the
+    // grid's baselines directly.)
     var bi = GRADE_ROWS.indexOf(baselineGrade);
-    var dpsBL = dpsData.meta && dpsData.meta.bakedBaselines;
-    var bl = (bi >= 0 && dpsBL && dpsBL[bi] != null)
-      ? dpsBL[bi]
-      : ((typeof window.gradeToScore === "function") ? window.gradeToScore(baselineGrade) : baselineGrade);
+    var gridBL = grid.meta && grid.meta.bakedBaselines;
+    var liveG2S = (axis === "support") ? window.supportGradeToScore : window.gradeToScore;
+    var bl = (bi >= 0 && gridBL && gridBL[bi] != null)
+      ? gridBL[bi]
+      : ((typeof liveG2S === "function") ? liveG2S(baselineGrade) : baselineGrade);
     // Compute for the requested region (defaults to the tab's current REGION). Swap the
     // module REGION so every helper (gev/fuseDecisions/computePipeline via secondHalfGev)
     // honors it, then ALWAYS restore — the Pipeline tab's toggle must be untouched.
     var wantRegion = (region === "kr") ? "kr" : (region === "global") ? "global" : REGION;
     if (wantRegion === "kr") roster = "nrb";   // KR has no roster-bound gems
     var savedRegion = REGION, savedData = DATA, savedAxis = AXIS;
-    REGION = wantRegion; DATA = dpsData; AXIS = "dps";   // force the DPS grid; restored in finally
+    REGION = wantRegion; DATA = grid; AXIS = axis;   // force the requested grid; restored in finally
     try {
       // RB gems are free to cut — there is no pre-cut fuse decision to make.
       var fd = (roster === "nrb") ? fuseDecisions(bl, gpd, roster) : null;
@@ -1585,14 +1599,15 @@
 
       // Processed (finished) gems — fusion guide. Per fodder tier: the recipe, the
       // output-tier odds, and the mix-weighted expected output value at each cost.
-      // window.tierExpectedValue(cost, bl, gpd) -> {legendary,relic,ancient} = the value
-      // of a fusion-output gem that lands at that tier.
+      // window.tierExpectedValue(cost, bl, gpd, axis) -> {legendary,relic,ancient} = the
+      // value of a fusion-output gem that lands at that tier (support: the core applies
+      // the ×3 party-gpd multiplier internally; bl is already on the support scale).
       var processed = null;
       if (typeof window.tierExpectedValue === "function") {
         var fuMix = { legendary: FUSE_3L, relic: FUSE_R2L, ancient: FUSE_A2L };
         var fuRecipe = { legendary: "3× Legendary", relic: "1 Relic + 2 Legendary", ancient: "1 Ancient + 2 Legendary" };
         var tevC = {};
-        for (var ci2 = 0; ci2 < COSTS.length; ci2++) tevC[COSTS[ci2]] = window.tierExpectedValue(COSTS[ci2], bl, gpd);
+        for (var ci2 = 0; ci2 < COSTS.length; ci2++) tevC[COSTS[ci2]] = window.tierExpectedValue(COSTS[ci2], bl, gpd, axis);
         processed = TIERS.map(function (t) {
           var mix = fuMix[t], evByCost = {};
           for (var k = 0; k < COSTS.length; k++) {
@@ -1605,7 +1620,7 @@
       }
 
       return {
-        region: wantRegion, roster: roster,
+        region: wantRegion, roster: roster, axis: axis,
         grade: baselineGrade, baselineScore: bl, gpd: gpd,
         plan: plan, boxes: boxes, processed: processed
       };
