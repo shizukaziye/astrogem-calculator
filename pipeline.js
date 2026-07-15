@@ -1414,9 +1414,10 @@
   // ===========================================================================
   // PUBLIC ADVICE API — consumed by the Grader tab's "what to do with your
   // astrogems" infographic. Reuses the exact economic functions above (gev,
-  // fuseDecisions, computePipeline); changes NO existing behavior. Everything is
-  // computed for the CURRENT REGION + roster 'nrb' (the only roster with a box /
-  // fuse economy; RB gems are always just cut).
+  // fuseDecisions, computePipeline); changes NO existing behavior. Computed for
+  // the CURRENT REGION + the caller's roster (default 'nrb'). Only NRB has a
+  // box / pre-cut fuse economy; RB gems are free to cut, so the RB plan is pure
+  // per-bucket cut verdicts (no fuse rows, no boxes).
   // ===========================================================================
 
   // pipelineReady(cb): ensure data/pipeline.json is loaded, then call cb once.
@@ -1428,9 +1429,11 @@
     loadAxis("dps", function () { cb(); });   // the Grader's infographic is DPS-only — always load the DPS grid
   };
 
-  // pipelineAdvice(baselineGrade, gpd, region): the action plan for ONE baseline grade
-  // (a GRADE_ROWS value, e.g. 77) at ONE gpd tier, computed for `region`
-  // ("global" | "kr"; defaults to the current pipeline-tab REGION when omitted).
+  // pipelineAdvice(baselineGrade, gpd, region, roster): the action plan for ONE baseline
+  // grade (a GRADE_ROWS value, e.g. 77) at ONE gpd tier, computed for `region`
+  // ("global" | "kr"; defaults to the current pipeline-tab REGION when omitted) and
+  // `roster` ("nrb" | "rb"; defaults to "nrb"). KR has no roster-bound gems, so a KR
+  // plan is always NRB regardless of the roster argument.
   // The Grader passes the LOADED CHARACTER's region so a KR loadout gets the KR plan
   // (no roster-bound gems; tradable-epic floor) regardless of the Pipeline tab's own
   // region toggle. We temporarily swap the module REGION while computing and restore it
@@ -1461,7 +1464,7 @@
   //       vendor:{buy,cost,max}, mat:{buy,cost,max}, epic:{buy,cost,max},
   //       boxEV,                           // expected box-gem value (vendor/mat share it)
   //       list: [ "10×1185", "20×mat", … ] // human "what to buy" chips (empty => none)
-  //     }
+  //     }                                  // null when roster === "rb" (NRB economy only)
   //   }
   //
   // UNOPENED-FUSION recipe wording (the pre-cut "fuse the whole gem first" move). You
@@ -1473,10 +1476,11 @@
   // These are Uncommon / Rare / Epic (the UNOPENED rarities), NOT the finished-gem
   // Legendary/Relic/Ancient processed-fusion tiers — do not conflate the two.
   // The Grader renders this as "fuse + 2× <addCost>-cost Uncommon" (the 2 you add).
-  window.pipelineAdvice = function (baselineGrade, gpd, region) {
+  window.pipelineAdvice = function (baselineGrade, gpd, region, roster) {
     var dpsData = DATA_CACHE.dps;
     if (!dpsData) return null;            // the Grader's infographic is DPS-only
     if (gpd == null) gpd = GPD;
+    roster = (roster === "rb") ? "rb" : "nrb";
     // baselineGrade is an on-grid GRADE_ROWS anchor (the grader bumps to one), so use the DPS
     // bake's EXACT baseline for it (positional) — recomputing gradeToScore here would drift off
     // the baked keys and miss every cell, same failure mode bakedBaselineForRow guards against.
@@ -1486,16 +1490,16 @@
     var bl = (bi >= 0 && dpsBL && dpsBL[bi] != null)
       ? dpsBL[bi]
       : ((typeof window.gradeToScore === "function") ? window.gradeToScore(baselineGrade) : baselineGrade);
-    var roster = "nrb";
-
     // Compute for the requested region (defaults to the tab's current REGION). Swap the
     // module REGION so every helper (gev/fuseDecisions/computePipeline via secondHalfGev)
     // honors it, then ALWAYS restore — the Pipeline tab's toggle must be untouched.
     var wantRegion = (region === "kr") ? "kr" : (region === "global") ? "global" : REGION;
+    if (wantRegion === "kr") roster = "nrb";   // KR has no roster-bound gems
     var savedRegion = REGION, savedData = DATA, savedAxis = AXIS;
     REGION = wantRegion; DATA = dpsData; AXIS = "dps";   // force the DPS grid; restored in finally
     try {
-      var fd = fuseDecisions(bl, gpd, roster);
+      // RB gems are free to cut — there is no pre-cut fuse decision to make.
+      var fd = (roster === "nrb") ? fuseDecisions(bl, gpd, roster) : null;
 
       // Per-BUCKET cut-EV -> verdict, mirroring the pipeline tab's verdict() bands:
       //   cut-EV >= RESET_THRESHOLD -> "cut & reset"; > 0 -> "cut"; else "dismantle".
@@ -1511,9 +1515,10 @@
         for (var ci = 0; ci < COSTS.length; ci++) {
           var rarity = RARITIES[ri], cost = COSTS[ci];
           var ov = gev(rarity, cost, bl, gpd, roster);   // 1:2:2:1-weighted open value
-          var blockFuse = (rarity === "uncommon") ? !!fd.uc[cost]
-            : (rarity === "rare") ? !!fd.rare[cost]
-              : false;   // epic never fuses pre-cut
+          var blockFuse = !fd ? false   // RB: never fuse (fd == null)
+            : (rarity === "uncommon") ? !!fd.uc[cost]
+              : (rarity === "rare") ? !!fd.rare[cost]
+                : false;   // epic never fuses pre-cut
 
           // Per effect-pair bucket verdicts (2D / Op / Sub / No), reusing the SAME baked
           // cut-EVs + bands as the pipeline tab's gemCell. When the block fuses (per-BLOCK
@@ -1561,18 +1566,22 @@
       // Box decisions: reuse computePipeline's logic (it returns buyVendor/buyMat/
       // buyEpic + boxEV). The grade only affects avg/cp columns there, not the box
       // buy flags (those are pure gev-vs-cost), so any grade gives the same boxes;
-      // we pass the actual baselineGrade for completeness.
-      var p = computePipeline(baselineGrade, bl, gpd);
-      var boxes = {
-        vendor: { buy: !!p.buyVendor, cost: CONST.BOX_VENDOR.cost, max: CONST.BOX_VENDOR.max },
-        mat: { buy: !!p.buyMat, cost: CONST.BOX_MAT.cost, max: CONST.BOX_MAT.max },
-        epic: { buy: !!p.buyEpic, cost: CONST.BOX_EPIC.cost, max: CONST.BOX_EPIC.max },
-        boxEV: p.boxEV,
-        list: []
-      };
-      if (p.buyVendor) boxes.list.push(CONST.BOX_VENDOR.max + "×1185");
-      if (p.buyMat) boxes.list.push(CONST.BOX_MAT.max + "×mat");
-      if (p.buyEpic) boxes.list.push(CONST.BOX_EPIC.max + "×43k");
+      // we pass the actual baselineGrade for completeness. Box gems are part of the
+      // NRB economy only — the RB plan carries no box advice (boxes = null).
+      var boxes = null;
+      if (roster === "nrb") {
+        var p = computePipeline(baselineGrade, bl, gpd);
+        boxes = {
+          vendor: { buy: !!p.buyVendor, cost: CONST.BOX_VENDOR.cost, max: CONST.BOX_VENDOR.max },
+          mat: { buy: !!p.buyMat, cost: CONST.BOX_MAT.cost, max: CONST.BOX_MAT.max },
+          epic: { buy: !!p.buyEpic, cost: CONST.BOX_EPIC.cost, max: CONST.BOX_EPIC.max },
+          boxEV: p.boxEV,
+          list: []
+        };
+        if (p.buyVendor) boxes.list.push(CONST.BOX_VENDOR.max + "×1185");
+        if (p.buyMat) boxes.list.push(CONST.BOX_MAT.max + "×mat");
+        if (p.buyEpic) boxes.list.push(CONST.BOX_EPIC.max + "×43k");
+      }
 
       // Processed (finished) gems — fusion guide. Per fodder tier: the recipe, the
       // output-tier odds, and the mix-weighted expected output value at each cost.

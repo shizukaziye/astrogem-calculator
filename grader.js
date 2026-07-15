@@ -193,6 +193,10 @@
   var GPD_TIERS = [500000, 1000000, 1500000, 2500000, 3500000, 5000000, 7500000, 10000000];
   var GPD_DEFAULT = 1500000;
   var grGpd = GPD_DEFAULT;           // currently-selected gpd for the infographic
+  // Roster toggle for the plan: "nrb" | "rb". ALWAYS defaults to non-roster-bound on
+  // page load — session-only, deliberately NOT persisted. KR loadouts have no
+  // roster-bound gems, so the toggle is hidden (and the plan forced NRB) for KR.
+  var grRoster = "nrb";
   // Manual ±rank nudge applied to the ONE blanket baseline via the ◀ ▶ arrows. Reset to
   // 0 on every fresh loadout render; clamped so the final baseline index stays in range.
   var grBaseShift = 0;
@@ -955,14 +959,20 @@
     }
     rows += '</tbody></table>';
 
-    var boxList = (adv.boxes && adv.boxes.list) || [];
-    var boxesHtml = '<div class="gr-boxes"><span class="bl">Boxes worth buying</span>';
-    if (boxList.length) {
-      boxesHtml += boxList.map(function (b) { return '<span class="box">' + esc(b) + '</span>'; }).join(" ");
+    var boxesHtml;
+    if (adv.roster === "rb") {
+      // RB gems are free to cut — no box / pre-cut fuse economy applies.
+      boxesHtml = '<div class="gr-boxes"><span class="none">Roster-bound gems are free to cut — no box or pre-cut fuse economy.</span></div>';
     } else {
-      boxesHtml += '<span class="none">none at this baseline / gpd</span>';
+      var boxList = (adv.boxes && adv.boxes.list) || [];
+      boxesHtml = '<div class="gr-boxes"><span class="bl">Boxes worth buying</span>';
+      if (boxList.length) {
+        boxesHtml += boxList.map(function (b) { return '<span class="box">' + esc(b) + '</span>'; }).join(" ");
+      } else {
+        boxesHtml += '<span class="none">none at this baseline / gpd</span>';
+      }
+      boxesHtml += '</div>';
     }
-    boxesHtml += '</div>';
 
     return '<div class="gr-plan-card">' + rows + boxesHtml + '</div>';
   }
@@ -1030,7 +1040,7 @@
     // tab's toggle, so the infographic matches the character on screen.
     var rgn = planRegion(lastLoadout && lastLoadout.region);
     var ready = (typeof window.pipelineAdvice === "function") && !!window.__grPipelineReady;
-    var adv = (ready && base) ? window.pipelineAdvice(base.baseGrade, grGpd, rgn) : null;
+    var adv = (ready && base) ? window.pipelineAdvice(base.baseGrade, grGpd, rgn, grRoster) : null;
 
     var body;
     if (!base) {
@@ -1048,12 +1058,22 @@
       + '<span class="vpill vp-throw">Dismantle</span><span>not worth cutting</span>'
       + '</div>';
 
-    var econLabel = (rgn === "kr") ? "KR economy" : "NRB";
+    var econLabel = (rgn === "kr") ? "KR economy" : (grRoster === "rb" ? "RB" : "NRB");
+    // Roster toggle — global only (KR has no roster-bound gems). Defaults to
+    // non-roster-bound on every page load; the choice is session-only (not persisted).
+    var rosterRow = "";
+    if (rgn !== "kr") {
+      rosterRow = '<div class="gr-gpd gr-roster"><span class="lab">Binding</span>'
+        + '<span class="mbtn roster-btn ' + (grRoster === "nrb" ? "active" : "") + '" data-roster="nrb" onclick="window.__grSetRoster(\'nrb\')">Non-roster-bound</span>'
+        + '<span class="mbtn roster-btn ' + (grRoster === "rb" ? "active" : "") + '" data-roster="rb" onclick="window.__grSetRoster(\'rb\')">Roster-bound</span>'
+        + '</div>';
+    }
     return '<div class="gr-plan">'
       + '<h2>What to do with your astrogems '
-      + '<span class="pl-sub">' + econLabel + ' · per-effect-pair action plan at your loadout’s baseline</span></h2>'
+      + '<span class="pl-sub"><span id="gr-econ-label">' + econLabel + '</span> · per-effect-pair action plan at your loadout’s baseline</span></h2>'
       + '<div class="gr-baseline-host" id="gr-baseline-host">' + baselineHeadHtml(base) + '</div>'
       + '<div class="gr-gpd"><span class="lab">Gold per 1% damage</span>' + gpdBtns + '</div>'
+      + rosterRow
       + body
       + legend
       + '</div>';
@@ -1071,7 +1091,7 @@
     var ready = (typeof window.pipelineAdvice === "function") && !!window.__grPipelineReady;
     if (!ready || !base) return;   // still loading / no gems; ready-callback re-renders
     var rgn = planRegion(lastLoadout && lastLoadout.region);  // KR vs global plan
-    var adv = window.pipelineAdvice(base.baseGrade, grGpd, rgn);
+    var adv = window.pipelineAdvice(base.baseGrade, grGpd, rgn, grRoster);
     // host may be the placeholder (with inline style) before data arrived; normalize.
     host.removeAttribute("style");
     host.className = "";
@@ -1083,6 +1103,17 @@
     grGpd = g;
     var btns = document.querySelectorAll("#tab-grader .gr-gpd .gpd-btn");
     for (var i = 0; i < btns.length; i++) btns[i].classList.toggle("active", Number(btns[i].getAttribute("data-gpd")) === g);
+    refreshPlanCards();
+  };
+
+  // Roster toggle handler (wired via inline onclick in planSectionHtml). Session-only:
+  // the plan always opens as non-roster-bound; nothing is written to localStorage.
+  window.__grSetRoster = function (r) {
+    grRoster = (r === "rb") ? "rb" : "nrb";
+    var btns = document.querySelectorAll("#tab-grader .gr-roster .roster-btn");
+    for (var i = 0; i < btns.length; i++) btns[i].classList.toggle("active", btns[i].getAttribute("data-roster") === grRoster);
+    var lbl = document.getElementById("gr-econ-label");
+    if (lbl) lbl.textContent = (grRoster === "rb") ? "RB" : "NRB";
     refreshPlanCards();
   };
 
