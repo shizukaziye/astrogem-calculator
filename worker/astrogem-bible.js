@@ -420,6 +420,103 @@ function parseMeta(html, isKR) {
   return { itemLevel: itemLevel, klass: klass };
 }
 
+// ---- combat power / accessories / classic gems (Grader gpd auto-default) ----------
+// Reverse-engineered from the same SvelteKit blob as arkGridCores, anchored against the
+// RENDERED pages of NA/Paroxysmal (all-high accessories, lv10 gems), NA/Millie (all-mid
+// accessory rolls — every value landed exactly on the lost-ark-accessories tier tables),
+// NA/Sadnass (lv7/9 gems) and NA/Esfera (Outgoing Damage +1.2% = mid).
+//
+// Accessory grinding lines live in the tier4_accessory stats[] with base:false.
+//   type:2  -> index identifies the line, value is the roll ×100 (155 = 1.55%):
+const ACC_LINE_NAME = {
+  27: "Max HP+", 28: "HP Recovery+", 34: "Max MP+",
+  46: "Stigma %", 49: "Attack Power %", 50: "Additional Damage %",
+  74: "Crit Rate %", 76: "Crit Damage %", 106: "Debuff Duration %",
+  124: "Attack Power+", 151: "Weapon Attack Power+", 152: "Weapon Attack Power %"
+};
+//   type:4  -> Outgoing Damage % as a buff id: index 62100000X, X = 0-based tier
+//              (0 low 0.55 / 1 mid 1.20 / 2 high 2.00); value is always 0, so the
+//              roll is synthesized from the tier digit (same ×100 scale).
+const OUTGOING_BY_TIER = [55, 120, 200];
+//   other buff-style types (value ×100 like type:2):
+const BUFF_TYPE_NAME = { 29: "Gauge Gain %", 51: "Healing %", 54: "Ally Atk Buff %", 59: "Ally Dmg Buff %" };
+
+// combatPower:{id:1,score:7554.56} — the page's headline Combat Power.
+function parseCombatPower(html) {
+  const m = html.match(/combatPower:\{id:\d+,score:([\d.]+)\}/);
+  return m ? parseFloat(m[1]) : null;
+}
+
+// The five tier4 accessories (neck/ear1/ear2/finger1/finger2) with their grinding
+// lines as { name, value } (value ×100). The blob repeats the equipment block per
+// loadout (raid first, then chaos); first occurrence per slot wins (= the raid set).
+function parseAccessories(html) {
+  const out = [], seen = {};
+  const re = /slot:"(neck|ear1|ear2|finger1|finger2)",data:\{type:"tier4_accessory",stats:\[(.*?)\]\}/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    if (seen[m[1]]) continue;
+    seen[m[1]] = 1;
+    const lines = [];
+    const sre = /\{type:(\d+),index:(\d+),base:false,id:\d+,value:(\d+)\}/g;
+    let sm;
+    while ((sm = sre.exec(m[2])) !== null) {
+      const type = +sm[1], index = +sm[2], value = +sm[3];
+      if (type === 2) lines.push({ name: ACC_LINE_NAME[index] || ("line#" + index), value: value });
+      else if (type === 4) lines.push({ name: "Outgoing Damage %", value: OUTGOING_BY_TIER[index % 10] != null ? OUTGOING_BY_TIER[index % 10] : null });
+      else lines.push({ name: BUFF_TYPE_NAME[type] || ("line?t" + type), value: value || null });
+    }
+    out.push({ slot: m[1], lines: lines });
+  }
+  return out.length ? out : null;
+}
+
+// Classic (skill) gem levels from the equipment `gems:[{slot,id,effects}]` array.
+// The gem id's level digits are unreliable across families (event gems break them), so
+// the level comes from the primary effect value instead — linear tables confirmed on
+// levels 6/7/9/10 across three characters:
+//   type 27 (damage %):        value = (4 + 2·level)·100   -> lv = (v/100 − 4)/2
+//   type 5/34 (the other kind): value = (4 + 4·level)·100  -> lv = (v/100 − 4)/4
+// A gem whose level can't be derived exactly yields null (the client requires a fully
+// parsed set before using gem levels for anything). Picks the largest gems array in the
+// page (the raid loadout; the chaos copy can miss slots).
+function parseClassicGemLevels(html) {
+  let best = null, from = 0;
+  while (true) {
+    const at = html.indexOf("gems:[{", from);
+    if (at === -1) break;
+    from = at + 1;
+    const start = at + "gems:".length;
+    let depth = 0, end = -1;
+    for (let k = start; k < html.length; k++) {
+      const c = html[k];
+      if (c === "[") depth++;
+      else if (c === "]") { depth--; if (depth === 0) { end = k + 1; break; } }
+    }
+    if (end === -1) continue;
+    const lit = html.slice(start, end);
+    if (lit.indexOf("effects") === -1) continue;
+    let arr = null;
+    try { arr = JSON.parse(lit.replace(/([{,[])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:/g, '$1"$2":')); } catch (e) { arr = null; }
+    if (!Array.isArray(arr) || !arr.length || arr[0].id == null) continue;
+    if (!best || arr.length > best.length) best = arr;
+  }
+  if (!best) return null;
+  return best.map(function (g) {
+    const effs = Array.isArray(g.effects) ? g.effects : [];
+    for (const e of effs) {
+      if (!e || e.value == null) continue;
+      let lv = null;
+      if (e.type === 27) lv = (e.value / 100 - 4) / 2;
+      else if (e.type === 5 || e.type === 34) lv = (e.value / 100 - 4) / 4;
+      else continue;
+      if (isFinite(lv) && Math.abs(lv - Math.round(lv)) < 1e-9 && lv >= 1 && lv <= 10) return Math.round(lv);
+      return null;
+    }
+    return null;
+  });
+}
+
 // Fetch a character page (lostark.bible, or lopec.kr when region is KR) and parse it
 // into the stored gem shape. Returns { ok:true, data } or { ok:false, status, body }.
 async function fetchCharacterData(region, name) {
@@ -490,8 +587,16 @@ async function fetchCharacterData(region, name) {
   }
 
   const meta = parseMeta(html, isKR);
+  // Economy signals for the Grader's gpd auto-default (lostark.bible only — the lopec.kr
+  // RSC has no combat power / accessory / classic-gem data we parse). Null when absent.
+  const combatPower = isKR ? null : parseCombatPower(html);
+  const accessories = isKR ? null : parseAccessories(html);
+  const classicGemLevels = isKR ? null : parseClassicGemLevels(html);
   return { ok: true, data: {
     region: region,
+    combatPower: combatPower,
+    accessories: accessories,
+    classicGemLevels: classicGemLevels,
     // Normalize the DISPLAY name (Roman-script -> Title-case; Korean left as-is). This
     // record flows into both the KV value and the JSON response, and ?list=1 echoes it,
     // so the leaderboard shows normalized names. The KV cache KEY is unaffected — it

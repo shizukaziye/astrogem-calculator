@@ -193,6 +193,7 @@
   var GPD_TIERS = [500000, 1000000, 1500000, 2500000, 3500000, 5000000, 7500000, 10000000];
   var GPD_DEFAULT = 1500000;
   var grGpd = GPD_DEFAULT;           // currently-selected gpd for the infographic
+  var grGpdAutoKey = null;           // loadout key the gpd was last auto-set for (see renderLoadout)
   // Roster toggle for the plan: "nrb" | "rb". ALWAYS defaults to non-roster-bound on
   // page load — session-only, deliberately NOT persisted. KR loadouts have no
   // roster-bound gems, so the toggle is hidden (and the plan forced NRB) for KR.
@@ -204,6 +205,101 @@
   function gpdLabel(g) {
     if (g >= 1000000) { var m = (g / 1000000).toFixed(1).replace(/\.0$/, ""); return m + "M"; }
     return (g / 1000).toFixed(0) + "k";
+  }
+
+  // ---- gpd auto-default from the loadout (combat power primary; accessories + classic
+  // gems as consistency signals). The worker adds combatPower / accessories /
+  // classicGemLevels to fresh lostark.bible pulls; older cached records, KR (lopec.kr)
+  // and custom input lack them — those keep GPD_DEFAULT. ----
+
+  // Combat-power → gpd tier bands (10M is deliberately manual-only).
+  function cpToGpd(cp) {
+    if (cp == null || !isFinite(cp) || cp <= 0) return null;
+    if (cp < 3500) return 500000;
+    if (cp < 4000) return 1000000;
+    if (cp < 4500) return 1500000;
+    if (cp < 5500) return 2500000;
+    if (cp < 6500) return 3500000;
+    if (cp < 8000) return 5000000;
+    return 7500000;
+  }
+
+  // DPS-primary accessory lines → low/mid/high roll values (×100, matching the worker's
+  // accessory line values), from lost-ark-accessories METHODOLOGY §2. Support primaries
+  // (Stigma / Gauge / Ally buffs / Healing) and flats are deliberately absent — they
+  // don't classify, so a support loadout simply yields no accessory signal.
+  var ACC_TIERS = {
+    "Outgoing Damage %": [55, 120, 200],
+    "Additional Damage %": [95, 160, 260],
+    "Attack Power %": [40, 95, 155],
+    "Weapon Attack Power %": [80, 180, 300],
+    "Crit Rate %": [40, 95, 155],
+    "Crit Damage %": [110, 240, 400]
+  };
+  function accLineTier(name, value) {   // -> 0 low / 1 mid / 2 high, or null (not a DPS primary)
+    var t = ACC_TIERS[name];
+    if (!t || value == null) return null;
+    for (var i = 2; i >= 0; i--) if (value >= t[i] - 1) return i;   // -1: float-drift guard
+    return 0;
+  }
+  // Per accessory: the MIN of its DPS-primary tiers (a high/low accessory is a budget
+  // item — Shizu's rule: high/low ≈ 500k, high/high ≈ 5M, mixes in between). A single
+  // primary counts as (primary + nothing) = budget. Aggregate = median over the five;
+  // needs ≥3 classifiable accessories (a support loadout returns null → no signal).
+  function accessoriesImpliedGpd(accessories) {
+    if (!accessories || !accessories.length) return null;
+    var per = [];
+    for (var i = 0; i < accessories.length; i++) {
+      var lines = accessories[i].lines || [];
+      var tiers = [];
+      for (var j = 0; j < lines.length; j++) {
+        var t = accLineTier(lines[j].name, lines[j].value);
+        if (t != null) tiers.push(t);
+      }
+      if (!tiers.length) continue;                       // no DPS primary — unclassifiable
+      per.push(tiers.length >= 2 ? Math.min.apply(null, tiers) : 0);
+    }
+    if (per.length < 3) return null;
+    per.sort(function (a, b) { return a - b; });
+    var med = per[Math.floor(per.length / 2)];
+    return med >= 2 ? 5000000 : med >= 1 ? 2500000 : 500000;
+  }
+
+  // Classic-gem floor: full lv10s → at least 5M, full lv9s → at least 1.5M. Requires a
+  // fully parsed set (≥8 gems, no nulls) so a partial parse can't fake a floor.
+  function gemsImpliedFloor(levels) {
+    if (!levels || levels.length < 8) return null;
+    var min = Infinity;
+    for (var i = 0; i < levels.length; i++) {
+      if (levels[i] == null || !isFinite(levels[i])) return null;
+      if (levels[i] < min) min = levels[i];
+    }
+    if (min >= 10) return 5000000;
+    if (min >= 9) return 1500000;
+    return null;
+  }
+
+  // The provenance/consistency line under the gpd selector. Combat power always picks
+  // the default; accessories warn when ≥2 ladder steps away, gems when their floor
+  // exceeds the CP band.
+  function gpdNoteHtml() {
+    var lo = lastLoadout || {};
+    var cpG = cpToGpd(lo.combatPower);
+    var parts = [];
+    if (cpG) {
+      parts.push("auto-set " + gpdLabel(cpG) + " from combat power " + Number(lo.combatPower).toLocaleString("en-US"));
+      var accG = accessoriesImpliedGpd(lo.accessories);
+      if (accG && Math.abs(GPD_TIERS.indexOf(accG) - GPD_TIERS.indexOf(cpG)) >= 2) {
+        parts.push('<span class="gr-gpd-warn">⚠ accessories look closer to ' + gpdLabel(accG) + "</span>");
+      }
+      var floorG = gemsImpliedFloor(lo.classicGemLevels);
+      if (floorG && floorG > cpG) {
+        parts.push('<span class="gr-gpd-warn">⚠ gems suggest at least ' + gpdLabel(floorG) + "</span>");
+      }
+    } else if (lo.source === "lostark.bible" && lo.gems) {
+      parts.push("no combat power in this record — Re-pull to auto-set the tier");
+    }
+    return parts.length ? '<div class="note gr-gpd-note">' + parts.join(" · ") + "</div>" : "";
   }
 
   // rank string -> index in GRADE_ROWS (cached). Built by ranking each anchor grade.
@@ -530,6 +626,8 @@
 '  #tab-grader .gr-gpd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 4px}' +
 '  #tab-grader .gr-gpd .lab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700}' +
 '  #tab-grader .gr-gpd .gpd-btn{min-width:46px;text-align:center;cursor:pointer}' +
+'  #tab-grader .gr-gpd-note{font-size:11px;color:var(--dim);margin:2px 0 4px}' +
+'  #tab-grader .gr-gpd-note .gr-gpd-warn{color:#e8b84a;font-weight:600}' +
 '  #tab-grader .gr-plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px}' +
 '  @media(max-width:680px){#tab-grader .gr-plan-grid{grid-template-columns:1fr}}' +
 '  #tab-grader .gr-plan-card{border:1px solid var(--border);border-radius:10px;background:var(--panel2);overflow:hidden;overflow-x:auto}' +
@@ -1073,6 +1171,7 @@
       + '<span class="pl-sub"><span id="gr-econ-label">' + econLabel + '</span> · per-effect-pair action plan at your loadout’s baseline</span></h2>'
       + '<div class="gr-baseline-host" id="gr-baseline-host">' + baselineHeadHtml(base) + '</div>'
       + '<div class="gr-gpd"><span class="lab">Gold per 1% damage</span>' + gpdBtns + '</div>'
+      + gpdNoteHtml()
       + rosterRow
       + body
       + legend
@@ -1191,6 +1290,14 @@
     var out = $("gr-result");
     var gems = activeGems(data);
     grBaseShift = 0;   // fresh loadout: drop any manual ◀▶ baseline nudge from the last one
+    // Auto-select the gpd tier from combat power — once per pulled record, so axis /
+    // preset flips re-render without clobbering a manual gpd click. A Re-pull bumps
+    // pulledAt, so fresh data (which may have just gained combatPower) re-applies.
+    var autoKey = (data.region || "") + ":" + (data.name || "") + ":" + (data.pulledAt || 0);
+    if (autoKey !== grGpdAutoKey) {
+      grGpdAutoKey = autoKey;
+      grGpd = cpToGpd(data.combatPower) || GPD_DEFAULT;
+    }
     // tag each gem with a stable index so the Weakest-3 rows can jump to its card
     gems.forEach(function (x, i) { x._gidx = i; });
     if (!gems.length) {
