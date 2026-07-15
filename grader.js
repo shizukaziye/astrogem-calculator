@@ -194,6 +194,7 @@
   var GPD_DEFAULT = 1500000;
   var grGpd = GPD_DEFAULT;           // currently-selected gpd for the infographic
   var grGpdAutoKey = null;           // loadout key the gpd was last auto-set for (see renderLoadout)
+  var grAutoRepulled = {};           // "region:name" -> 1 once auto-re-pulled for combat power (session-only)
   // Roster toggle for the plan: "nrb" | "rb". ALWAYS defaults to non-roster-bound on
   // page load — session-only, deliberately NOT persisted. KR loadouts have no
   // roster-bound gems, so the toggle is hidden (and the plan forced NRB) for KR.
@@ -297,9 +298,26 @@
         parts.push('<span class="gr-gpd-warn">⚠ gems suggest at least ' + gpdLabel(floorG) + "</span>");
       }
     } else if (lo.source === "lostark.bible" && lo.gems) {
-      parts.push("no combat power in this record — Re-pull to auto-set the tier");
+      parts.push("no combat power in this record — using the default tier");
     }
     return parts.length ? '<div class="note gr-gpd-note">' + parts.join(" · ") + "</div>" : "";
+  }
+
+  // A CACHED record without combatPower predates the Worker's economy fields — re-pull
+  // it automatically (once per character per session) so the gpd tier can auto-set,
+  // instead of asking the user to click Re-pull. Fresh pulls that STILL lack
+  // combatPower (Worker not redeployed / parse failure) are cached:false, so they can
+  // never re-trigger this — no loop. Returns true when a re-pull was kicked off.
+  function maybeAutoRepullForCp(record) {
+    if (!record || record.cached !== true || record.combatPower != null) return false;
+    if (record.source !== "lostark.bible") return false;           // KR / custom never have it
+    if (!Array.isArray(record.gems) || !record.gems.length) return false;
+    var key = ((record.region || "") + ":" + (record.name || "")).toLowerCase();
+    if (grAutoRepulled[key]) return false;
+    grAutoRepulled[key] = 1;
+    setPullStatus("Cached record has no combat power — re-pulling " + (record.name || "") + "…", "working");
+    setTimeout(function () { runPull(true); }, 0);   // deferred: let the current pull chain finish
+    return true;
   }
 
   // rank string -> index in GRADE_ROWS (cached). Built by ranking each anchor grade.
@@ -1579,7 +1597,11 @@ presetToggleHtml(data) +
         startQueueWatch(region, name, sinceTs, !!cachedShow, d);
         return;
       }
-      if (cachedShow) { setPullStatus("Graded " + cachedShow.gems.length + " gems.", ""); return; }
+      if (cachedShow) {
+        // Cached record lacking combatPower? Kick off the re-pull automatically.
+        if (!maybeAutoRepullForCp(cachedShow)) setPullStatus("Graded " + cachedShow.gems.length + " gems.", "");
+        return;
+      }
       // Anything else: an error / rate-limit / busy / monthly-budget message.
       var msg = d.error || "Worker returned an error.";
       setPullStatus(msg, "err");
@@ -1928,6 +1950,7 @@ presetToggleHtml(data) +
       if (refreshBtn && WORKER_URL) refreshBtn.style.display = "";
       setPullStatus("Showing stored loadout for " + (charData.name || "") + ".", "");
       renderLoadout(charData);
+      maybeAutoRepullForCp(charData);   // stored records may predate combatPower — self-heal
     };
 
     // first paint: open in "Pull from lostark.bible" mode (the primary mode). Custom
