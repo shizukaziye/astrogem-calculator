@@ -441,9 +441,15 @@ const OUTGOING_BY_TIER = [55, 120, 200];
 //   other buff-style types (value ×100 like type:2):
 const BUFF_TYPE_NAME = { 29: "Gauge Gain %", 51: "Healing %", 54: "Ally Atk Buff %", 59: "Ally Dmg Buff %" };
 
-// combatPower:{id:1,score:7554.56} — the page's headline Combat Power.
+// The page's HEADLINE (top-left) Combat Power is estimatedMaxCombatPower — the
+// estimated RAID loadout. The plain combatPower field is only the last-seen equipped
+// snapshot and can sit far below it when the character was last seen in a stripped or
+// chaos build (NA/Kayamix renders ≈5466.3 while plain combatPower says 2284.76).
+// Characters without an estimate (e.g. NA/Millie) fall back to the plain field; the
+// [^A-Za-z] guard keeps the fallback from matching inside max/estimatedMaxCombatPower.
 function parseCombatPower(html) {
-  const m = html.match(/combatPower:\{id:\d+,score:([\d.]+)\}/);
+  let m = html.match(/estimatedMaxCombatPower:\{id:\d+,score:([\d.]+)\}/);
+  if (!m) m = html.match(/[^A-Za-z]combatPower:\{id:\d+,score:([\d.]+)\}/);
   return m ? parseFloat(m[1]) : null;
 }
 
