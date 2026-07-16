@@ -654,8 +654,13 @@
     }
 
     // ---- REROLL ----
+    // Turn 1 CAN reroll: the game shows the "View Other Items" counter on an unprocessed
+    // gem, and the first two are free (only the last costs finalReroll). The turn-1 rule
+    // is that you cannot COMPLETE ("Available after processing 1 time"), which is handled
+    // above — it never applied to rerolling. This mirrors W()/chooseAction, which have
+    // always gated reroll on `r >= 1` alone.
     var rerollNet = -Infinity, rerollScore = NaN, rerollCost_ = 0, rerollAbove = 0;
-    if (r >= 1 && t >= 1 && !isFirstTurn) {
+    if (r >= 1 && t >= 1) {
       var rc = rb ? 0 : rerollCost(r);
       var rch = solver._node(config, t, r - 1, cm);
       rerollNet = -rc + rch.v;

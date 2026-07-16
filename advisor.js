@@ -600,7 +600,7 @@
         '<div class="cn">' + name + (isBest ? ' <span class="pill">Recommended</span>' : "") + "</div>" +
         '<div class="cm">' +
           (disabled
-            ? '<div style="color:var(--dim)">Not applicable' + (name === "Complete" && includeSim2 === false ? " (not ranked)" : (name === "Reroll" ? " (no rerolls / turn 1)" : "")) + "</div>"
+            ? '<div style="color:var(--dim)">Not applicable' + (name === "Complete" && includeSim2 === false ? " (not ranked)" : (name === "Reroll" ? " (no rerolls left)" : (name === "Complete" ? " (turn 1 — process once first)" : ""))) + "</div>"
             : '<div>P(above baseline): <span class="ev">' + odds + '%</span></div>' +
               '<div>Net EV: <span class="ev ' + evClass + '">' + fmtGold(a.value) + "</span></div>" +
               scoreLine + costLine) +

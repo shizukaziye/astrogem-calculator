@@ -200,10 +200,10 @@
   // Decide whether to reroll the on-screen outcomes during an inner rollout.
   // Dependency-free heuristic: reroll when the BEST available outcome barely
   // improves the gem (low upside) yet we still have rerolls to spare relative to
-  // remaining turns. Turn 1 can never reroll.
+  // remaining turns. Turn 1 is eligible like any other turn — the game gates only
+  // COMPLETE on having processed once, never the "View Other Items" reroll.
   function chooseInnerReroll(state, outcomes, baseline) {
     if (state.rerollsRemaining <= 0) return false;
-    if (state.currentTurn === 1) return false;
     var turnsRemaining = Math.max(1, state.maxTurns - state.currentTurn + 1);
     var current = A.gemValue(state.config);
     var best = -Infinity;
@@ -360,7 +360,9 @@
         process.totalScore += ps.finalScore; process.totalValue += ps.finalValue; process.totalCost += ps.totalCost; process.count++;
         if (ps.finalScore > baseline) process.aboveBaseline++;
       }
-      if (s.currentTurn > 1 && s.rerollsRemaining > 0) {
+      // Turn 1 can reroll (only COMPLETE is gated on having processed once), so this
+      // is `rerollsRemaining > 0` alone — matching the DP's topLevelAdvice.
+      if (s.rerollsRemaining > 0) {
         var rs = simulateRandomPath(s, "reroll", baseline, goldPerDamage, initialGoldSpent, null, true);
         reroll.totalScore += rs.finalScore; reroll.totalValue += rs.finalValue; reroll.totalCost += rs.totalCost; reroll.count++;
         if (rs.finalScore > baseline) reroll.aboveBaseline++;
