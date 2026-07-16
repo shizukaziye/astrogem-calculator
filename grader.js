@@ -36,7 +36,8 @@
   // Leave as "" to keep the "Pull from character" mode disabled; Custom mode needs
   // no setup. Deploy: cd worker && wrangler deploy --config wrangler.bible.toml
   // ===========================================================================
-  var WORKER_URL = "https://astrogem-bible.shizukaziye.workers.dev";
+  var WORKER_URL = (typeof window !== "undefined" && window.LoadoutEcon && window.LoadoutEcon.WORKER_URL)
+    || "https://astrogem-bible.shizukaziye.workers.dev";   // single source of truth: loadout-econ.js
 
   // ---- model-core handles (with safe fallbacks for the constants) ----
   var A = (typeof window !== "undefined" && window.Astrogem) || null;
@@ -103,36 +104,24 @@
     return relDamage(cfg);
   }
 
-  // Support classes that CAN play support (gate for the support-default auto-detect).
-  var SUPPORT_CLASSES = { Bard: 1, Paladin: 1, Artist: 1, Valkyrie: 1 };
-  var SUPPORT_EFFECTS = { "Ally Attack Enh.": 1, "Brand Power": 1, "Ally Damage Enh.": 1 };
-  var DPS_EFFECTS = { "Attack Power": 1, "Additional Damage": 1, "Boss Damage": 1 };
-
-  // A loadout is "support-dominant" if, summed across every gem, the levels on support
-  // effects CLEARLY outweigh the DPS-effect levels (>= 2x). A real support runs almost no
-  // DPS gems (observed ~3.6-3.9x), while a hybrid / DPS-built valkyrie sits near parity
-  // (~1.3x), so a 2x gate separates them and keeps mixed builds defaulting to DPS.
-  function supportDominant(gems) {
-    var sup = 0, dps = 0;
-    (gems || []).forEach(function (x) {
-      [["effect1", "effect1Level"], ["effect2", "effect2Level"]].forEach(function (p) {
-        var name = x[p[0]], lv = x[p[1]] || 0;
-        if (SUPPORT_EFFECTS[name]) sup += lv;
-        else if (DPS_EFFECTS[name]) dps += lv;
-      });
-    });
-    return sup > 0 && sup >= dps * 2;
-  }
-
-  // The DEFAULT grading mode for a freshly-pulled loadout: Support iff a support class
-  // AND a support-dominant gem set (and the support axis exists); otherwise DPS.
-  function defaultModeFor(data) {
-    if (!supportAxisAvailable()) return "dps";
-    var cls = data && data.class;
-    var gems = (data && data.gems) || [];
-    if (cls && SUPPORT_CLASSES[cls] && supportDominant(gems)) return "support";
-    return "dps";
-  }
+  // ---- shared loadout-econ module (extracted 2026-07-16 — see loadout-econ.js). ----
+  // The wrappers below keep the ORIGINAL private names and signatures and close over
+  // grader UI state (grMode, grBaseShift), so every call site in this file is
+  // unchanged. loadout-econ.js is eager-loaded right before this file.
+  var Econ = (typeof window !== "undefined" && window.LoadoutEcon) || null;
+  var GRADE_ROWS = Econ.GRADE_ROWS;
+  var GPD_TIERS = Econ.GPD_TIERS;
+  var GPD_DEFAULT = Econ.GPD_DEFAULT;
+  var gpdLabel = Econ.gpdLabel;
+  var cpToGpd = Econ.cpToGpd;
+  var gemsImpliedFloor = Econ.gemsImpliedFloor;
+  function accessoriesImpliedGpd(acc) { return Econ.accessoriesImpliedGpd(acc, grMode); }
+  // Support iff a support class AND support-dominant gems (and the axis exists —
+  // the availability gate stays HERE so an old model can never flip the toggle on).
+  function defaultModeFor(data) { return supportAxisAvailable() ? Econ.defaultModeFor(data) : "dps"; }
+  function typeBaseline(gems, gemType) { return Econ.typeBaseline(gems, gemType, grMode); }
+  function blanketBaseline(gems) { return Econ.blanketBaseline(gems, { axis: grMode, shift: grBaseShift }); }
+  function getFieldSnapshot() { return Econ.fieldSnapshot(); }
 
   // Which loadout's gems to grade: the chaos-dungeon preset when toggled on (and present),
   // otherwise the raid preset. data.chaosGems only exists when the character has a distinct
@@ -185,13 +174,7 @@
   var lastLoadout = null; // cache of the most recent pulled loadout (for re-render)
 
   // ---- "what to do with your astrogems" infographic config ----
-  // The Pipeline tab bakes one DP solve per these 12 anchor grades; each maps 1:1
-  // to a distinct rank (C- … S+), so the array IS a clean rank ladder. We mirror it
-  // here so a gem's rank can be "bumped one rank up" by stepping to the next index.
-  var GRADE_ROWS = [40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95];
-  // gpd tiers offered by the selector (must match gpdsInData() in pipeline.json).
-  var GPD_TIERS = [500000, 1000000, 1500000, 2500000, 3500000, 5000000, 7500000, 10000000];
-  var GPD_DEFAULT = 1500000;
+  // GRADE_ROWS / GPD_TIERS / GPD_DEFAULT now come from loadout-econ.js (see wrappers above).
   var grGpd = GPD_DEFAULT;           // currently-selected gpd for the infographic
   var grGpdAutoKey = null;           // loadout key the gpd was last auto-set for (see renderLoadout)
   var grAutoRepulled = {};           // "region:name" -> 1 once auto-re-pulled for combat power (session-only)
@@ -203,94 +186,8 @@
   // 0 on every fresh loadout render; clamped so the final baseline index stays in range.
   var grBaseShift = 0;
 
-  function gpdLabel(g) {
-    if (g >= 1000000) { var m = (g / 1000000).toFixed(1).replace(/\.0$/, ""); return m + "M"; }
-    return (g / 1000).toFixed(0) + "k";
-  }
-
-  // ---- gpd auto-default from the loadout (combat power primary; accessories + classic
-  // gems as consistency signals). The worker adds combatPower / accessories /
-  // classicGemLevels to fresh lostark.bible pulls; older cached records, KR (lopec.kr)
-  // and custom input lack them — those keep GPD_DEFAULT. ----
-
-  // Combat-power → gpd tier bands (7.5M and 10M are deliberately manual-only).
-  function cpToGpd(cp) {
-    if (cp == null || !isFinite(cp) || cp <= 0) return null;
-    if (cp < 3500) return 500000;
-    if (cp < 4500) return 1000000;
-    if (cp < 5500) return 1500000;
-    if (cp < 6500) return 2500000;
-    if (cp < 7500) return 3500000;
-    return 5000000;
-  }
-
-  // Primary accessory lines → low/mid/high roll values (×100, matching the worker's
-  // accessory line values), from lost-ark-accessories METHODOLOGY §2 (DPS) and §3
-  // (support). The classifier is AXIS-AWARE: in Support mode a loadout is judged by its
-  // support primaries (Stigma / Gauge / Ally buffs / Weapon%), so a support's high/high
-  // pieces read as high/high instead of falling through the DPS table.
-  var ACC_TIERS_DPS = {
-    "Outgoing Damage %": [55, 120, 200],
-    "Additional Damage %": [95, 160, 260],
-    "Attack Power %": [40, 95, 155],
-    "Weapon Attack Power %": [80, 180, 300],
-    "Crit Rate %": [40, 95, 155],
-    "Crit Damage %": [110, 240, 400]
-  };
-  var ACC_TIERS_SUPPORT = {
-    "Stigma %": [215, 480, 800],
-    "Gauge Gain %": [160, 360, 600],
-    "Ally Dmg Buff %": [200, 450, 750],
-    "Ally Atk Buff %": [135, 300, 500],
-    "Weapon Attack Power %": [80, 180, 300]
-  };
-  function accLineTier(name, value, table) {   // -> 0 low / 1 mid / 2 high, or null (not a primary)
-    var t = table[name];
-    if (!t || value == null) return null;
-    for (var i = 2; i >= 0; i--) if (value >= t[i] - 1) return i;   // -1: float-drift guard
-    return 0;
-  }
-  // Per accessory: the MIN of its primary tiers (a high/low accessory is a budget item —
-  // Shizu's rule: high/low ≈ 500k, high/high ≈ 5M, mixes in between). A single primary
-  // counts as (primary + nothing) = budget — EXCEPT support earrings, whose pool has ONE
-  // primary by design (Weapon Attack Power %), so its tier alone IS the accessory's tier.
-  // Aggregate = median over the five; needs ≥3 classifiable accessories, else no signal.
-  function accessoriesImpliedGpd(accessories) {
-    if (!accessories || !accessories.length) return null;
-    var support = isSupport();
-    var table = support ? ACC_TIERS_SUPPORT : ACC_TIERS_DPS;
-    var per = [];
-    for (var i = 0; i < accessories.length; i++) {
-      var slot = accessories[i].slot || "";
-      var lines = accessories[i].lines || [];
-      var tiers = [];
-      for (var j = 0; j < lines.length; j++) {
-        var t = accLineTier(lines[j].name, lines[j].value, table);
-        if (t != null) tiers.push(t);
-      }
-      if (!tiers.length) continue;                       // no primary on this axis — unclassifiable
-      var singleIsFull = support && (slot === "ear1" || slot === "ear2");
-      per.push((tiers.length >= 2 || singleIsFull) ? Math.min.apply(null, tiers) : 0);
-    }
-    if (per.length < 3) return null;
-    per.sort(function (a, b) { return a - b; });
-    var med = per[Math.floor(per.length / 2)];
-    return med >= 2 ? 5000000 : med >= 1 ? 2500000 : 500000;
-  }
-
-  // Classic-gem floor: full lv10s → at least 5M, full lv9s → at least 1.5M. Requires a
-  // fully parsed set (≥8 gems, no nulls) so a partial parse can't fake a floor.
-  function gemsImpliedFloor(levels) {
-    if (!levels || levels.length < 8) return null;
-    var min = Infinity;
-    for (var i = 0; i < levels.length; i++) {
-      if (levels[i] == null || !isFinite(levels[i])) return null;
-      if (levels[i] < min) min = levels[i];
-    }
-    if (min >= 10) return 5000000;
-    if (min >= 9) return 1500000;
-    return null;
-  }
+  // gpdLabel / cpToGpd / accessoriesImpliedGpd / gemsImpliedFloor live in
+  // loadout-econ.js now (see the wrapper block above).
 
   // The provenance/consistency line under the gpd selector. Combat power always picks
   // the default; accessories warn when ≥2 ladder steps away, gems when their floor
@@ -332,91 +229,8 @@
     return true;
   }
 
-  // rank string -> index in GRADE_ROWS (cached). Built by ranking each anchor grade.
-  var RANK_TO_IDX = null;
-  function rankToIdx() {
-    if (RANK_TO_IDX) return RANK_TO_IDX;
-    RANK_TO_IDX = {};
-    for (var i = 0; i < GRADE_ROWS.length; i++) RANK_TO_IDX[rankFromGrade(GRADE_ROWS[i])] = i;
-    return RANK_TO_IDX;
-  }
-
-  // The baseline GRADE_ROWS grade for a gem grade, bumped ONE rank up: find the
-  // anchor index for the gem's rank, step +1 (clamped to the top), return that
-  // anchor grade. Falls back to the gem's own anchor if its rank isn't on the ladder.
-  function bumpedBaselineGrade(gemGrade) {
-    var map = rankToIdx();
-    var rank = rankFromGrade(gemGrade);
-    var idx = map[rank];
-    if (idx == null) {
-      // off-ladder: snap to the nearest anchor grade by value, then bump.
-      var best = 0, bd = Infinity;
-      for (var i = 0; i < GRADE_ROWS.length; i++) {
-        var d = Math.abs(GRADE_ROWS[i] - gemGrade);
-        if (d < bd) { bd = d; best = i; }
-      }
-      idx = best;
-    }
-    var up = Math.min(idx + 1, GRADE_ROWS.length - 1);
-    return GRADE_ROWS[up];
-  }
-
-  // ORDER/CHAOS baseline from the 3rd-lowest-GRADE gem of that type, bumped one
-  // rank up. <3 valid gems -> use the lowest available. Returns null if none.
-  // AXIS-AWARE (gGrade): in Support mode the baseline comes from support grades, so the
-  // support plan's bar is the support rank of your weakest kept gems.
-  //   { srcGrade, srcRank, baseGrade, baseRank, count }
-  function typeBaseline(gems, gemType) {
-    var graded = (gems || []).filter(function (x) {
-      return x.gemType === gemType && validateConfig(x).valid;
-    }).map(function (x) { return gGrade(x); }).sort(function (a, b) { return a - b; });
-    if (!graded.length) return null;
-    var src = graded.length >= 3 ? graded[2] : graded[0];
-    var baseGrade = bumpedBaselineGrade(src);
-    return {
-      srcGrade: src, srcRank: rankFromGrade(src),
-      baseGrade: baseGrade, baseRank: rankFromGrade(baseGrade),
-      count: graded.length
-    };
-  }
-
-  // GRADE_ROWS index of an anchor grade (exact match, else nearest by value).
-  function gradeRowIdx(g) {
-    var i = GRADE_ROWS.indexOf(g);
-    if (i !== -1) return i;
-    var best = 0, bd = Infinity;
-    for (var k = 0; k < GRADE_ROWS.length; k++) {
-      var d = Math.abs(GRADE_ROWS[k] - g);
-      if (d < bd) { bd = d; best = k; }
-    }
-    return best;
-  }
-
-  // ONE blanket baseline for the whole loadout (NOT per Order/Chaos). Take the 3rd-lowest
-  // -grade gem of EACH type (typeBaseline.srcGrade), keep the STRONGER (higher-grade) of
-  // the two, bump it one rank up — then apply the manual ◀▶ shift (grBaseShift), clamped
-  // to GRADE_ROWS. Returns null only if the loadout has no valid gems at all.
-  //   { srcGrade, srcRank, srcType, baseIdx, baseGrade, baseRank,
-  //     shift, atMin, atMax, order, chaos }
-  function blanketBaseline(gems) {
-    var bo = typeBaseline(gems, "order");
-    var bc = typeBaseline(gems, "chaos");
-    if (!bo && !bc) return null;
-    // stronger SOURCE gem across the two types (ties -> order, arbitrary but stable)
-    var src, srcType;
-    if (bo && (!bc || bo.srcGrade >= bc.srcGrade)) { src = bo.srcGrade; srcType = "order"; }
-    else { src = bc.srcGrade; srcType = "chaos"; }
-    var bumped = bumpedBaselineGrade(src);               // one rank above the stronger source
-    var idx = gradeRowIdx(bumped);
-    var shifted = Math.max(0, Math.min(GRADE_ROWS.length - 1, idx + grBaseShift));
-    var baseGrade = GRADE_ROWS[shifted];
-    return {
-      srcGrade: src, srcRank: rankFromGrade(src), srcType: srcType,
-      baseIdx: shifted, baseGrade: baseGrade, baseRank: rankFromGrade(baseGrade),
-      shift: grBaseShift, atMin: shifted <= 0, atMax: shifted >= GRADE_ROWS.length - 1,
-      order: bo, chaos: bc
-    };
-  }
+  // bumpedBaselineGrade / typeBaseline / gradeRowIdx / blanketBaseline live in
+  // loadout-econ.js now (axis/shift parameterized; see the wrapper block above).
 
   // ---------------- DOM helpers ----------------
   function $(id) { return document.getElementById(id); }
@@ -1279,32 +1093,8 @@
   // Fetched once per session (compact fmt=2 snapshot; same endpoint the leaderboard uses)
   // and reused across re-grades and axis flips. Decoder kept in lockstep with
   // decodeSnapshotV2 in leaderboard.js (duplicated because the leaderboard is lazy-loaded).
-  var fieldSnapPromise = null;
-  var FR_SLOT = { 1: "Order Sun", 2: "Order Moon", 3: "Order Star", 4: "Chaos Sun", 5: "Chaos Moon", 6: "Chaos Star" };
-  function decodeFieldSnapshot(data) {
-    if (!data || data.v !== 2) return (data && data.characters) || [];
-    var classes = data.classes || [], effects = data.effects || [];
-    function eff(i) { return (typeof i === "number" && i > 0) ? (effects[i - 1] || null) : null; }
-    return (data.characters || []).map(function (a) {
-      return { region: a[0], name: a[1], class: (a[3] != null && a[3] >= 0) ? classes[a[3]] : null,
-        gems: (a[5] || []).map(function (t) {
-          var core = t[0] | 0;
-          return { slot: core ? FR_SLOT[core] : null, coreBase: core ? 10000 + core : null,
-            baseCost: t[1], gemType: t[2] ? "chaos" : "order", willpowerLevel: t[3], orderLevel: t[4],
-            effect1: eff(t[5]), effect1Level: t[6], effect2: eff(t[7]), effect2Level: t[8] };
-        }) };
-    });
-  }
-  function getFieldSnapshot() {
-    if (!fieldSnapPromise && WORKER_URL) {
-      var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
-      fieldSnapPromise = fetch(WORKER_URL.replace(/\/+$/, "") + "/?list=1&fmt=2" + (k ? "&k=" + encodeURIComponent(k) : ""))
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(decodeFieldSnapshot)
-        .catch(function () { fieldSnapPromise = null; return null; });
-    }
-    return fieldSnapPromise || Promise.resolve(null);
-  }
+  // getFieldSnapshot now delegates to LoadoutEcon.fieldSnapshot() (see the wrapper
+  // block near the top) — the decode + session cache moved to loadout-econ.js.
   function fillFieldRank(data, sup, rankDmg) {
     if (rankDmg == null || !(A && A.gridDamage && A.validateConfig)) return;
     getFieldSnapshot().then(function (chars) {
@@ -1587,15 +1377,7 @@ presetToggleHtml(data) +
     if (refreshBtn) refreshBtn.disabled = true;
 
     stopPoll(); clearRefreshBanner(); // cancel any in-flight queue poll + clear a prior refresh banner
-    var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
-    var url = WORKER_URL.replace(/\/+$/, "") +
-      "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) +
-      "&queue=1&pos=1" +
-      (refresh ? "&refresh=1" : "") +
-      (k ? "&k=" + encodeURIComponent(k) : "");
-    fetch(url).then(function (resp) {
-      return resp.json().then(function (data) { return { ok: resp.ok, data: data }; });
-    }).then(function (r) {
+    Econ.fetchCharacter(region, name, { refresh: refresh }).then(function (r) {
       var d = r.data || {};
       if (d.unavailable) { setUnavailable(true, d.error); setPullStatus(d.error || "Lookups are temporarily unavailable.", "err"); return; }
       // The cached loadout to SHOW (if any): from this response (Grade loadout on a cached char),
@@ -1717,9 +1499,7 @@ presetToggleHtml(data) +
         tick(cachedRefresh ? "still refreshing — try again later." : "still queued — check back later, or search again.");
         return;
       }
-      var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
-      var url = WORKER_URL.replace(/\/+$/, "") + "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) + "&queue=1&pos=1" + (k ? "&k=" + encodeURIComponent(k) : "");
-      fetch(url).then(function (resp) { return resp.json().then(function (data) { return { ok: resp.ok, data: data }; }); }).then(function (r) {
+      Econ.fetchCharacter(region, name).then(function (r) {
         var d = r.data || {};
         var hasGems = Array.isArray(d.gems) && d.gems.length;
         // Done only once the cache is genuinely NEWER than what we're replacing (a stale-cache hit
