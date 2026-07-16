@@ -286,10 +286,14 @@
     return result;
   }
 
-  // Parse turns / rerolls / process cost from the footer text.
+  // Parse turns / rerolls / process cost from the footer text. The reroll counter is
+  // reported as the SHOWN free-reroll fraction (rerollsShownFree/-Denom) — the screen
+  // shows free rerolls only; constraintSnap converts to model units (shown + 1 while
+  // the paid final reroll is unspent).
   function parseCuttingState(stitched) {
     var text = normalizeOcrText(stitched).toLowerCase();
-    var result = { turnsRemaining: null, maxTurns: null, rerollsRemaining: null,
+    var result = { turnsRemaining: null, maxTurns: null,
+      rerollsShownFree: null, rerollsShownDenom: null,
       processCost: null, processCostMultiplier: null };
 
     var procTurn = text.match(/process\s*\(\s*(\d+)\s*\/\s*(\d+)\s*\)/i);
@@ -307,18 +311,23 @@
       }
     }
 
-    // free-reroll counter like 1/1, 2/2 (avoid the Process x/N which is >= 5)
-    var fracs = text.match(/(\d+)\s*\/\s*(\d+)/g) || [];
+    // free-reroll counter like 1/1, 2/2 (avoid the Process x/N which is >= 5, and the
+    // "Reset (1/1)" pill — skipping "reset (a/b)" matches is cheap insurance since a
+    // full-frame text pass sees it before the reroll pill)
+    var noReset = text.replace(/reset\s*\(\s*\d+\s*\/\s*\d+\s*\)/g, " ");
+    var fracs = noReset.match(/(\d+)\s*\/\s*(\d+)/g) || [];
     for (var i = 0; i < fracs.length; i++) {
       var m = fracs[i].match(/(\d+)\s*\/\s*(\d+)/);
       if (!m) continue;
       var ra = parseInt(m[1], 10), rb = parseInt(m[2], 10);
       if (ra >= 5 || rb >= 5) continue;
-      if (ra >= 0 && ra <= 3 && rb >= 1 && rb <= 3) { result.rerollsRemaining = ra; break; }
+      if (ra >= 0 && ra <= 3 && rb >= 1 && rb <= 3) {
+        result.rerollsShownFree = ra; result.rerollsShownDenom = rb; break;
+      }
     }
-    if (result.rerollsRemaining == null) {
+    if (result.rerollsShownFree == null) {
       var rr = text.match(/reroll[s]?\s*[:\s]*(\d+)|(\d+)\s*reroll/i);
-      if (rr) result.rerollsRemaining = parseInt(rr[1] || rr[2], 10);
+      if (rr) result.rerollsShownFree = parseInt(rr[1] || rr[2], 10);
     }
 
     var procLine = text.match(/processing\s*cost\s*[:\s]*([\d,]{2,6})/i);
@@ -586,7 +595,7 @@
       state: {
         currentTurn: null, maxTurns: cut.maxTurns,
         turnsRemaining: cut.turnsRemaining,
-        rerollsRemaining: cut.rerollsRemaining,
+        rerollsShownFree: cut.rerollsShownFree, rerollsShownDenom: cut.rerollsShownDenom,
         processCost: cut.processCost, processCostMultiplier: cut.processCostMultiplier,
         totalGoldSpent: 0, rosterBound: false
       },

@@ -41,11 +41,19 @@ var tesseractMod = require(path.join(ROOT, "ocr", "tesseract-engine.js"));
 
 // ---- args ----
 function parseArgs(argv) {
-  var out = { engines: null, workerUrl: process.env.WORKER_URL || null };
+  var out = { engines: null, workerUrl: process.env.WORKER_URL || null, json: false, gates: [] };
   argv.forEach(function (a) {
     var m;
     if ((m = a.match(/^--engines=(.+)$/))) out.engines = m[1].split(",").map(function (s) { return s.trim(); });
     else if ((m = a.match(/^--worker-url=(.+)$/))) out.workerUrl = m[1];
+    else if (a === "--json") out.json = true;
+    else if ((m = a.match(/^--gate=(.+)$/))) {
+      // --gate=<engine>:<minFields>,<minOutcomes>   e.g. --gate=structural:0.95,0.95
+      // (fields = the per-field average incl. the outcome-set score — the headline metric)
+      var g = m[1].match(/^([a-z0-9_-]+):([\d.]+)\s*,\s*([\d.]+)$/i);
+      if (g) out.gates.push({ engine: g[1], fields: parseFloat(g[2]), outcomes: parseFloat(g[3]) });
+      else console.log("Ignoring malformed --gate (want --gate=<engine>:<fields>,<outcomes>): " + a);
+    }
   });
   return out;
 }
@@ -76,7 +84,21 @@ function findSamples() {
 function scoreOne(parsed, truthRaw) {
   var truth = engineApi.constraintSnap(truthRaw);
   var fields = [];
-  function cmp(label, a, b) { fields.push({ label: label, ok: String(a) === String(b), got: a, want: b }); }
+  // Per-field confidence from the engine (via constraintSnap's passthrough); absent -> 1.
+  var conf = parsed.confidence || {};
+  var confC = conf.config || {}, confS = conf.state || {}, confO = conf.outcomes || [];
+  var CONF_BY_LABEL = {
+    baseCost: confC.baseCost, gemType: confC.gemType,
+    willpowerLevel: confC.willpowerLevel, orderLevel: confC.orderLevel,
+    effect1: confC.effect1, effect1Level: confC.effect1Level,
+    effect2: confC.effect2, effect2Level: confC.effect2Level,
+    currentTurn: confS.currentTurn, maxTurns: confS.rarity,
+    rerollsRemaining: confS.rerollsRemaining, processCostMultiplier: confS.processCostMultiplier
+  };
+  function cmp(label, a, b) {
+    var c = CONF_BY_LABEL[label];
+    fields.push({ label: label, ok: String(a) === String(b), got: a, want: b, conf: c == null ? 1 : c });
+  }
 
   var pc = parsed.config, tc = truth.config;
   cmp("baseCost", pc.baseCost, tc.baseCost);
@@ -113,15 +135,29 @@ function scoreOne(parsed, truthRaw) {
     if (i !== -1) { matched++; pool.splice(i, 1); }
   });
   var outcomeScore = wantKeys.length ? matched / wantKeys.length : 1;
-  fields.push({ label: "outcomes(" + matched + "/" + wantKeys.length + ")", ok: matched === wantKeys.length, score: outcomeScore });
+  var outcomeConf = confO.length ? Math.min.apply(null, confO.map(function (c) { return c == null ? 1 : c; })) : 1;
+  fields.push({ label: "outcomes(" + matched + "/" + wantKeys.length + ")", ok: matched === wantKeys.length, score: outcomeScore, conf: outcomeConf });
 
   var scalarFields = fields.filter(function (f) { return f.score == null; });
   var correct = scalarFields.filter(function (f) { return f.ok; }).length;
+  // The HEADLINE per-sample metric (Shizu's definition): mean over the 13 scored
+  // fields — the 12 scalars (0/1 each) + the outcome multiset score.
+  var headline = (correct + outcomeScore) / (scalarFields.length + 1);
+  // Confidence flagging at the UI threshold: of the WRONG fields, how many carried
+  // conf < 0.8 (i.e. would have been highlighted "confirm me")?
+  var CONF_T = 0.8;
+  var wrongAll = scalarFields.filter(function (f) { return !f.ok; });
+  if (matched !== wantKeys.length) wrongAll = wrongAll.concat([{ conf: outcomeConf }]);
+  var wrongFlagged = wrongAll.filter(function (f) { return (f.conf == null ? 1 : f.conf) < CONF_T; }).length;
   return {
     fields: fields,
     scalarCorrect: correct,
     scalarTotal: scalarFields.length,
-    outcomeScore: outcomeScore
+    outcomeScore: outcomeScore,
+    headline: headline,
+    wholeParse: correct === scalarFields.length && matched === wantKeys.length,
+    wrongTotal: wrongAll.length,
+    wrongFlagged: wrongFlagged
   };
 }
 
@@ -156,7 +192,8 @@ function makeNodeTesseractParser() {
         config: cfg,
         state: {
           currentTurn: null, maxTurns: cut.maxTurns, turnsRemaining: cut.turnsRemaining,
-          rerollsRemaining: cut.rerollsRemaining, processCost: cut.processCost,
+          rerollsShownFree: cut.rerollsShownFree, rerollsShownDenom: cut.rerollsShownDenom,
+          processCost: cut.processCost,
           processCostMultiplier: cut.processCostMultiplier, totalGoldSpent: 0, rosterBound: false
         },
         rarity: cfg.rarity, outcomes: outcomes
@@ -263,11 +300,14 @@ async function main() {
   console.log("Scoring " + scored.length + " sample(s) across: " + engines.map(function (e) { return e.name; }).join(", "));
   console.log("");
 
+  var jsonOut = { samples: scored.length, engines: {} };
   for (var ei = 0; ei < engines.length; ei++) {
     var eng = engines[ei];
     console.log("--- " + eng.label + " ---");
-    var totScalarCorrect = 0, totScalar = 0, totOutcome = 0, n = 0;
+    var totScalarCorrect = 0, totScalar = 0, totOutcome = 0, totHeadline = 0, n = 0;
+    var whole = 0, wrongTotal = 0, wrongFlagged = 0;
     var fieldAgg = {}; // label -> {ok,total}
+    var perSample = [];
     for (var si = 0; si < scored.length; si++) {
       var s = scored[si];
       var truthRaw;
@@ -279,6 +319,9 @@ async function main() {
       var sc = scoreOne(parsed, truthRaw);
       n++;
       totScalarCorrect += sc.scalarCorrect; totScalar += sc.scalarTotal; totOutcome += sc.outcomeScore;
+      totHeadline += sc.headline;
+      if (sc.wholeParse) whole++;
+      wrongTotal += sc.wrongTotal; wrongFlagged += sc.wrongFlagged;
       sc.fields.forEach(function (f) {
         if (f.score != null) return;
         fieldAgg[f.label] = fieldAgg[f.label] || { ok: 0, total: 0 };
@@ -287,26 +330,54 @@ async function main() {
       });
       var wrong = sc.fields.filter(function (f) { return f.score == null && !f.ok; })
         .map(function (f) { return f.label + "(" + f.got + "≠" + f.want + ")"; });
+      perSample.push({ name: s.name, headline: sc.headline, wholeParse: sc.wholeParse, outcomes: sc.outcomeScore });
       console.log("  " + pad(s.name, 18) +
         " fields " + sc.scalarCorrect + "/" + sc.scalarTotal +
         "  outcomes " + pct(sc.outcomeScore) +
+        (sc.wholeParse ? "  ✓whole" : "") +
         (wrong.length ? "   miss: " + wrong.join(", ") : ""));
     }
     if (n > 0) {
+      var headlineAvg = totHeadline / n, outcomesAvg = totOutcome / n;
       console.log("  " + pad("TOTAL", 18) +
         " fields " + pct(totScalar ? totScalarCorrect / totScalar : 0) +
-        "  outcomes " + pct(totOutcome / n) + "  (" + n + " samples)");
-      // per-field accuracy
+        "  outcomes " + pct(outcomesAvg) + "  (" + n + " samples)");
+      console.log("  HEADLINE per-field avg (12 scalars + outcome set): " + pct(headlineAvg) +
+        "   whole-parse: " + whole + "/" + n + " (" + pct(whole / n) + ")" +
+        "   flag-coverage: " + (wrongTotal ? wrongFlagged + "/" + wrongTotal + " wrong fields flagged (" + pct(wrongFlagged / wrongTotal) + ")" : "n/a (no errors)"));
       var labels = Object.keys(fieldAgg);
       var line = labels.map(function (l) { return l + " " + pct(fieldAgg[l].ok / fieldAgg[l].total); }).join("  ·  ");
       console.log("  per-field: " + line);
+      jsonOut.engines[eng.name] = {
+        label: eng.label, samples: n,
+        headline: headlineAvg, outcomes: outcomesAvg,
+        scalarFieldAccuracy: totScalar ? totScalarCorrect / totScalar : 0,
+        wholeParse: whole / n,
+        flagCoverage: wrongTotal ? wrongFlagged / wrongTotal : null,
+        perField: Object.keys(fieldAgg).reduce(function (o, l) { o[l] = fieldAgg[l].ok / fieldAgg[l].total; return o; }, {}),
+        perSample: perSample
+      };
     }
     if (typeof eng.dispose === "function") await eng.dispose();
     console.log("");
   }
 
+  if (ARGS.json) console.log(JSON.stringify(jsonOut, null, 2));
+
+  // ---- release gates (--gate=<engine>:<fields>,<outcomes>) ----
+  var gateFailed = false;
+  ARGS.gates.forEach(function (g) {
+    var r = jsonOut.engines[g.engine];
+    if (!r) { console.log("GATE " + g.engine + ": engine not scored — FAIL"); gateFailed = true; return; }
+    var okF = r.headline >= g.fields, okO = r.outcomes >= g.outcomes;
+    console.log("GATE " + g.engine + ": per-field " + pct(r.headline) + (okF ? " ≥ " : " < ") + pct(g.fields) +
+      " · outcomes " + pct(r.outcomes) + (okO ? " ≥ " : " < ") + pct(g.outcomes) +
+      "  ->  " + (okF && okO ? "PASS" : "FAIL"));
+    if (!(okF && okO)) gateFailed = true;
+  });
+
   console.log("Done. (Tesseract Node scores are a lower bound; the browser engine adds regional cropping.)");
-  process.exit(0);
+  process.exit(gateFailed ? 1 : 0);
 }
 
 main().catch(function (e) {

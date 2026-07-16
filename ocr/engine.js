@@ -202,10 +202,23 @@
    *   - every level clamped to 1..5
    *   - rarity in {uncommon,rare,epic}; maxTurns/rerolls derived from rarity
    *   - currentTurn in 1..maxTurns; turn 1 implies full rerolls
-   *   - rerollsRemaining in 0..maxRerolls
+   *   - rerolls: the ON-SCREEN counter shows FREE rerolls only (an epic's "2/2" gem
+   *     really has 3 = 2 free + 1 paid final reroll at 3,800g — the model counts the
+   *     paid one; dp.js/nested.js charge finalReroll at rerollsRemaining===1). Parsers
+   *     should report the counter as state.rerollsShownFree / rerollsShownDenom and
+   *     the snap converts (shown + 1 while the paid reroll is unspent). A direct
+   *     state.rerollsRemaining is treated as MODEL units (manual entry) and clamped
+   *     0..9 — NOT to maxRerolls, because reroll_increase outcomes stack uncapped.
    *   - processCostMultiplier in [-100,100], snapped to a 100-step the game uses,
    *     processCost made consistent with 900*(1+mult/100)
    *   - outcomes array padded/trimmed to exactly 4 and each repaired
+   *
+   * CONFIDENCE (optional): engines may attach parsed.confidence =
+   *   { config: {<field>: 0..1}, state: {<field>: 0..1}, outcomes: [0..1 ×4] }.
+   * The snap passes it through with attenuation: a field the snap had to DEFAULT
+   * (null/absent input) drops to 0; a field the snap MATERIALLY CHANGED (e.g. an
+   * effect forced into the pool) drops to min(raw, 0.3). Absent confidence means
+   * "fully confident" (1.0) — manual entry and older engines are unaffected.
    *
    * Does not mutate the input; returns a fresh object.
    */
@@ -262,12 +275,29 @@
     }
     currentTurn = Math.max(1, Math.min(maxTurns, currentTurn));
 
+    // Rerolls, in MODEL units (free + the one paid final reroll). Three input paths:
+    //   1. rerollsShownFree/-Denom — the parsed on-screen counter (free-only): model =
+    //      shown + 1 while the paid reroll is unspent. A "0/b" read is AMBIGUOUS (the
+    //      paid reroll may or may not have been spent; its on-screen rendering is a
+    //      corpus gap) — assume the paid one remains (value 1) at low confidence.
+    //   2. rerollsRemaining — already model units (manual entry / legacy engines).
+    //   3. nothing — default to the rarity's full allotment.
+    // Clamped 0..9, NOT maxRerolls: reroll_increase outcomes stack uncapped
+    // (nested.js applies them with no cap; the DP models them the same way).
     var rerollsRemaining;
-    if (currentTurn === 1) {
-      // turn 1 always shows the full free-reroll allotment
-      rerollsRemaining = maxRerolls;
+    var rerollAmbiguous = false;
+    if (sIn.rerollsShownFree != null) {
+      var shown = clampInt(sIn.rerollsShownFree, 0, 9, 0);
+      rerollsRemaining = Math.max(0, Math.min(9, shown + 1));
+      if (shown === 0) rerollAmbiguous = true;   // 0/b: paid-spent state unknown
+    } else if (sIn.rerollsRemaining != null) {
+      rerollsRemaining = clampInt(sIn.rerollsRemaining, 0, 9, maxRerolls);
     } else {
-      rerollsRemaining = clampInt(sIn.rerollsRemaining, 0, maxRerolls, maxRerolls);
+      rerollsRemaining = maxRerolls;
+    }
+    // Turn 1 with NO read at all keeps the historical guarantee (full allotment).
+    if (currentTurn === 1 && sIn.rerollsShownFree == null && sIn.rerollsRemaining == null) {
+      rerollsRemaining = maxRerolls;
     }
 
     // ---- process cost / multiplier ----
@@ -303,7 +333,45 @@
       outcomes.push(snapOutcome(rawOutcomes[j], config));
     }
 
-    return { config: config, state: state, outcomes: outcomes, rarity: rarity };
+    // ---- confidence passthrough with attenuation (see the header contract) ----
+    // Rules: input absent (snap defaulted) -> 0; snap materially changed the value ->
+    // min(raw, 0.3); otherwise the engine's raw confidence (absent engine map = 1).
+    var confIn = parsed.confidence || {};
+    var cconf = confIn.config || {}, sconf = confIn.state || {}, oconf = confIn.outcomes || [];
+    function fieldConf(raw, inputPresent, changed) {
+      var c = (raw == null) ? 1 : Math.max(0, Math.min(1, raw));
+      if (!inputPresent) return 0;
+      if (changed) return Math.min(c, 0.3);
+      return c;
+    }
+    var confidence = {
+      config: {
+        baseCost: fieldConf(cconf.baseCost, cIn.baseCost != null, baseCost !== parseInt(cIn.baseCost, 10)),
+        gemType: fieldConf(cconf.gemType, cIn.gemType != null, gemType !== cIn.gemType),
+        willpowerLevel: fieldConf(cconf.willpowerLevel, cIn.willpowerLevel != null, willpowerLevel !== parseInt(cIn.willpowerLevel, 10)),
+        orderLevel: fieldConf(cconf.orderLevel, cIn.orderLevel != null, orderLevel !== parseInt(cIn.orderLevel, 10)),
+        effect1: fieldConf(cconf.effect1, cIn.effect1 != null, effect1 !== cIn.effect1),
+        effect1Level: fieldConf(cconf.effect1Level, cIn.effect1Level != null, effect1Level !== parseInt(cIn.effect1Level, 10)),
+        effect2: fieldConf(cconf.effect2, cIn.effect2 != null, effect2 !== cIn.effect2),
+        effect2Level: fieldConf(cconf.effect2Level, cIn.effect2Level != null, effect2Level !== parseInt(cIn.effect2Level, 10))
+      },
+      state: {
+        rarity: fieldConf(sconf.rarity, (parsed.rarity || sIn.rarity || sIn.maxTurns) != null, false),
+        currentTurn: fieldConf(sconf.currentTurn, sIn.currentTurn != null || sIn.turnsRemaining != null, false),
+        rerollsRemaining: (function () {
+          var base = fieldConf(sconf.rerollsRemaining,
+            sIn.rerollsShownFree != null || sIn.rerollsRemaining != null || currentTurn === 1, false);
+          return rerollAmbiguous ? Math.min(base, 0.4) : base;
+        })(),
+        processCostMultiplier: fieldConf(sconf.processCostMultiplier,
+          sIn.processCostMultiplier != null || sIn.processCost != null, false)
+      },
+      outcomes: [0, 1, 2, 3].map(function (k) {
+        return fieldConf(oconf[k], rawOutcomes[k] != null, false);
+      })
+    };
+
+    return { config: config, state: state, outcomes: outcomes, rarity: rarity, confidence: confidence };
   }
 
   // -------------------- engine registry --------------------
