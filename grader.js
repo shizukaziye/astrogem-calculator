@@ -213,23 +213,23 @@
   // classicGemLevels to fresh lostark.bible pulls; older cached records, KR (lopec.kr)
   // and custom input lack them — those keep GPD_DEFAULT. ----
 
-  // Combat-power → gpd tier bands (10M is deliberately manual-only).
+  // Combat-power → gpd tier bands (7.5M and 10M are deliberately manual-only).
   function cpToGpd(cp) {
     if (cp == null || !isFinite(cp) || cp <= 0) return null;
     if (cp < 3500) return 500000;
-    if (cp < 4000) return 1000000;
-    if (cp < 4500) return 1500000;
-    if (cp < 5500) return 2500000;
-    if (cp < 6500) return 3500000;
-    if (cp < 8000) return 5000000;
-    return 7500000;
+    if (cp < 4500) return 1000000;
+    if (cp < 5500) return 1500000;
+    if (cp < 6500) return 2500000;
+    if (cp < 7500) return 3500000;
+    return 5000000;
   }
 
-  // DPS-primary accessory lines → low/mid/high roll values (×100, matching the worker's
-  // accessory line values), from lost-ark-accessories METHODOLOGY §2. Support primaries
-  // (Stigma / Gauge / Ally buffs / Healing) and flats are deliberately absent — they
-  // don't classify, so a support loadout simply yields no accessory signal.
-  var ACC_TIERS = {
+  // Primary accessory lines → low/mid/high roll values (×100, matching the worker's
+  // accessory line values), from lost-ark-accessories METHODOLOGY §2 (DPS) and §3
+  // (support). The classifier is AXIS-AWARE: in Support mode a loadout is judged by its
+  // support primaries (Stigma / Gauge / Ally buffs / Weapon%), so a support's high/high
+  // pieces read as high/high instead of falling through the DPS table.
+  var ACC_TIERS_DPS = {
     "Outgoing Damage %": [55, 120, 200],
     "Additional Damage %": [95, 160, 260],
     "Attack Power %": [40, 95, 155],
@@ -237,28 +237,40 @@
     "Crit Rate %": [40, 95, 155],
     "Crit Damage %": [110, 240, 400]
   };
-  function accLineTier(name, value) {   // -> 0 low / 1 mid / 2 high, or null (not a DPS primary)
-    var t = ACC_TIERS[name];
+  var ACC_TIERS_SUPPORT = {
+    "Stigma %": [215, 480, 800],
+    "Gauge Gain %": [160, 360, 600],
+    "Ally Dmg Buff %": [200, 450, 750],
+    "Ally Atk Buff %": [135, 300, 500],
+    "Weapon Attack Power %": [80, 180, 300]
+  };
+  function accLineTier(name, value, table) {   // -> 0 low / 1 mid / 2 high, or null (not a primary)
+    var t = table[name];
     if (!t || value == null) return null;
     for (var i = 2; i >= 0; i--) if (value >= t[i] - 1) return i;   // -1: float-drift guard
     return 0;
   }
-  // Per accessory: the MIN of its DPS-primary tiers (a high/low accessory is a budget
-  // item — Shizu's rule: high/low ≈ 500k, high/high ≈ 5M, mixes in between). A single
-  // primary counts as (primary + nothing) = budget. Aggregate = median over the five;
-  // needs ≥3 classifiable accessories (a support loadout returns null → no signal).
+  // Per accessory: the MIN of its primary tiers (a high/low accessory is a budget item —
+  // Shizu's rule: high/low ≈ 500k, high/high ≈ 5M, mixes in between). A single primary
+  // counts as (primary + nothing) = budget — EXCEPT support earrings, whose pool has ONE
+  // primary by design (Weapon Attack Power %), so its tier alone IS the accessory's tier.
+  // Aggregate = median over the five; needs ≥3 classifiable accessories, else no signal.
   function accessoriesImpliedGpd(accessories) {
     if (!accessories || !accessories.length) return null;
+    var support = isSupport();
+    var table = support ? ACC_TIERS_SUPPORT : ACC_TIERS_DPS;
     var per = [];
     for (var i = 0; i < accessories.length; i++) {
+      var slot = accessories[i].slot || "";
       var lines = accessories[i].lines || [];
       var tiers = [];
       for (var j = 0; j < lines.length; j++) {
-        var t = accLineTier(lines[j].name, lines[j].value);
+        var t = accLineTier(lines[j].name, lines[j].value, table);
         if (t != null) tiers.push(t);
       }
-      if (!tiers.length) continue;                       // no DPS primary — unclassifiable
-      per.push(tiers.length >= 2 ? Math.min.apply(null, tiers) : 0);
+      if (!tiers.length) continue;                       // no primary on this axis — unclassifiable
+      var singleIsFull = support && (slot === "ear1" || slot === "ear2");
+      per.push((tiers.length >= 2 || singleIsFull) ? Math.min.apply(null, tiers) : 0);
     }
     if (per.length < 3) return null;
     per.sort(function (a, b) { return a - b; });

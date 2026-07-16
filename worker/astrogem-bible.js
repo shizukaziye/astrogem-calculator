@@ -438,8 +438,12 @@ const ACC_LINE_NAME = {
 //              (0 low 0.55 / 1 mid 1.20 / 2 high 2.00); value is always 0, so the
 //              roll is synthesized from the tier digit (same ×100 scale).
 const OUTGOING_BY_TIER = [55, 120, 200];
+//   type:29 -> Gauge Gain % as a buff id: index 600X, X = 0-based tier (anchored on
+//              NA/Esfera 6000 = low neck and NA/Limerent 6002 = high on an all-high
+//              support neck); value is always 0, synthesized like Outgoing.
+const GAUGE_BY_TIER = [160, 360, 600];
 //   other buff-style types (value ×100 like type:2):
-const BUFF_TYPE_NAME = { 29: "Gauge Gain %", 51: "Healing %", 54: "Ally Atk Buff %", 59: "Ally Dmg Buff %" };
+const BUFF_TYPE_NAME = { 51: "Healing %", 54: "Ally Atk Buff %", 59: "Ally Dmg Buff %" };
 
 // The page's HEADLINE (top-left) Combat Power is estimatedMaxCombatPower — the
 // estimated RAID loadout. The plain combatPower field is only the last-seen equipped
@@ -470,6 +474,7 @@ function parseAccessories(html) {
       const type = +sm[1], index = +sm[2], value = +sm[3];
       if (type === 2) lines.push({ name: ACC_LINE_NAME[index] || ("line#" + index), value: value });
       else if (type === 4) lines.push({ name: "Outgoing Damage %", value: OUTGOING_BY_TIER[index % 10] != null ? OUTGOING_BY_TIER[index % 10] : null });
+      else if (type === 29) lines.push({ name: "Gauge Gain %", value: GAUGE_BY_TIER[index % 10] != null ? GAUGE_BY_TIER[index % 10] : null });
       else lines.push({ name: BUFF_TYPE_NAME[type] || ("line?t" + type), value: value || null });
     }
     out.push({ slot: m[1], lines: lines });
@@ -479,13 +484,16 @@ function parseAccessories(html) {
 
 // Classic (skill) gem levels from the equipment `gems:[{slot,id,effects}]` array.
 // The gem id's level digits are unreliable across families (event gems break them), so
-// the level comes from the primary effect value instead — linear tables confirmed on
+// the level comes from the primary effect value first — linear tables confirmed on
 // levels 6/7/9/10 across three characters:
 //   type 27 (damage %):        value = (4 + 2·level)·100   -> lv = (v/100 − 4)/2
 //   type 5/34 (the other kind): value = (4 + 4·level)·100  -> lv = (v/100 − 4)/4
-// A gem whose level can't be derived exactly yields null (the client requires a fully
-// parsed set before using gem levels for anything). Picks the largest gems array in the
-// page (the raid loadout; the chaos copy can miss slots).
+// Utility gems with NO such effect (e.g. NA/Limerent's slot-8 aura gem, all effects
+// value 1000) fall back to the id digits, which ARE reliable for the standard
+// 650[3|4]xLLy families (65041071 = lv7, 65032090 = lv9, 65031100 = lv10 — anchored on
+// NA/Sadnass + rendered labels). A gem neither path can read yields null (the client
+// requires a fully parsed set before using gem levels for anything). Picks the largest
+// gems array in the page (the raid loadout; the chaos copy can miss slots).
 function parseClassicGemLevels(html) {
   let best = null, from = 0;
   while (true) {
@@ -518,6 +526,12 @@ function parseClassicGemLevels(html) {
       else continue;
       if (isFinite(lv) && Math.abs(lv - Math.round(lv)) < 1e-9 && lv >= 1 && lv <= 10) return Math.round(lv);
       return null;
+    }
+    // No level-bearing effect (utility gem): id-digit fallback for the standard families.
+    const m = String(g.id).match(/^650[34]\d(\d\d)\d$/);
+    if (m) {
+      const lv = parseInt(m[1], 10);
+      if (lv >= 1 && lv <= 10) return lv;
     }
     return null;
   });
