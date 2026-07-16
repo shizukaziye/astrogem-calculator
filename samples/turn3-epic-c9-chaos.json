@@ -1,0 +1,29 @@
+{
+  "_note": "Same cut as turn1/turn2, two processes in: Chaos Points 1 -> 2 (turn 2's 'Chaos Points +1' outcome landed), 6 Astrogem Points, Process (7/9). totalGoldSpent 1800 = two 900g processes. Captured at a DIFFERENT resolution than the turn1/turn2 webps (1183x1278 vs 1143x1269) — useful for testing that any parser normalizes the panel rather than assuming fixed pixel offsets.",
+  "_rerollNote": "Counter still 2/2 free, none used -> rerollsRemaining = 3 (2 free + 1 paid).",
+  "config": {
+    "baseCost": 9,
+    "gemType": "chaos",
+    "willpowerLevel": 1,
+    "orderLevel": 2,
+    "effect1": "Attack Power",
+    "effect1Level": 1,
+    "effect2": "Boss Damage",
+    "effect2Level": 2
+  },
+  "state": {
+    "currentTurn": 3,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 1800,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "change_side_option", "target": "effect1" },
+    { "type": "raise_effect", "target": "effect2", "amount": 2 },
+    { "type": "raise_effect", "target": "effect1", "amount": 2 },
+    { "type": "reroll_increase", "change": 1 }
+  ]
+}

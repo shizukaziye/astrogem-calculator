@@ -3,10 +3,21 @@
 This folder holds the A/B test set for the Advisor's screenshot-reading engines
 (Tesseract.js and Workers AI). The harness is `tools/eval-ocr.js`.
 
-> **Status: empty on purpose.** We have **no real Lost Ark screenshots yet**, so
-> there is nothing to score. `node tools/eval-ocr.js` runs cleanly on this empty
-> folder and prints the format below. The real accuracy comparison only happens once
-> you drop screenshots + ground-truth files in here.
+> **Status: 3 real samples (2026-07-16).** `turn1/turn2/turn3-epic-c9-chaos` are three
+> consecutive turns of one real epic cost-9 chaos cut, captured at two different
+> resolutions on purpose (1143×1269 webp, 1183×1278 png) so a parser can't get away with
+> hardcoded pixel offsets.
+>
+> **First real scores — Tesseract is not viable.** `node tools/eval-ocr.js`:
+> **69.4% of scalar fields, 8.3% of outcomes** (1 of 12 across 3 shots). It reads the
+> plain-background footer perfectly (`Process (x/N)`, cost, balance = 100%) and fails on
+> everything drawn over the nebula art: the gem name comes back as
+> `€haos Astrogém: Distortion`, stats as `Villpowesr` / `ossiDamages'`, and the `▲`
+> glyph as `A`, so `Lv. 2 ▲` becomes `Lv. 20A` and `+2` vanishes entirely. Mean
+> confidence 41–44%. Use `node tools/dump-ocr-text.js` to see the raw text.
+>
+> **The outcomes are the field that matters** (they decide Process vs Reroll) and they
+> are the field Tesseract is worst at. Any real solution has to beat 8.3% there.
 
 ## File format
 

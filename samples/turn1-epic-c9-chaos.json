@@ -1,0 +1,29 @@
+{
+  "_note": "Real Lost Ark Processing screenshot. 'Chaos Astrogem: Distortion' (purple = epic, Process 9/9), 4 Astrogem Points, unprocessed (no badge on the gem icon). Atk. Power + Boss Damage co-exist only in the cost-9 pool, so baseCost = 9. 'Chaos Points' is the order/chaos stat -> orderLevel.",
+  "_rerollNote": "The on-screen counter reads 2/2 = the FREE rerolls. An epic has 3 total (2 free + 1 paid at 3,800g), and none are used here, so rerollsRemaining = 3, NOT the 2 shown.",
+  "config": {
+    "baseCost": 9,
+    "gemType": "chaos",
+    "willpowerLevel": 1,
+    "orderLevel": 1,
+    "effect1": "Attack Power",
+    "effect1Level": 1,
+    "effect2": "Boss Damage",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 1,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "order", "amount": 2 },
+    { "type": "change_side_option", "target": "effect2" },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
+    { "type": "reroll_increase", "change": 1 }
+  ]
+}

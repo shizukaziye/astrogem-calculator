@@ -1,0 +1,29 @@
+{
+  "_note": "The same cut as turn1-epic-c9-chaos, one process later: Boss Damage 1 -> 2 (that turn's 'Boss Damage Lv.1' outcome landed), 5 Astrogem Points, gem icon now carries the processed badge, Process (8/9). Balance 4,397,780 -> 4,396,880 = exactly one 900g process, hence totalGoldSpent 900.",
+  "_rerollNote": "Counter still reads 2/2 free = no rerolls used, so rerollsRemaining = 3 (2 free + 1 paid). This sample is the one that catches the parser's off-by-one: constraintSnap only force-fills rerolls on turn 1, so a turn-2+ read of '2/2' currently yields 2 instead of 3.",
+  "config": {
+    "baseCost": 9,
+    "gemType": "chaos",
+    "willpowerLevel": 1,
+    "orderLevel": 1,
+    "effect1": "Attack Power",
+    "effect1Level": 1,
+    "effect2": "Boss Damage",
+    "effect2Level": 2
+  },
+  "state": {
+    "currentTurn": 2,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 900,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "effect2", "amount": 2 },
+    { "type": "raise_effect", "target": "order", "amount": 1 },
+    { "type": "raise_effect", "target": "willpower", "amount": 1 },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 }
+  ]
+}
