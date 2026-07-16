@@ -52,10 +52,11 @@ var DP = require("../model/dp.js");
 var RUNS = parseInt(process.env.DP_MC_RUNS, 10) || 20000;
 var CORE_TOL = parseFloat(process.env.DP_MC_CORE_TOL) || 0.02; // strict band, leveraged states
 // EDGE band: the conditional-Bernoulli without-replacement draw approximation
-// compounds to ~4-5% on the short (uncommon, 5-turn) cuts at an unrealistically low
-// 0.5%-damage baseline. 6% gives clean margin over the measured worst case (~4.7% at
-// cost-8, from the full 30k-run battery) without masking a real bug (a bug shows up
-// as a CORE failure or a >>10% EDGE failure).
+// compounds to a few % on the short (uncommon, 5-turn) cuts at an unrealistically low
+// 0.5%-damage baseline. 6% gives clean margin over the measured worst case (+2.6%
+// point-estimate at cost-8/9 uncommon base 0.5, full 20k-run battery 2026-07-16,
+// gemValue terminal metric; was ~4.7% under the pre-rework additive-score metric)
+// without masking a real bug (a bug shows up as a CORE failure or a >>10% EDGE failure).
 var EDGE_TOL = parseFloat(process.env.DP_MC_EDGE_TOL) || 0.06;
 var CORE_MIN = parseFloat(process.env.DP_MC_CORE_MIN) || 100000; // |W_MC| to count as CORE
 var K_SIGMA = parseFloat(process.env.DP_MC_SIGMA) || 5;        // MC-noise allowance (std errs)
@@ -74,7 +75,10 @@ function dpSelfCheck() {
   var c10perfect = { baseCost: 10, gemType: "order", willpowerLevel: 5, orderLevel: 5, effect1: "Boss Damage", effect1Level: 5, effect2: "Additional Damage", effect2Level: 5 };
   var start10 = { baseCost: 10, gemType: "order", willpowerLevel: 1, orderLevel: 1, effect1: "Boss Damage", effect1Level: 1, effect2: "Additional Damage", effect2Level: 1 };
   var mid = { baseCost: 10, gemType: "order", willpowerLevel: 3, orderLevel: 3, effect1: "Boss Damage", effect1Level: 3, effect2: "Additional Damage", effect2Level: 2 };
+  var supStart = { baseCost: 9, gemType: "chaos", willpowerLevel: 1, orderLevel: 1, effect1: "Ally Damage Enh.", effect1Level: 1, effect2: "Ally Attack Enh.", effect2Level: 1 };
+  var supMid = { baseCost: 8, gemType: "order", willpowerLevel: 3, orderLevel: 4, effect1: "Brand Power", effect1Level: 3, effect2: "Ally Damage Enh.", effect2Level: 2 };
   function W(cfg, t, r, cm, bl, gpd, rb, dm) { return new DP.Solver(bl, gpd, rb, { drawModel: dm }).W(cfg, t, r, cm); }
+  function Wax(cfg, t, r, cm, bl, gpd, rb, dm, axis) { return new DP.Solver(bl, gpd, rb, { drawModel: dm, axis: axis }).W(cfg, t, r, cm); }
   function gv(cfg, bl, gpd) { return new DP.Solver(bl, gpd, false).gemValue(cfg); }
   var TOL = 1e-3;
   var cases = [
@@ -88,7 +92,14 @@ function dpSelfCheck() {
     ["start10 t5 r3 base1 wor", W(start10, 5, 3, 0, 1.0, 1500000, false, "wor"), 3028.4444],
     ["start10 t5 r3 base1 iid", W(start10, 5, 3, 0, 1.0, 1500000, false, "iid"), 2026.8871],
     ["mid t3 r2 base1 wor", W(mid, 3, 2, 0, 1.0, 1500000, false, "wor"), 35234.8844],
-    ["start10 t6 r3 base0.5 RB wor", W(start10, 6, 3, 0, 0.5, 1500000, true, "wor"), 293507.4734]
+    ["start10 t6 r3 base0.5 RB wor", W(start10, 6, 3, 0, 0.5, 1500000, true, "wor"), 293507.4734],
+    // SUPPORT axis (opts.axis): supportValue terminals against support-scale baselines
+    // (A.supportGradeToScore(65)=0.19581, (80)=0.23882 at freeze time; the literals below
+    // bake the RESULTING W so a baseline-scale drift also trips). Frozen 2026-07-16 when
+    // the axis was threaded through topLevelAdvice; the MC battery stays DPS-only
+    // (nested.js has no support axis).
+    ["supStart c9 t9 r3 sup65 wor", Wax(supStart, 9, 3, 0, A.supportGradeToScore ? A.supportGradeToScore(65) : NaN, 1500000, false, "wor", "support"), 28674.4175],
+    ["supMid c8 t5 r2 sup80 wor", Wax(supMid, 5, 2, 0, A.supportGradeToScore ? A.supportGradeToScore(80) : NaN, 1500000, false, "wor", "support"), 15966.3551]
   ];
   var ok = 0, bad = [];
   cases.forEach(function (c) {
@@ -169,7 +180,12 @@ function simulateOnce(solver, startCfg, maxTurns, maxRerolls, baseline, rb) {
     turnsLeft -= 1;
   }
 
-  var finalValue = N.calculateGemValue(A.score(cfg), baseline, GPD, cfg);
+  // Terminal metric = the multiplicative gemValue — the SAME value definition the
+  // DP optimizes (dp.js Solver._score) and nested.js realizes. A.score is the
+  // LEGACY additive score; feeding it here (as before the 4c127aa scoring rework)
+  // makes the gate compare two different quantities and fail by the score-vs-value
+  // gap (~8-20% at low baselines) instead of measuring DP recursion error.
+  var finalValue = N.calculateGemValue(A.gemValue(cfg), baseline, GPD, cfg);
   return finalValue - spent;
 }
 

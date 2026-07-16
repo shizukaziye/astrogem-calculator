@@ -602,7 +602,9 @@
   function topLevelAdvice(state, baseline, goldPerDamage, options) {
     options = options || {};
     var rb = !!state.rosterBound;
-    var solver = new Solver(baseline, goldPerDamage, rb, { drawModel: options.drawModel, maxTurns: state.maxTurns });
+    // options.axis "support" grades the cut by supportValue against a support-scale
+    // baseline (supportGradeToScore) — the Solver already carries the axis internally.
+    var solver = new Solver(baseline, goldPerDamage, rb, { drawModel: options.drawModel, maxTurns: state.maxTurns, axis: options.axis });
     var config = cloneConfig(state.config);
     var t = Math.max(0, (state.maxTurns - state.currentTurn + 1)); // turns remaining incl. current
     var r = state.rerollsRemaining || 0;
@@ -611,7 +613,10 @@
     var isFirstTurn = state.currentTurn === 1;
 
     // ---- COMPLETE ----
-    var curScore = A.score(config);
+    // The solver's axis score (gemValue / supportValue) — the SAME units as `baseline`
+    // and as every other node's expScore. (Was the legacy additive A.score, a unit
+    // mismatch that skewed only Complete's displayed score/pAbove, never the ranking.)
+    var curScore = solver._score(config);
     // Turn 1 complete == dismantle (value 0), matching nested.js monteCarloSimulation.
     var completeValue = isFirstTurn ? 0 : solver.gemValue(config);
     var completeNet = completeValue; // no future spend
