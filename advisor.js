@@ -45,18 +45,20 @@
 '  #tab-advisor .av-drop{border:2px dashed var(--border);border-radius:10px;padding:10px 14px;text-align:center;color:var(--dim);cursor:pointer;transition:border-color .15s,background .15s;background:var(--panel2);font-size:13px}' +
 '  #tab-advisor .av-drop.drag{border-color:var(--accent);background:rgba(102,199,255,.08);color:var(--text)}' +
 '  #tab-advisor .av-drop b{color:var(--text)}' +
-'  #tab-advisor .av-preview{max-width:100%;max-height:200px;border-radius:8px;border:1px solid var(--border);margin-top:8px;display:none}' +
+'  #tab-advisor .av-preview{max-width:100%;max-height:110px;border-radius:8px;border:1px solid var(--border);margin-top:8px;display:none;opacity:.85}' +
 '  #tab-advisor .av-status{font-size:12px;color:var(--dim);margin-top:6px;min-height:16px}' +
 '  #tab-advisor .av-status.working{color:var(--accent)}' +
 '  #tab-advisor .av-status.err{color:var(--bad)}' +
 '  #tab-advisor .av-engines{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}' +
 '  #tab-advisor .mbtn:disabled{opacity:.45;cursor:not-allowed}' +
 '  #tab-advisor .av-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:12px}' +
-'  #tab-advisor .av-cols{display:flex;gap:14px;align-items:flex-start;margin-top:14px}' +
+'  #tab-advisor .av-cols{display:flex;gap:16px;align-items:flex-start;margin-top:14px}' +
 '  #tab-advisor .av-col-l{flex:0 0 470px;max-width:470px;min-width:0}' +
-'  #tab-advisor .av-col-r{flex:1;min-width:280px;position:sticky;top:10px}' +
-'  @media(max-width:880px){#tab-advisor .av-cols{flex-direction:column}#tab-advisor .av-col-l{flex:1 1 auto;max-width:none;width:100%}#tab-advisor .av-col-r{position:static;width:100%}}' +
-'  #tab-advisor .av-result-empty{border:1px dashed var(--border);border-radius:10px;background:var(--panel2);color:var(--dim);font-size:13px;text-align:center;padding:30px 16px}' +
+'  #tab-advisor .av-col-r{flex:1;min-width:280px;display:flex;flex-direction:column;gap:14px}' +
+'  @media(max-width:880px){#tab-advisor .av-cols{flex-direction:column}#tab-advisor .av-col-l{flex:1 1 auto;max-width:none;width:100%}#tab-advisor .av-col-r{width:100%}}' +
+'  #tab-advisor .av-result-empty{border:1px dashed var(--border);border-radius:10px;background:var(--panel2);color:var(--dim);font-size:13px;text-align:center;padding:26px 16px}' +
+'  #tab-advisor .av-setup-panel{margin:0}' +
+'  #tab-advisor .av-gorow{margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}' +
 '  #tab-advisor .av-card{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--panel2)}' +
 '  #tab-advisor .av-card.best{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}' +
 '  #tab-advisor .av-card .cn{font-size:15px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px}' +
@@ -70,38 +72,33 @@
 '  #tab-advisor .av-bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .1s}' +
 '  #tab-advisor .av-wip{background:rgba(217,83,79,.14);border:1px solid #d9534f;color:#ff9b97;border-radius:8px;padding:11px 14px;font-weight:800;letter-spacing:.05em;text-align:center;margin-bottom:14px}' +
 '  #tab-advisor .av-warn{font-size:12px;color:#e8b84a;margin-top:6px}' +
-'  #tab-advisor .inputs{position:static}' +
 '</style>' +
 '<div class="av-wip">⚠ DO NOT USE — WORK IN PROGRESS</div>' +
-'<div class="inputs" id="av-inputs">' +
-'  <div class="ihdr"><span>Advisor — live cut advice</span><span class="tgl" id="av-caret-wrap" onclick="window.__avToggleInputs()"><span id="av-caret">▾</span></span></div>' +
-'  <div id="av-inputs-body">' +
-'    <div id="av-setup"></div>' +
-'    <div class="subh">3 · Your cut</div>' +
+// two balanced columns: LEFT = the cut (drop bar + lookalike window),
+// RIGHT = your economy (character/market) + the verdict. Both stay tall, no dead corner.
+'<div class="av-cols">' +
+'  <div class="av-col-l">' +
 '    <div class="av-drop" id="av-drop">' +
-'      <b>Drop, paste, or click</b> — a Processing screenshot prefills the window below. Or just tap the fields.' +
+'      <b>Drop, paste, or click</b> — a Processing screenshot prefills the window. Or just tap the fields.' +
 '      <input type="file" id="av-file" accept="image/*" style="display:none">' +
 '    </div>' +
 '    <img id="av-preview" class="av-preview" alt="screenshot preview">' +
 '    <div class="av-engines" id="av-engines"></div>' +
 '    <div class="av-status" id="av-status"></div>' +
-'  </div>' +
-'</div>' +
-// two columns: the (thin) Processing window drives, advice fills the dead space
-'<div class="av-cols">' +
-'  <div class="av-col-l">' +
-'    <div id="av-window"></div>' +
-'    <div class="barrow" style="margin-top:12px">' +
-'      <button class="mbtn" id="av-sim2" data-on="1">Consider Complete: on</button>' +
-'      <button class="mbtn" id="av-bound" data-on="0">Roster bound: no</button>' +
-'      <button class="primary" id="av-go">Get advice</button>' +
-'      <span class="note" id="av-go-note"></span>' +
-'    </div>' +
-'    <div id="av-warns"></div>' +
-'    <div class="av-bar" id="av-bar"><i id="av-bar-i"></i></div>' +
+'    <div id="av-window" style="margin-top:10px"></div>' +
 '  </div>' +
 '  <div class="av-col-r">' +
-'    <div class="av-result-empty" id="av-result-empty">Recommended action appears here.<br>Transcribe or drop a screenshot on the left, then press <b>Get advice</b>.</div>' +
+'    <div class="panel av-setup-panel"><div id="av-setup"></div>' +
+'      <div class="barrow av-gorow">' +
+'        <button class="mbtn" id="av-sim2" data-on="1">Consider Complete: on</button>' +
+'        <button class="mbtn" id="av-bound" data-on="0">Roster bound: no</button>' +
+'        <button class="primary" id="av-go">Get advice</button>' +
+'        <span class="note" id="av-go-note"></span>' +
+'      </div>' +
+'      <div id="av-warns"></div>' +
+'      <div class="av-bar" id="av-bar"><i id="av-bar-i"></i></div>' +
+'    </div>' +
+'    <div class="av-result-empty" id="av-result-empty">The recommended action appears here once you press <b>Get advice</b>.</div>' +
 '    <div class="panel" id="av-result" style="display:none">' +
 '      <h2>Recommended action</h2>' +
 '      <p class="av-best" id="av-best-line"></p>' +
@@ -129,7 +126,16 @@
     var wrap = $("av-engines");
     var list = (window.ocrListEngines ? window.ocrListEngines() : []);
     if (list.length === 0) { wrap.innerHTML = '<span class="note">No OCR engines registered.</span>'; return; }
-    list.sort(function (a, b) { return a.name === "tesseract" ? -1 : b.name === "tesseract" ? 1 : 0; });
+    // one usable engine = nothing to choose — hide the row (it reappears when the
+    // premium vision engine deploys and becomes available)
+    var availN = list.filter(function (e) { try { return e.isAvailable(); } catch (er) { return false; } }).length;
+    if (availN <= 1) {
+      wrap.style.display = "none";
+      var only = list.filter(function (e) { try { return e.isAvailable(); } catch (er) { return false; } })[0];
+      if (only) selectedEngine = only.name;
+      return;
+    }
+    wrap.style.display = "";
     wrap.innerHTML = "";
     var label = el("span", { class: "note", style: "align-self:center;margin-right:4px" }, "Engine:");
     wrap.appendChild(label);
@@ -354,15 +360,6 @@
     if (empty) empty.style.display = "none";
   }
 
-  // ---------------- collapse toggle ----------------
-  window.__avToggleInputs = function () {
-    var body = $("av-inputs-body");
-    var caret = $("av-caret");
-    var hidden = body.style.display === "none";
-    body.style.display = hidden ? "" : "none";
-    caret.textContent = hidden ? "▾" : "▸";
-  };
-
   // ---------------- init ----------------
   function init() {
     var elTab = $("tab-advisor");
@@ -421,10 +418,8 @@
     $("av-go").addEventListener("click", runAdvice);
 
     window.addEventListener("beforeunload", function () {
-      ["structural", "tesseract"].forEach(function (n) {
-        var t = window.ocrGetEngine && window.ocrGetEngine(n);
-        if (t && typeof t.disposeWorker === "function") t.disposeWorker();
-      });
+      var t = window.ocrGetEngine && window.ocrGetEngine("structural");
+      if (t && typeof t.disposeWorker === "function") t.disposeWorker();
       if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
     });
   }

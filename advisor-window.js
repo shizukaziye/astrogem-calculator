@@ -223,7 +223,6 @@
       '#av-window .pw-sub2{color:#c8cdd8;font-size:10.5px}' +
       '#av-window .pw-dim{color:#8a93a5;font-style:italic}' +
       '#av-window .pw-rerollpill{align-self:center;display:inline-flex;gap:5px;align-items:center;background:#2c3240;border:1px solid #454c5c;border-radius:8px;color:#e7e9ee;font-size:13px;padding:5px 8px;cursor:pointer;font-variant-numeric:tabular-nums}' +
-      '#av-window .pw-rerollpill .paid{font-size:9px;color:#f2c94c;margin-left:2px}' +
       '#av-window .pw-footer{margin-top:10px;font-size:14px}' +
       '#av-window .pw-frow{display:flex;justify-content:space-between;align-items:center;padding:4px 2px;border-top:1px solid #232a38}' +
       '#av-window .pw-frow .v{display:inline-flex;gap:6px;align-items:center;font-variant-numeric:tabular-nums}' +
@@ -265,7 +264,6 @@
     var N = maxTurns();
     var x = N - win.currentTurn + 1;                      // attempts remaining (game display)
     var freeShown = Math.max(0, win.rerollsRemaining - 1); // model - the paid one
-    var paidLeft = win.rerollsRemaining >= 1;
     var freeDenom = Math.max(1, maxRerolls() - 1);
     var unconfN = Object.keys(win.unconfirmed).length;
 
@@ -318,9 +316,8 @@
         return '<button type="button" class="pw-orow' + conf("outcomes." + i) + '" data-act="outcome" data-i="' + i + '">' +
           '<span class="ic">' + makeDiamond(outcomeStatKey(o), 22) + '</span>' + captionFor(o) + '</button>';
       }).join("") +
-      '    <button type="button" class="pw-rerollpill' + conf("state.rerollsRemaining") + '" data-act="rerolls" title="Rerolls — the game counts only the FREE ones here">' +
-             refreshSvg() + ' ' + Math.min(freeShown, freeDenom) + ' / ' + freeDenom +
-             (paidLeft ? '<span class="paid">+paid</span>' : "") + '</button>' +
+      '    <button type="button" class="pw-rerollpill' + conf("state.rerollsRemaining") + '" data-act="rerolls" title="Rerolls — the game counts only the FREE ones here; the paid one is handled in the editor">' +
+             refreshSvg() + ' ' + Math.min(freeShown, freeDenom) + ' / ' + freeDenom + '</button>' +
       '  </div>' +
       '  <div class="pw-footer">' +
       '    <div class="pw-frow"><span>Processing Cost</span>' +

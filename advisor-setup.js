@@ -217,7 +217,7 @@
     var m = getMarket();
 
     host.innerHTML = css() +
-      '<div class="subh">1 · Character (optional)</div>' +
+      '<div class="subh">Character (optional)</div>' +
       '<div class="avs-rowline">' +
       '  <span class="avs-searchwrap">' +
       '    <input id="avs-search" class="avs-search" type="search" placeholder="Search ' + (searchRows ? searchRows.length.toLocaleString() : "9,500+") + ' graded characters…" autocomplete="off">' +
@@ -228,7 +228,7 @@
       '<div id="avs-favs" class="avs-favs"></div>' +
       selHtml +
       '<div id="avs-status" class="avs-status">' + esc(charStatus) + '</div>' +
-      '<div class="subh">2 · Market assumptions</div>' +
+      '<div class="subh">Market assumptions</div>' +
       (canSupport
         ? '<div class="avs-rowline"><span class="lab">Axis</span>' +
           '<button type="button" class="mbtn avs-axis' + (axis === "dps" ? " active" : "") + '" data-axis="dps">DPS</button>' +

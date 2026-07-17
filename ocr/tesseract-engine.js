@@ -607,8 +607,12 @@
 
   // ---------------- register + export ----------------
 
+  // NOT registered as a selectable engine (removed 2026-07-16 — the structural
+  // engine superseded it: 69%/8% vs 100%/100% on the dev corpus). The module stays
+  // loaded as a parser-function library: the structural engine consumes
+  // GEM_NAME_COST + normalizeOcrText, and tools/eval-ocr.js still scores it in Node
+  // as the legacy baseline row.
   var instance = new TesseractEngine();
-  if (ENGINE_API.registerEngine) ENGINE_API.registerEngine(instance);
 
   var EXPORT = {
     TesseractEngine: TesseractEngine,
