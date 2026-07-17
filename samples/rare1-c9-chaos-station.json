@@ -1,0 +1,28 @@
+{
+  "_note": "Transcribed from Shizu's live screen-share frame (2026-07-16). RARE rarity (Process 7/7, reroll pill 1/1 => model 2), cost-9 Distortion, FULL-SCREEN station layout (left gem list panel, not the cropped modal), and a sprout pet overlay partially covering the W diamond's 'Ally' word. Image file: ask Shizu to right-click-save the drop-zone preview as rare1-c9-chaos-station.png.",
+  "config": {
+    "baseCost": 9,
+    "gemType": "chaos",
+    "willpowerLevel": 1,
+    "orderLevel": 1,
+    "effect1": "Ally Damage Enh.",
+    "effect1Level": 1,
+    "effect2": "Attack Power",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 1,
+    "maxTurns": 7,
+    "rerollsRemaining": 2,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "effect1", "amount": 1 },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
+    { "type": "raise_effect", "target": "order", "amount": 2 },
+    { "type": "change_side_option", "target": "effect1" }
+  ]
+}
