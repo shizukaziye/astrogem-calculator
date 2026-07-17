@@ -275,18 +275,22 @@
     }
     currentTurn = Math.max(1, Math.min(maxTurns, currentTurn));
 
-    // Rerolls, in MODEL units (free + the one paid final reroll). Three input paths:
-    //   1. rerollsShownFree/-Denom — the parsed on-screen counter (free-only): model =
-    //      shown + 1 while the paid reroll is unspent. A "0/b" read is AMBIGUOUS (the
-    //      paid reroll may or may not have been spent; its on-screen rendering is a
-    //      corpus gap) — assume the paid one remains (value 1) at low confidence.
-    //   2. rerollsRemaining — already model units (manual entry / legacy engines).
-    //   3. nothing — default to the rarity's full allotment.
+    // Rerolls, in MODEL units (free + the one paid final reroll). Four input paths:
+    //   1. rerollsChargeSeen — the parsed pill is the gold "Charge" button (free
+    //      rerolls exhausted, the paid one purchasable) ⇒ model = exactly 1. NOT
+    //      ambiguous: the game only offers Charge while the paid reroll is unspent.
+    //   2. rerollsShownFree/-Denom — the parsed on-screen counter (free-only): model =
+    //      shown + 1 while the paid reroll is unspent. A "0/b" read is AMBIGUOUS —
+    //      assume the paid one remains (value 1) at low confidence.
+    //   3. rerollsRemaining — already model units (manual entry / legacy engines).
+    //   4. nothing — default to the rarity's full allotment.
     // Clamped 0..9, NOT maxRerolls: reroll_increase outcomes stack uncapped
     // (nested.js applies them with no cap; the DP models them the same way).
     var rerollsRemaining;
     var rerollAmbiguous = false;
-    if (sIn.rerollsShownFree != null) {
+    if (sIn.rerollsChargeSeen) {
+      rerollsRemaining = 1;
+    } else if (sIn.rerollsShownFree != null) {
       var shown = clampInt(sIn.rerollsShownFree, 0, 9, 0);
       rerollsRemaining = Math.max(0, Math.min(9, shown + 1));
       if (shown === 0) rerollAmbiguous = true;   // 0/b: paid-spent state unknown
@@ -296,7 +300,7 @@
       rerollsRemaining = maxRerolls;
     }
     // Turn 1 with NO read at all keeps the historical guarantee (full allotment).
-    if (currentTurn === 1 && sIn.rerollsShownFree == null && sIn.rerollsRemaining == null) {
+    if (currentTurn === 1 && !sIn.rerollsChargeSeen && sIn.rerollsShownFree == null && sIn.rerollsRemaining == null) {
       rerollsRemaining = maxRerolls;
     }
 

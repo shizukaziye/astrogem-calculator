@@ -353,6 +353,35 @@
   // diamond face behind them (gold-over-green shifts h up to ~80) — wider than
   // isGoldText, still excluding true face greens (h≥100) and reds (h<20)
   function isWheelLevelText(r, g, b) { var c = hsv(r, g, b); return c.h >= 30 && c.h < 80 && c.s > 0.4 && c.v > 0.5; }
+  // LOWER-outcome amounts ("Lv. 1"/"−1" beside a ▼) render RED, not chartreuse
+  // (measured on the 2026-07-16 corpus)
+  function isRedAmountText(r, g, b) { var c = hsv(r, g, b); return (c.h < 20 || c.h >= 340) && c.s > 0.5 && c.v > 0.45; }
+
+  // Smooth 2x-style upscale (bilinear). Half-resolution captures (~720p crops) starve
+  // the micro-OCR — glyphs drop to ~10px; parsing at 2x restores dev-corpus scale.
+  // Bilinear (not nearest): Tesseract reads smooth edges far better than blocky ones.
+  function upscaleBilinear(img, f) {
+    var w = Math.round(img.width * f), h = Math.round(img.height * f);
+    var out = new Uint8ClampedArray(w * h * 4);
+    var sw = img.width, sh = img.height, d = img.data;
+    for (var y = 0; y < h; y++) {
+      var sy = Math.min(sh - 1.001, y / f);
+      var y0 = sy | 0, fy = sy - y0, y1 = Math.min(sh - 1, y0 + 1);
+      for (var x = 0; x < w; x++) {
+        var sx = Math.min(sw - 1.001, x / f);
+        var x0 = sx | 0, fx = sx - x0, x1 = Math.min(sw - 1, x0 + 1);
+        var i00 = (y0 * sw + x0) * 4, i10 = (y0 * sw + x1) * 4, i01 = (y1 * sw + x0) * 4, i11 = (y1 * sw + x1) * 4;
+        var di = (y * w + x) * 4;
+        for (var ch = 0; ch < 3; ch++) {
+          var top = d[i00 + ch] + (d[i10 + ch] - d[i00 + ch]) * fx;
+          var bot = d[i01 + ch] + (d[i11 + ch] - d[i01 + ch]) * fx;
+          out[di + ch] = top + (bot - top) * fy;
+        }
+        out[di + 3] = 255;
+      }
+    }
+    return { width: w, height: h, data: out };
+  }
   // ▲ proper is a purer green (h≈100+); starting at 95 keeps chartreuse amount text
   // from counting as an up-arrow (matters once ▼ outcomes exist: count comparison)
   function isGreenUp(r, g, b) { var c = hsv(r, g, b); return c.h >= 95 && c.h < 150 && c.s > 0.45 && c.v > 0.45; }
@@ -438,6 +467,67 @@
     return null;
   }
 
+  // Re-measure the wheel by scanning VERTICALLY through the center for the red (N)
+  // and gold (S) diamond faces. The blob-refine step can land both anchors on their
+  // diamonds yet short-measure the red→gold distance 15-20% (digit glow drags a
+  // centroid), which then drifts every anchor-relative region. The midpoint cy is
+  // robust (symmetric errors cancel); the face EXTENTS pin the true centers — using
+  // endpoints, not run lengths, so the level digit punching a hole through the
+  // middle of a face doesn't bias anything.
+  function refineWheelAnchors(img, anchors) {
+    var cx = (anchors.red.x + anchors.gold.x) / 2;
+    var cy0 = (anchors.red.y + anchors.gold.y) / 2;
+    var gap0 = Math.max(8, anchors.gold.y - anchors.red.y);
+    function mk(pred) { return pred; }
+    var isRedFace = mk(function (r, g, b) { var c = hsv(r, g, b); return (c.h < 25 || c.h >= 335) && c.s > 0.5 && c.v > 0.25; });
+    var isGoldFace = mk(function (r, g, b) { var c = hsv(r, g, b); return c.h >= 28 && c.h < 58 && c.s > 0.5 && c.v > 0.3; });
+    var isAnyFace = mk(function (r, g, b) { var c = hsv(r, g, b); return c.s > 0.45 && c.v > 0.25; });
+    function patchScore(px, py, pred) {
+      var r = Math.max(3, gap0 * 0.07), n = 0, hit = 0;
+      for (var y = Math.round(py - r); y <= py + r; y += 2) {
+        if (y < 0 || y >= img.height) continue;
+        for (var x = Math.round(px - r); x <= px + r; x += 2) {
+          if (x < 0 || x >= img.width) continue;
+          var i = (y * img.width + x) * 4;
+          n++;
+          if (pred(img.data[i], img.data[i + 1], img.data[i + 2])) hit++;
+        }
+      }
+      return n ? hit / n : 0;
+    }
+    // The discriminative signal (measured): the BOTTOM EDGE of the gold S face —
+    // coverage in a thin strip collapses 0.7→0.2 within ~0.1·gap of the tip, and the
+    // tip sits at cy + 0.786·gap in the game's (scale-invariant) modal art. On-face
+    // patch scores are a plateau (useless for fitting); this edge is a step function.
+    function stripGoldCov(y) {
+      var yy = Math.round(y);
+      if (yy < 1 || yy >= img.height - 1) return 0;
+      var half = Math.max(3, gap0 * 0.12), n = 0, hit = 0;
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var x = Math.round(cx - half); x <= cx + half; x += 2) {
+          if (x < 0 || x >= img.width) continue;
+          var i = ((yy + dy) * img.width + x) * 4;
+          n++;
+          if (isGoldFace(img.data[i], img.data[i + 1], img.data[i + 2])) hit++;
+        }
+      }
+      return n ? hit / n : 0;
+    }
+    var k = gap0 * 0.55;
+    if (stripGoldCov(cy0 + k) < 0.4) return anchors;   // not on the gold face — bail
+    var kMax = gap0 * 1.35;
+    while (k < kMax && stripGoldCov(cy0 + k) >= 0.4) k += 2;
+    if (k >= kMax) return anchors;                     // edge never found
+    var gap = k / 0.786;
+    if (!(gap > gap0 * 0.75 && gap < gap0 * 1.55)) return anchors;
+    // sanity: the red face must exist at the implied N position
+    if (patchScore(cx, cy0 - gap / 2, isRedFace) < 0.3) return anchors;
+    return {
+      red: { x: cx, y: cy0 - gap / 2 },
+      gold: { x: cx, y: cy0 + gap / 2 }
+    };
+  }
+
   // ---- exports ----
   var API = {
     downsample: downsample,
@@ -458,6 +548,9 @@
     isWhiteText: isWhiteText,
     isAmountText: isAmountText,
     isWheelLevelText: isWheelLevelText,
+    isRedAmountText: isRedAmountText,
+    upscaleBilinear: upscaleBilinear,
+    refineWheelAnchors: refineWheelAnchors,
     isGreenUp: isGreenUp,
     isRedDown: isRedDown,
     colorClusterStats: colorClusterStats,

@@ -105,6 +105,20 @@
       out._debug = { panel: null };
       return out;
     }
+    // Half-resolution captures (~720p crops, measured 65% -> defaults everywhere on
+    // the 2026-07-16 corpus) starve every micro-OCR read. Re-parse at 2x: scale the
+    // raster bilinearly and carry the detection over (coords just double).
+    if (found.rect.h < 950) {
+      raster = L.upscaleBilinear(raster, 2);
+      found = {
+        rect: { x: found.rect.x * 2, y: found.rect.y * 2, w: found.rect.w * 2, h: found.rect.h * 2 },
+        method: found.method + "+2x",
+        score: found.score,
+        anchors: found.anchors
+          ? { red: { x: found.anchors.red.x * 2, y: found.anchors.red.y * 2 }, gold: { x: found.anchors.gold.x * 2, y: found.anchors.gold.y * 2 } }
+          : null
+      };
+    }
     var panel = found.rect;
     var geo = found.anchors ? L.wheelGeometry(found.anchors) : null;
     var panelConf = found.score;
@@ -134,27 +148,105 @@
     // caption cells mix white names, chartreuse amounts, and gold ("Points +1") text
     function captionText(r, g, b) { return L.isWhiteText(r, g, b) || L.isGoldText(r, g, b) || L.isAmountText(r, g, b); }
 
-    // ---- footer: Process (x/N) → rarity + currentTurn (plain background, reliable) ----
-    var procRead = await maskedOcr(L.roiRect(panel, "processBtn"), L.isWhiteText, { psm: 7 });
-    var procM = normText(procRead.text).match(/(\d+)\s*[\/l|]\s*(\d+)/);
-    var turnsRemaining = null, maxT = null;
-    if (procM) {
-      var a = parseInt(procM[1], 10), b = parseInt(procM[2], 10);
-      if (a >= 0 && a <= 9 && b >= 5 && b <= 9 && a <= b) { turnsRemaining = a; maxT = b; }
+    // ---- wheel geometry FIRST: every text region derives from the anchors ----
+    // Panel-fraction ROIs died on the 2026-07-16 corpus (different crop framings drift
+    // them off-target); the wheel anchors are the only invariant. cx/redY/goldY + gap
+    // place everything: gem name at redY−1.39·gap, points at −1.10·gap, the footer
+    // block from goldY+1.15·gap down (measured on the dev corpus, verified on the
+    // low-res corpus).
+    var nodes = geo ? geo : {
+      nodeN: L.roiPoint(panel, "nodeN"), nodeW: L.roiPoint(panel, "nodeW"),
+      nodeE: L.roiPoint(panel, "nodeE"), nodeS: L.roiPoint(panel, "nodeS"),
+      gap: panel.h * L.SIG.GAP_RATIO
+    };
+    var gap = nodes.gap;
+    var cx = nodes.nodeN.x, redY = nodes.nodeN.y, goldY = nodes.nodeS.y;
+    function bandRect(cy, halfHGap, halfWGap) {
+      return { x: cx - halfWGap * gap, y: cy - halfHGap * gap, w: halfWGap * 2 * gap, h: halfHGap * 2 * gap };
     }
+    // Self-locate a text line in a zone, then return a padded OCR rect. Fixed offsets
+    // from the (noisy) anchors proved brittle across capture variants — line-locating
+    // inside a generous zone is the pattern that made the wheel levels robust.
+    function locateLine(zone, pred, opts) {
+      var line = L.findMaskedTextLine(raster, zone, pred, opts);
+      if (!line) return null;
+      var grow = Math.round(line.h * 0.45);
+      return { x: line.x - grow, y: line.y - grow, w: line.w + grow * 2, h: line.h + grow * 2, _line: line };
+    }
+    function lineOpts(minWGap, maxWGap, centerTolGap) {
+      return {
+        maxRowFill: 0.6, minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.24),
+        // a high row threshold: sparkle/glow rows (~10px) must not bridge separate
+        // elements (gem icon ↔ name line) into one over-tall rejected band
+        minRowPx: Math.max(4, Math.round(gap * 0.10)), rejectFill: 0.45,
+        accept: function (r) {
+          var c = r.x + r.w / 2;
+          return Math.abs(c - cx) <= gap * centerTolGap && r.w >= gap * minWGap && r.w <= gap * maxWGap;
+        }
+      };
+    }
+
+    // ---- footer: Process (x/N) — anchored tight button first, block fallback ----
+    // OCR confusions to survive (all observed): "(" reads as a glued "1" ("(4/7)" →
+    // "14/7"), "/" reads as ":" or "." — so capture the SINGLE digit adjacent to the
+    // separator and accept the separator class loosely. N can only be 5/7/9.
+    function parseProcPair(text) {
+      // take the LAST valid pair — the Process button is the bottom-most row
+      var re = /(\d)\s*[:\/l|.]\s*(\d)\s*[\)\]]?/g, m, best = null;
+      var t = normText(text);
+      while ((m = re.exec(t))) {
+        var a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+        if (a >= 0 && a <= 9 && (b === 5 || b === 7 || b === 9) && a <= b) best = { a: a, b: b };
+      }
+      return best;
+    }
+    // Two independent reads, then a vote: A = the LOCATED Process-button line (its
+    // distance below the gold node wobbles ~2.2-2.5·gap with crop padding — locate,
+    // don't fix), B = the whole footer down to the panel bottom (position-free
+    // rescue). Agree → high conf; disagree → A wins but flagged.
+    var btnZone = { x: cx + gap * 0.2, y: goldY + gap * 1.95, w: gap * 2.15, h: gap * 0.75 };
+    var btnRect = locateLine(btnZone, L.isWhiteText, {
+      maxRowFill: 0.75, minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.24),
+      minRowPx: Math.max(4, Math.round(gap * 0.08)),
+      accept: function (r) { return r.w >= gap * 0.5; }
+    });
+    var procRead = await maskedOcr(
+      btnRect || { x: cx + gap * 0.2, y: goldY + gap * 2.13, w: gap * 2.15, h: gap * 0.3 },
+      L.isWhiteText, { psm: 7 });
+    var pairA = parseProcPair(procRead.text);
+    var footTop = goldY + gap * 1.13;
+    var footRead = await maskedOcr(
+      { x: cx - gap * 2.35, y: footTop, w: gap * 4.7, h: Math.max(gap * 0.6, panel.y + panel.h - footTop - 2) },
+      L.isWhiteText, { psm: 6 });
+    var footText = normText(footRead.text);
+    var pairB = parseProcPair(footText);
+    var pair = null, pairConf = 0;
+    if (pairA && pairB) {
+      var same = pairA.a === pairB.a && pairA.b === pairB.b;
+      pair = pairA; pairConf = same ? 0.95 : 0.6;
+    } else if (pairA) { pair = pairA; pairConf = 0.85; }
+    else if (pairB) { pair = pairB; pairConf = 0.7; }
+    var turnsRemaining = pair ? pair.a : null, maxT = pair ? pair.b : null;
     out.rarity = maxT === 5 ? "uncommon" : maxT === 7 ? "rare" : maxT === 9 ? "epic" : null;
     out.state.maxTurns = maxT;
     out.state.turnsRemaining = turnsRemaining;
-    confidence.state.rarity = maxT != null ? Math.min(0.98, procRead.conf + 0.3) : 0;
-    confidence.state.currentTurn = turnsRemaining != null ? Math.min(0.98, procRead.conf + 0.3) : 0;
+    confidence.state.rarity = maxT != null ? pairConf : 0;
+    confidence.state.currentTurn = turnsRemaining != null ? pairConf : 0;
 
-    // ---- footer: Processing Cost ----
-    var costRead = await maskedOcr(L.roiRect(panel, "costRow"), whiteOrGold, { whitelist: "ProcesingCost 0123456789,", psm: 7 });
-    var costM = costRead.text.replace(/[^\d,]/g, " ").match(/([\d,]{3,6})/);
+    // Processing Cost: prefer the word-anchored number; fall back to the bare cost
+    // tokens (450 / 900 / 1800 are the only possible values; OCR renders 1,800 as
+    // "1.800"/"1,800"/"1800")
+    var costM = footText.match(/cost\D{0,12}?([\d.,]{3,7})/i);
+    var cval = null;
     if (costM) {
-      var cval = parseInt(costM[1].replace(/,/g, ""), 10);
-      if (cval >= 100 && cval <= 9999) { out.state.processCost = cval; confidence.state.processCostMultiplier = 0.9; }
+      var cv = parseInt(costM[1].replace(/[.,]/g, ""), 10);
+      if (cv >= 100 && cv <= 9999) cval = cv;
     }
+    if (cval == null) {
+      var tokM = footText.match(/(^|\D)(450|900|1[.,]?800)(\D|$)/);
+      if (tokM) cval = parseInt(tokM[2].replace(/[.,]/g, ""), 10);
+    }
+    if (cval != null) { out.state.processCost = cval; confidence.state.processCostMultiplier = 0.9; }
     if (out.state.processCost == null) confidence.state.processCostMultiplier = 0.3;
 
     // ---- reroll pill (ROI-scoped: the "Reset (1/1)" trap can't reach here) ----
@@ -171,12 +263,36 @@
         confidence.state.rerollsRemaining = 0.9;
       }
     }
-    if (out.state.rerollsShownFree == null) confidence.state.rerollsRemaining = 0.25;
+    if (out.state.rerollsShownFree == null) {
+      // free rerolls exhausted: the pill becomes a solid GOLD "Charge" button (pay
+      // 3,800g for the extra reroll) — that gold face is the signature, no OCR needed.
+      // Charge visible ⇒ the paid reroll is UNSPENT ⇒ model rerollsRemaining = 1.
+      var pillCrop = L.crop(raster, pillRect);
+      var goldBtn = L.colorClusterStats(pillCrop, function (r, g, b) {
+        var c = L.hsv(r, g, b); return c.h >= 30 && c.h < 55 && c.s > 0.45 && c.v > 0.5;
+      });
+      if (goldBtn.frac > 0.35) {
+        out.state.rerollsChargeSeen = true;
+        confidence.state.rerollsRemaining = 0.85;
+      }
+    }
+    if (out.state.rerollsShownFree == null && !out.state.rerollsChargeSeen) confidence.state.rerollsRemaining = 0.25;
 
     // ---- gem name → gemType + baseCost (suffix table) ----
-    var nameRead = await maskedOcr(L.roiRect(panel, "gemName"), function (r, g, b) {
-      var c = L.hsv(r, g, b); return c.v > 0.45 && c.s > 0.15;   // rarity-colored serif text
-    }, { psm: 7 });
+    // Fixed band primary (best measured); if it produces neither the type keyword nor
+    // a suffix, retry on a LOCATED line — the name is the only long SATURATED text
+    // above the wheel (the gem icon is saturated too but half as wide).
+    var namePred = function (r, g, b) { var c = L.hsv(r, g, b); return c.v > 0.45 && c.s > 0.15; };
+    var nameRead = await maskedOcr(bandRect(redY - gap * 1.39, 0.17, 1.95), namePred, { psm: 7 });
+    if (!/chaos|order/i.test(nameRead.text)) {
+      var isNameText = function (r, g, b) { var c = L.hsv(r, g, b); return c.s > 0.28 && c.v > 0.5; };
+      var nameZone = { x: cx - gap * 2.0, y: redY - gap * 1.80, w: gap * 4.0, h: gap * 0.85 };
+      var nameRect = locateLine(nameZone, isNameText, lineOpts(0.95, 3.4, 0.6));
+      if (nameRect) {
+        var nameRead2 = await maskedOcr(nameRect, namePred, { psm: 7 });
+        if (/chaos|order/i.test(nameRead2.text)) nameRead = nameRead2;
+      }
+    }
     var nameText = normText(nameRead.text).toLowerCase();
     out.config.gemType = /chaos/.test(nameText) ? "chaos" : (/order/.test(nameText) ? "order" : null);
     confidence.config.gemType = out.config.gemType ? 0.9 : 0;
@@ -198,12 +314,6 @@
     else confidence.config.baseCost = 0;
 
     // ---- wheel levels (gold digits) + effect hue references ----
-    var nodes = geo ? geo : {
-      nodeN: L.roiPoint(panel, "nodeN"), nodeW: L.roiPoint(panel, "nodeW"),
-      nodeE: L.roiPoint(panel, "nodeE"), nodeS: L.roiPoint(panel, "nodeS"),
-      gap: panel.h * L.SIG.GAP_RATIO
-    };
-    var gap = nodes.gap;
     var patchHalf = Math.max(4, gap * 0.06);
     function nodeColor(p) { return L.medianPatch(raster, p.x, p.y, patchHalf); }
     var colW = nodeColor(nodes.nodeW), colE = nodeColor(nodes.nodeE);
@@ -262,12 +372,13 @@
     // captures can mangle the digit while keeping "Points" ('5 re Paints' for
     // "6 Astrogem Points"), so a bare leading-digit grab is NOT trustworthy.
     function extractPts(text) {
-      var m = normText(text).match(/(\d{1,2})\s*[Aa]s/);
+      // "Astrogem" OCRs as Astroaem/Actroaem/Asroges… — accept A + s/c after the digit
+      var m = normText(text).match(/(\d{1,2})\s*[Aa][sc]/);
       if (!m) return null;
       var v = parseInt(m[1], 10);
       return v >= 4 && v <= 20 ? v : null;
     }
-    var ptsRect = L.roiRect(panel, "points");
+    var ptsRect = bandRect(redY - gap * 1.10, 0.13, 1.55);
     var ptsSub = L.crop(raster, ptsRect);
     function logPtsRead(tag, r) {
       if (out._debug) (out._debug.reads = out._debug.reads || []).push({
@@ -342,10 +453,12 @@
     out.config.orderLevel = lvS.level; confidence.config.orderLevel = lvS.conf;
 
     // ---- effect NAMES: W/E caption OCR (white serif over art — masked) ----
+    // Tall band: 2-line names ("Ally Damage / Enh.") start ~0.28·gap above center; the
+    // level line begins ~+0.02·gap, so stop just above it. PSM 6: multi-line.
     async function readEffectName(p) {
-      var rect = { x: p.x - gap * 0.55, y: p.y - gap * 0.16, w: gap * 1.1, h: gap * 0.30 };
-      var read = await maskedOcr(rect, L.isWhiteText, { psm: 7 });
-      return { text: normText(read.text).toLowerCase(), conf: read.conf };
+      var rect = { x: p.x - gap * 0.55, y: p.y - gap * 0.34, w: gap * 1.1, h: gap * 0.36 };
+      var read = await maskedOcr(rect, L.isWhiteText, { psm: 6 });
+      return { text: normText(read.text).toLowerCase().replace(/\n/g, " "), conf: read.conf };
     }
     // Most-specific patterns FIRST: "Enh." appears only in the two Ally effects, so an
     // occluded read like "Damage Enh." (a pet covering "Ally" — real case, 2026-07-16)
@@ -402,7 +515,11 @@
         if (Math.abs(dW - dE) < 12) oconf -= 0.35;   // near-tie: same-family effects
       }
 
-      if (/effect\s*chang|changed/.test(cap) && target && (target === "effect1" || target === "effect2")) {
+      if (/maintain|state\s*maint/.test(cap)) {
+        // "Processing State Maintained" — the literal do-nothing outcome
+        o = { type: "do_nothing" };
+        oconf += Math.min(0.9, capRead.conf + 0.3);
+      } else if (/effect\s*chang|changed/.test(cap) && target && (target === "effect1" || target === "effect2")) {
         o = { type: "change_side_option", target: target };
         oconf += Math.min(0.9, capRead.conf + 0.3);
       } else if (/time|view|other|item/.test(cap) || (icls === "grey" && /\+\s*\d/.test(cap))) {
@@ -462,12 +579,47 @@
             down: { count: aDown.count, frac: Math.round(aDown.frac * 1000) / 1000, density: Math.round(aDown.density * 100) / 100 }
           };
         }
+        var redLine = null;
+        if (!amtLine) {
+          // LOWER amounts render RED with a red ▼ — a red text line is itself the
+          // direction signal. Red-on-red (a lower on the red willpower face) is
+          // colorimetrically unreadable, like the gold S digit: rejectFill bails and
+          // the willpower fallback below covers it.
+          redLine = L.findMaskedTextLine(raster, capRect, L.isRedAmountText, {
+            rejectFill: 0.3, maxRowFill: 0.7,
+            minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.2), minRowPx: 3,
+            accept: function (r) {
+              var cx = r.x + r.w / 2;
+              return Math.abs(cx - capCx) <= gap * 0.24 && r.w >= gap * 0.04 && r.w <= gap * 0.6;
+            }
+          });
+          if (redLine) {
+            var rgrow = Math.round(redLine.h * 0.5);
+            var redRead = await maskedOcr(
+              { x: redLine.x - rgrow, y: redLine.y - rgrow, w: redLine.w + rgrow * 2, h: redLine.h + rgrow * 2 },
+              L.isRedAmountText, { whitelist: "Lv.-12345 ", psm: 7 });
+            var rm2 = redRead.text.match(/(?:lv\.?|-|−)\s*([1-4])/i) || redRead.text.match(/([1-4])/);
+            if (rm2) amt = parseInt(rm2[1], 10);
+            dirDown = true; dirUp = false;
+          }
+        }
         if (amt == null) {
           var amtM = cap.match(/(?:lv\.?\s*|\+\s*)([1-4])/) || cap.match(/([1-4])\s*$/);
           if (amtM) amt = parseInt(amtM[1], 10);
         }
         var hadAmt = amt != null;
         if (amt == null) amt = 1;
+        if (!amtLine && !redLine && target === "willpower") {
+          // red face + red text + red arrow: a willpower LOWER is invisible to every
+          // color mask. But a willpower RAISE always shows a green ▲ (green-on-red
+          // separates at any resolution) — so green anywhere in the cell decides.
+          var wCrop = L.crop(raster, capRect);
+          var wUp = L.colorClusterStats(wCrop, function (rr, gg, bb) {
+            var c = L.hsv(rr, gg, bb); return c.h >= 75 && c.h < 145 && c.s > 0.4 && c.v > 0.45;
+          });
+          if (wUp.frac > 0.006 && wUp.count >= 8) { dirUp = true; dirDown = false; }
+          else { dirDown = true; dirUp = false; oconf -= 0.25; }
+        }
         var type = dirDown && !dirUp ? "lower_effect" : "raise_effect";
         o = { type: type, target: target, amount: amt };
         oconf += (hadAmt ? 0.55 : 0.25) + (dirUp || dirDown ? 0.3 : 0.05);

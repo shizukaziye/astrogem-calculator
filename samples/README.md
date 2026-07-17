@@ -8,21 +8,25 @@ This folder holds the A/B test set for the Advisor's screenshot-reading engines
 > resolutions on purpose (1143×1269 webp, 1183×1278 png) so a parser can't get away with
 > hardcoded pixel offsets.
 >
-> **Scores on this 3-sample development corpus** (per-field average = 12 scalars + the
-> unordered outcome set, per sample, averaged):
+> **Corpus status (2026-07-17): 50 real screenshots** — the 3 dev shots + the station
+> frame + 46 lower-resolution (~713×768) captures across 6 full cuts: rare + epic,
+> Corrosion (cost 8) + Distortion (cost 9), all six effects except the two Order-gem
+> exclusives, lowers (▼), do-nothing ("Processing State Maintained"), Cost ±100% (incl.
+> a persistent 1,800 footer), reroll pill states 2/2·1/2·1/1 and the gold **Charge**
+> button (free rerolls spent), View Other Items +1/+2, and chat-line noise.
 >
-> | engine | per-field avg | scalar fields | outcomes | whole-parse |
-> |--------|--------------|---------------|----------|-------------|
-> | **structural** (free tier) | **100%** | 36/36 | 12/12 | 3/3 |
-> | tesseract (legacy) | ~70% | 69.4% | 8.3% | 0/3 |
+> | engine | headline (per-field avg) | scalar fields | outcomes | whole-parse | flag-coverage |
+> |--------|-------------------------|---------------|----------|-------------|---------------|
+> | **structural** (free tier) | **88.1%** | 88.7% | 81.5% | 17/50 | 94.4% |
 >
-> ⚠️ The structural row is a **development fit, not a shipping claim** — the engine was
-> iterated against these exact 3 screenshots (one gem type, one rarity, raise-heavy
-> outcomes). The FREE-tier ship gate (see the plan / METHODOLOGY) requires ≥95% on
-> **≥25 real screenshots** the engine was not tuned on, plus robustness rows
-> (JPEG/rescale/full-screen). A synthetic full-screen 2560×1440 mount of turn2 parses
-> completely correctly (panel IoU 0.98), which is evidence of scale-robustness, not
-> proof.
+> Arc, for honesty: the engine scored **100% on the 3-shot dev corpus it was tuned on,
+> then 65.3% cold** on this unseen corpus; targeted calibration (2× upscale for small
+> panels, red lower-amounts, Charge/Maintained/+2 vocab, anchor-relative + self-locating
+> text reads, footer read voting) brought it to 88.1%. The ≥95% FREE ship gate is NOT
+> yet met — dominant remaining misses are the points-header digit at low res (orderLevel
+> 74%) and Process (x/N) digit quality (currentTurn 76%). **Flag-coverage is the safety
+> net**: ~94% of wrong fields carry confidence < 0.8 and pulse "confirm me" in the UI.
+> The 3 dev shots still parse 3/3 whole.
 >
 > **Why Tesseract alone was abandoned:** it reads the plain-background footer perfectly
 > (`Process (x/N)`, cost, balance = 100%) and fails on everything drawn over the nebula
