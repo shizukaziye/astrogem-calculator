@@ -17,7 +17,14 @@ This folder holds the A/B test set for the Advisor's screenshot-reading engines
 >
 > | engine | headline (per-field avg) | scalar fields | outcomes | whole-parse | flag-coverage | silent errors |
 > |--------|-------------------------|---------------|----------|-------------|---------------|---------------|
-> | **structural** (free tier) | **94.3%** | 94.4% | 93.8% | 20/52 | **100%** (47/47) | **0** |
+> | **structural** (free tier) | **99.3%** | 99.4% | 99.1% | 48/53 (91%) | **100%** (6/6) | **0** |
+>
+> **2026-07-17 accuracy loop (53 shots):** ten of twelve fields read at 100%
+> (baseCost, gemType, orderLevel, effect1Level, effect2, effect2Level, currentTurn,
+> maxTurns, processCostMultiplier + effect1 at 98). The remaining misses: one
+> pet-occluded effect name (station), one webp-recompressed willpower digit
+> (live-upload), two dim reroll pills — all flagged. The ship gate
+> (`npm run eval-gate`, ≥95/≥95) passes.
 >
 > **The corpus spans real monitor sizes** — 50 native captures from a smaller monitor
 > (~713px panel width; the digits really are ~10px on screen) plus **2 native 4K

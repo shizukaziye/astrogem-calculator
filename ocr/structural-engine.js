@@ -462,6 +462,11 @@
       var pillDim = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.35 && c.v > 0.45; };
       var pillR2 = await ocrText(upscale(dilateDark(L.chromaMask(pillSub, pillDim)), 3), { whitelist: "0123456789/", psm: 7 });
       var pillM2 = pillR2.text.match(/(\d)\s*\/\s*(\d)/);
+      if (!pillM2) {
+        // the thin '/' vanishes before the digits do: exactly two digits ⇒ n,d
+        var bare = (pillR2.text || "").replace(/\D/g, "");
+        if (bare.length === 2 && (bare[1] === "1" || bare[1] === "2")) pillM2 = [null, bare[0], bare[1]];
+      }
       if (pillM2) {
         var pa2 = parseInt(pillM2[1], 10), pb2 = parseInt(pillM2[2], 10);
         if (pa2 <= 9 && (pb2 === 1 || pb2 === 2)) {
@@ -762,7 +767,9 @@
                 var dm = iouDigit(tgP.mask, dbox, allowed);
                 if (out._debug) (out._debug.ptsDig = out._debug.ptsDig || []).push(
                   (dm ? dm.top3 : "nomatch") + " w" + dbox.w + "h" + dbox.h + " [" + allowed.join("") + "]");
-                if (dm && dm.score >= 0.3) { dch = dm.ch; dsc = dm.score; }
+                // 0.36 floor: a 0.30-0.33 IoU is noise-level — committing it beat the
+                // (better) run-OCR rescue to a WRONG value on two live '13' headers
+                if (dm && dm.score >= 0.36) { dch = dm.ch; dsc = dm.score; }
               }
               if (!dch) { digs = null; break; }
               digs += dch; minSc = Math.min(minSc, dsc);
@@ -1030,7 +1037,7 @@
       var capRect = { x: iconXs[oi] - gap * 0.44, y: iconY - gap * 0.16, w: gap * 0.88, h: gap * 0.52 };
       var capRead = await maskedOcr(capRect, captionText, { psm: 6 });
       var cap = normText(capRead.text).toLowerCase();
-      if (out._debug) (out._debug.caps = out._debug.caps || [])[oi] = cap.replace(/\n/g, "|").slice(0, 50);
+      if (out._debug) (out._debug.caps = out._debug.caps || [])[oi] = icls + "· '" + cap.replace(/\n/g, "|").slice(0, 45) + "'";
 
       var o = null, oconf = 0;
       var target = null;
@@ -1069,8 +1076,10 @@
             }
           }
         }
-        var costish = /1\s*[o0]\s*[o0]|[cjg]ost/.test(gTxt) || /1\s*[o0]\s*[o0]/.test(cap) || zeroPair;
-        var maintainish = /maintain|tained/.test(gTxt) || /maintain|state\s*maint/.test(cap);
+        // "Cost" beheads to 'jos'/'gos' when the whole −100% line drops (live:
+        // caption 'frosesz ng jos' — Processing + Cost fragments, no digits at all)
+        var costish = /1\s*[o0]\s*[o0]|[cjg]ost|[cjg]os\b/.test(gTxt) || /1\s*[o0]\s*[o0]|[cjg]os\b/.test(cap) || zeroPair;
+        var maintainish = /maintain|tained|state/.test(gTxt) || /maintain|state/.test(cap);
         // the third grey candidate: "View Other Items +N time(s)" — two live cells
         // read as do_nothing because only THIS dilated pass can see their captions
         var rerollish = /time|view|item|other/.test(gTxt) || /time|view|item|other/.test(cap);
@@ -1228,9 +1237,23 @@
         // SAFETY: on order/points/willpower the direction arrow renders in the icon's
         // OWN hue family (a red raise ▲ on the gold order icon), so the color test is
         // unreliable there — a wrong direction must never be CONFIDENT. Require a clear
-        // +/− sign in the caption to keep it unflagged; else cap below the UI threshold.
+        // +/− sign to keep it unflagged; else cap below the UI threshold.
         if (target === "order" || target === "willpower") {
           var signSeen = /\+\s*[1-5]/.test(cap) || (/(?:^|\s)[-−]\s*[1-5]/.test(cap) && !/lv/i.test(cap));
+          if (!signSeen) {
+            // vivid-yellow sign read: these amounts render in the same saturated pure
+            // yellow that unlocked the gold-on-gold S digit — a mask the caption's
+            // white words and the icon face can't leak into. Sign + digit, directly.
+            var vividPred = function (r, g, b) { var c = L.hsv(r, g, b); return c.h >= 38 && c.h <= 64 && c.s > 0.7 && c.v > 0.68; };
+            var vRead = await maskedOcr(capRect, vividPred, { whitelist: "+-−12345 ", psm: 7 });
+            var vTxt = vRead.text || "";
+            if (/\+\s*\d/.test(vTxt)) { o.type = "raise_effect"; signSeen = true; }
+            else if (/[-−]\s*\d/.test(vTxt)) { o.type = "lower_effect"; signSeen = true; }
+            if (signSeen) {
+              var vAmt = vTxt.match(/([1-4])/);
+              if (vAmt && !hadAmt) o.amount = parseInt(vAmt[1], 10);
+            }
+          }
           if (!signSeen) oconf = Math.min(oconf, 0.72);
         }
       } else {
