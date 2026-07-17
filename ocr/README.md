@@ -1,13 +1,15 @@
 # OCR engines (Advisor screenshot reading)
 
 The Advisor tab can prefill its form from a Lost Ark **Processing** screenshot.
-There are **two swappable engines** behind one interface, plus a shared repair pass
+There are **swappable engines** behind one interface, plus a shared repair pass
 (`constraintSnap`) that guarantees the Advisor only ever sees a **legal** game state.
 
 | file | what it is |
 |------|------------|
 | `engine.js` | the common interface + `constraintSnap` + a small engine registry. No backend. |
-| `tesseract-engine.js` | **default** engine: client-side Tesseract.js. Offline, no accounts. |
+| `tesseract-engine.js` | client-side Tesseract.js OCR. Offline, no accounts. |
+| `layout.js` | the structural parser's pure image-analysis core — environment-agnostic raster functions (browser canvas + Node sharp) shared by the structural engine; calibrated via `tools/dump-structural.js`. |
+| `structural-engine.js` | the "structural" parser: reads the screenshot's rigid layout + color coding first (panel/wheel anchors, self-calibrated icon hues from `layout.js`) and uses OCR only where it is strong. |
 | `workersai-engine.js` | optional engine: POSTs the image to a Cloudflare Worker (`../worker/`) running a Workers AI vision model. Disabled until you set `WORKER_URL`. |
 
 ## The interface
@@ -55,7 +57,8 @@ returns a fully **legal** `{ config, state, outcomes:[4] }`:
 - **levels** clamped to `1..5`.
 - **rarity** snapped to `{uncommon,rare,epic}`; `maxTurns`/`maxRerolls` derived from it.
 - **currentTurn** clamped to `1..maxTurns` (from `currentTurn` or `turnsRemaining`);
-  **turn 1 ⇒ full rerolls**; `rerollsRemaining` clamped to `0..maxRerolls`.
+  **turn 1 ⇒ full rerolls**; `rerollsRemaining` clamped to `0..9` — NOT to
+  `maxRerolls`, because `reroll_increase` outcomes stack the counter uncapped.
 - **processCostMultiplier** clamped to `[-100,100]` and snapped to the steps the game
   actually uses (`-100 / 0 / +100`); **processCost** made consistent with
   `900 × (1 + mult/100)`.
@@ -101,6 +104,6 @@ the option disabled with a tooltip explaining the one setup step.
 
 ## A/B testing
 
-`tools/eval-ocr.js` scores both engines' per-field accuracy against ground-truth
-JSON in `../samples/`. See `../samples/README.md`. We have no real screenshots yet,
-so the harness currently just prints the expected format.
+`tools/eval-ocr.js` scores the engines' per-field accuracy against the real
+screenshot + ground-truth pairs in `../samples/` (see `../samples/README.md` for
+the samples, the measured per-engine scores, and how to add more).

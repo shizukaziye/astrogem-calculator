@@ -41,12 +41,13 @@ var tesseractMod = require(path.join(ROOT, "ocr", "tesseract-engine.js"));
 
 // ---- args ----
 function parseArgs(argv) {
-  var out = { engines: null, workerUrl: process.env.WORKER_URL || null, json: false, gates: [] };
+  var out = { engines: null, workerUrl: process.env.WORKER_URL || null, json: false, dump: false, gates: [] };
   argv.forEach(function (a) {
     var m;
     if ((m = a.match(/^--engines=(.+)$/))) out.engines = m[1].split(",").map(function (s) { return s.trim(); });
     else if ((m = a.match(/^--worker-url=(.+)$/))) out.workerUrl = m[1];
     else if (a === "--json") out.json = true;
+    else if (a === "--dump") out.dump = true;
     else if ((m = a.match(/^--gate=(.+)$/))) {
       // --gate=<engine>:<minFields>,<minOutcomes>   e.g. --gate=structural:0.95,0.95
       // (fields = the per-field average incl. the outcome-set score — the headline metric)
@@ -157,7 +158,9 @@ function scoreOne(parsed, truthRaw) {
     headline: headline,
     wholeParse: correct === scalarFields.length && matched === wantKeys.length,
     wrongTotal: wrongAll.length,
-    wrongFlagged: wrongFlagged
+    wrongFlagged: wrongFlagged,
+    gotOutcomeKeys: gotKeys,
+    wantOutcomeKeys: wantKeys
   };
 }
 
@@ -198,6 +201,49 @@ function makeNodeTesseractParser() {
         },
         rarity: cfg.rarity, outcomes: outcomes
       };
+      return engineApi.constraintSnap(raw);
+    },
+    async dispose() { if (workerP) { var w = await workerP; try { await w.terminate(); } catch (e) {} } }
+  };
+}
+
+// Node structural parser: sharp decodes to raw RGBA, ocr/layout.js + the structural
+// core run the SAME decision logic that ships in the browser; micro-crops re-encode
+// to PNG for the Node tesseract worker. This row IS the free-tier ship gate.
+function makeNodeStructuralParser() {
+  var sharp, structural, Tesseract;
+  try { sharp = require("sharp"); } catch (e) { console.log("Skipping structural: sharp not installed (npm i -D sharp)."); return null; }
+  try { Tesseract = require("tesseract.js"); } catch (e) { console.log("Skipping structural: tesseract.js not installed."); return null; }
+  structural = require(path.join(ROOT, "ocr", "structural-engine.js"));
+  var workerP = null;
+  function getWorker() {
+    if (!workerP) workerP = Tesseract.createWorker("eng", 1, { logger: function () {} });
+    return workerP;
+  }
+  var q = Promise.resolve();
+  function nodeOcr(raster, opts) {
+    q = q.then(async function () {
+      var w = await getWorker();
+      await w.setParameters({
+        tessedit_pageseg_mode: String((opts && opts.psm) || 6),
+        tessedit_char_whitelist: (opts && opts.whitelist) || "",
+        user_defined_dpi: "150"
+      }).catch(function () {});
+      var png = await sharp(Buffer.from(raster.data.buffer, raster.data.byteOffset, raster.data.length),
+        { raw: { width: raster.width, height: raster.height, channels: 4 } }).png().toBuffer();
+      var res = await w.recognize(png);
+      return { text: (res.data && res.data.text) || "", conf: ((res.data && res.data.confidence) || 40) / 100 };
+    });
+    return q;
+  }
+  return {
+    name: "structural",
+    label: "Structural (Node, layout + micro-OCR)",
+    async parse(imagePath) {
+      var dec = await sharp(imagePath).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      var raster = { width: dec.info.width, height: dec.info.height,
+        data: new Uint8ClampedArray(dec.data.buffer, dec.data.byteOffset, dec.data.length) };
+      var raw = await structural.parseStructural(raster, nodeOcr);
       return engineApi.constraintSnap(raw);
     },
     async dispose() { if (workerP) { var w = await workerP; try { await w.terminate(); } catch (e) {} } }
@@ -279,8 +325,12 @@ async function main() {
   }
 
   // which engines?
-  var want = ARGS.engines || ["tesseract", "workersai"];
+  var want = ARGS.engines || ["structural", "tesseract", "workersai"];
   var engines = [];
+  if (want.indexOf("structural") !== -1) {
+    var st = makeNodeStructuralParser();
+    if (st) engines.push(st);
+  }
   if (want.indexOf("tesseract") !== -1) {
     var t = makeNodeTesseractParser();
     if (t) engines.push(t);
@@ -336,6 +386,10 @@ async function main() {
         "  outcomes " + pct(sc.outcomeScore) +
         (sc.wholeParse ? "  ✓whole" : "") +
         (wrong.length ? "   miss: " + wrong.join(", ") : ""));
+      if (ARGS.dump) {
+        console.log("      got : " + sc.gotOutcomeKeys.join("  |  "));
+        console.log("      want: " + sc.wantOutcomeKeys.join("  |  "));
+      }
     }
     if (n > 0) {
       var headlineAvg = totHeadline / n, outcomesAvg = totOutcome / n;

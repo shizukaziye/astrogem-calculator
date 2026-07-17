@@ -1,23 +1,44 @@
 # OCR evaluation samples
 
 This folder holds the A/B test set for the Advisor's screenshot-reading engines
-(Tesseract.js and Workers AI). The harness is `tools/eval-ocr.js`.
+(structural, Tesseract.js legacy, Workers AI). The harness is `tools/eval-ocr.js`.
 
 > **Status: 3 real samples (2026-07-16).** `turn1/turn2/turn3-epic-c9-chaos` are three
 > consecutive turns of one real epic cost-9 chaos cut, captured at two different
 > resolutions on purpose (1143×1269 webp, 1183×1278 png) so a parser can't get away with
 > hardcoded pixel offsets.
 >
-> **First real scores — Tesseract is not viable.** `node tools/eval-ocr.js`:
-> **69.4% of scalar fields, 8.3% of outcomes** (1 of 12 across 3 shots). It reads the
-> plain-background footer perfectly (`Process (x/N)`, cost, balance = 100%) and fails on
-> everything drawn over the nebula art: the gem name comes back as
-> `€haos Astrogém: Distortion`, stats as `Villpowesr` / `ossiDamages'`, and the `▲`
-> glyph as `A`, so `Lv. 2 ▲` becomes `Lv. 20A` and `+2` vanishes entirely. Mean
-> confidence 41–44%. Use `node tools/dump-ocr-text.js` to see the raw text.
+> **Scores on this 3-sample development corpus** (per-field average = 12 scalars + the
+> unordered outcome set, per sample, averaged):
 >
-> **The outcomes are the field that matters** (they decide Process vs Reroll) and they
-> are the field Tesseract is worst at. Any real solution has to beat 8.3% there.
+> | engine | per-field avg | scalar fields | outcomes | whole-parse |
+> |--------|--------------|---------------|----------|-------------|
+> | **structural** (free tier) | **100%** | 36/36 | 12/12 | 3/3 |
+> | tesseract (legacy) | ~70% | 69.4% | 8.3% | 0/3 |
+>
+> ⚠️ The structural row is a **development fit, not a shipping claim** — the engine was
+> iterated against these exact 3 screenshots (one gem type, one rarity, raise-heavy
+> outcomes). The FREE-tier ship gate (see the plan / METHODOLOGY) requires ≥95% on
+> **≥25 real screenshots** the engine was not tuned on, plus robustness rows
+> (JPEG/rescale/full-screen). A synthetic full-screen 2560×1440 mount of turn2 parses
+> completely correctly (panel IoU 0.98), which is evidence of scale-robustness, not
+> proof.
+>
+> **Why Tesseract alone was abandoned:** it reads the plain-background footer perfectly
+> (`Process (x/N)`, cost, balance = 100%) and fails on everything drawn over the nebula
+> art: the gem name comes back as `€haos Astrogém: Distortion`, stats as `Villpowesr` /
+> `ossiDamages'`, and the `▲` glyph as `A`, so `Lv. 2 ▲` becomes `Lv. 20A` and `+2`
+> vanishes entirely. Mean confidence 41–44%. The structural engine keeps Tesseract only
+> for chroma-masked micro-crops at known coordinates and derives everything positional
+> from the wheel geometry + color science (see `ocr/structural-engine.js` header).
+>
+> Notable structural findings baked into the engine, all measured on these samples:
+> wheel level text sits INSIDE each diamond (W/E say "Lv. N", N/S show a bare digit);
+> the S diamond is gold so its digit is unrecoverable by color — the header
+> "N Astrogem Points" line-sum solves it arithmetically; caption amounts render
+> CHARTREUSE (h≈70–90), a different pigment from wheel gold (h≈50); the ▲/▼ arrow must
+> be classified in a small box at the amount line's right end AND the icon's own hue
+> family discounted (a red willpower face out-counts a real green ▲ otherwise).
 
 ## File format
 

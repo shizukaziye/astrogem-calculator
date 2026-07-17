@@ -533,7 +533,7 @@
   TesseractEngine.prototype = Object.create(BaseEngine.prototype);
   TesseractEngine.prototype.constructor = TesseractEngine;
   TesseractEngine.prototype.name = "tesseract";
-  TesseractEngine.prototype.label = "Tesseract.js (offline, default)";
+  TesseractEngine.prototype.label = "Tesseract.js (legacy fallback)";
   TesseractEngine.prototype.isAvailable = function () {
     return IS_BROWSER && typeof Tesseract !== "undefined";
   };
@@ -612,6 +612,7 @@
 
   var EXPORT = {
     TesseractEngine: TesseractEngine,
+    GEM_NAME_COST: GEM_NAME_COST,
     instance: instance,
     // exported for the eval harness / unit testing in Node
     parseConfig: parseConfig,
@@ -624,5 +625,6 @@
   } else {
     root.TesseractEngine = TesseractEngine;
     root.tesseractEngine = instance;
+    root.OcrTesseractEngine = EXPORT;   // parser fns + lexicons for the structural engine
   }
 })(typeof globalThis !== "undefined" ? globalThis : this);

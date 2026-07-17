@@ -112,7 +112,7 @@
   }
 
   // ---------------- engine selector ----------------
-  var selectedEngine = "tesseract";
+  var selectedEngine = "structural";
   function renderEngines() {
     var wrap = $("av-engines");
     var list = (window.ocrListEngines ? window.ocrListEngines() : []);
@@ -407,8 +407,10 @@
     $("av-go").addEventListener("click", runAdvice);
 
     window.addEventListener("beforeunload", function () {
-      var t = window.ocrGetEngine && window.ocrGetEngine("tesseract");
-      if (t && typeof t.disposeWorker === "function") t.disposeWorker();
+      ["structural", "tesseract"].forEach(function (n) {
+        var t = window.ocrGetEngine && window.ocrGetEngine(n);
+        if (t && typeof t.disposeWorker === "function") t.disposeWorker();
+      });
       if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
     });
   }

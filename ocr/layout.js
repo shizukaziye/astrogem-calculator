@@ -346,19 +346,96 @@
   // Common predicates
   function isGoldText(r, g, b) { var c = hsv(r, g, b); return c.h >= 30 && c.h < 60 && c.s > 0.45 && c.v > 0.55; }
   function isWhiteText(r, g, b) { var c = hsv(r, g, b); return c.s < 0.25 && c.v > 0.72; }
-  function isGreenUp(r, g, b) { var c = hsv(r, g, b); return c.h >= 75 && c.h < 150 && c.s > 0.45 && c.v > 0.45; }
+  // outcome-caption amounts ("Lv. 2" / "+1") render CHARTREUSE (h≈70-90, measured on
+  // turn3), a different pigment from the wheel's level gold (h≈50)
+  function isAmountText(r, g, b) { var c = hsv(r, g, b); return c.h >= 55 && c.h < 95 && c.s > 0.5 && c.v > 0.45; }
+  // wheel level digits: gold, but downscaled captures blend the thin strokes with the
+  // diamond face behind them (gold-over-green shifts h up to ~80) — wider than
+  // isGoldText, still excluding true face greens (h≥100) and reds (h<20)
+  function isWheelLevelText(r, g, b) { var c = hsv(r, g, b); return c.h >= 30 && c.h < 80 && c.s > 0.4 && c.v > 0.5; }
+  // ▲ proper is a purer green (h≈100+); starting at 95 keeps chartreuse amount text
+  // from counting as an up-arrow (matters once ▼ outcomes exist: count comparison)
+  function isGreenUp(r, g, b) { var c = hsv(r, g, b); return c.h >= 95 && c.h < 150 && c.s > 0.45 && c.v > 0.45; }
   function isRedDown(r, g, b) { var c = hsv(r, g, b); return (c.h < 18 || c.h >= 345) && c.s > 0.45 && c.v > 0.40; }
 
-  // Pixel-count + centroid for a predicate — the ▲/▼ detector (color, not glyph).
+  // Pixel-count + centroid + bbox for a predicate — the ▲/▼ detector (color, not
+  // glyph). `density` (count / bbox area) separates a solid arrow blob (~0.5) from
+  // diffuse icon-face bleed spread across the whole box (~0.05).
   function colorClusterStats(img, pred) {
-    var n = 0, sx = 0, sy = 0;
+    var n = 0, sx = 0, sy = 0, x0 = img.width, x1 = -1, y0 = img.height, y1 = -1;
     for (var y = 0; y < img.height; y++) {
       for (var x = 0; x < img.width; x++) {
         var i = (y * img.width + x) * 4;
-        if (pred(img.data[i], img.data[i + 1], img.data[i + 2])) { n++; sx += x; sy += y; }
+        if (pred(img.data[i], img.data[i + 1], img.data[i + 2])) {
+          n++; sx += x; sy += y;
+          if (x < x0) x0 = x; if (x > x1) x1 = x;
+          if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
       }
     }
-    return { count: n, cx: n ? sx / n : 0, cy: n ? sy / n : 0, frac: n / (img.width * img.height) };
+    var bboxArea = n ? (x1 - x0 + 1) * (y1 - y0 + 1) : 1;
+    return {
+      count: n, cx: n ? sx / n : 0, cy: n ? sy / n : 0,
+      frac: n / (img.width * img.height),
+      density: n ? n / bboxArea : 0
+    };
+  }
+
+  // Locate the BOTTOM-most text-like line of `pred` pixels inside `rect` (full-image
+  // coords) and return a tight padded {x,y,w,h}, or null. Row-projection scan: a text
+  // line is a thin horizontal band whose per-row coverage stays well under maxRowFill —
+  // a solid color face (the gold S diamond) saturates its rows and is rejected, and
+  // opts.rejectFill bails out early when the whole box is mostly mask (gold-on-gold:
+  // the digit is unrecoverable by color, the checksum solves it instead).
+  function findMaskedTextLine(img, rect, pred, opts) {
+    opts = opts || {};
+    var sub = crop(img, rect);
+    var w = sub.width, h = sub.height, d = sub.data;
+    var minH = Math.max(4, opts.minH || Math.round(h * 0.08));
+    var maxH = opts.maxH || Math.round(h * 0.55);
+    var maxRowFill = opts.maxRowFill != null ? opts.maxRowFill : 0.6;
+    var minRowPx = Math.max(2, opts.minRowPx || Math.round(w * 0.02));
+    var pad = opts.pad != null ? opts.pad : 3;
+    var rows = new Array(h), total = 0;
+    for (var y = 0; y < h; y++) {
+      var c = 0;
+      for (var x = 0; x < w; x++) {
+        var i = (y * w + x) * 4;
+        if (pred(d[i], d[i + 1], d[i + 2])) c++;
+      }
+      rows[y] = c; total += c;
+    }
+    if (opts.rejectFill != null && total / (w * h) > opts.rejectFill) return null;
+    var accept = opts.accept || function () { return true; };
+    function finish(yTop, yBot) {
+      var x0 = w, x1 = -1;
+      for (var yy = yTop; yy <= yBot; yy++) {
+        for (var x = 0; x < w; x++) {
+          var i = (yy * w + x) * 4;
+          if (pred(d[i], d[i + 1], d[i + 2])) { if (x < x0) x0 = x; if (x > x1) x1 = x; }
+        }
+      }
+      if (x1 <= x0) return null;
+      return { x: rect.x + x0 - pad, y: rect.y + yTop - pad, w: (x1 - x0 + 1) + pad * 2, h: (yBot - yTop + 1) + pad * 2 };
+    }
+    var yEnd = -1;
+    for (var yy2 = h - 1; yy2 >= 0; yy2--) {
+      var on = rows[yy2] >= minRowPx && rows[yy2] <= w * maxRowFill;
+      if (on && yEnd === -1) yEnd = yy2;
+      else if (!on && yEnd !== -1) {
+        var bandH = yEnd - yy2;
+        if (bandH >= minH && bandH <= maxH) {
+          var r = finish(yy2 + 1, yEnd);
+          if (r && accept(r)) return r;   // rejected candidates keep the scan moving up
+        }
+        yEnd = -1;
+      }
+    }
+    if (yEnd !== -1 && yEnd + 1 >= minH && yEnd + 1 <= maxH) {
+      var rTop = finish(0, yEnd);
+      if (rTop && accept(rTop)) return rTop;
+    }
+    return null;
   }
 
   // ---- exports ----
@@ -379,9 +456,12 @@
     chromaMask: chromaMask,
     isGoldText: isGoldText,
     isWhiteText: isWhiteText,
+    isAmountText: isAmountText,
+    isWheelLevelText: isWheelLevelText,
     isGreenUp: isGreenUp,
     isRedDown: isRedDown,
-    colorClusterStats: colorClusterStats
+    colorClusterStats: colorClusterStats,
+    findMaskedTextLine: findMaskedTextLine
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = API;
