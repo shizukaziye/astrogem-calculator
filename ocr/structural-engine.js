@@ -226,8 +226,8 @@
       var best = null;
       for (var i = 0; i < tl.length; i++) {
         var t = tl[i];
-        if (t.ch && /^g[1-5]$/.test(t.ch) && t.score >= 0.78 && t.margin >= 0.03) {
-          var v = parseInt(t.ch.slice(1), 10);
+        if (t.ch && /^[1-5]$/.test(t.ch) && t.score >= 0.78 && t.margin >= 0.03) {
+          var v = parseInt(t.ch, 10);
           if (maxVal && v > maxVal) continue;
           if (!best || t.score >= best.score) best = { score: t.score, margin: t.margin, v: v };
         }
@@ -441,58 +441,85 @@
 
     // Level text sits INSIDE each diamond (name line(s) then the level line, all
     // centered on the node): W/E render "Lv. N", N and S render a bare gold digit.
-    // The line's exact y shifts with 1- vs 2-line names, so SELF-LOCATE it: gold-mask
-    // the node box and take the bottom-most thin text band. The S face is itself gold
-    // (gold-on-gold digit is unrecoverable by color) — rejectFill bails there and the
-    // points checksum solves S arithmetically below.
-    async function readLevel(p, isGoldFace) {
+    // Instead of committing a single digit per node, we produce a SCORE VECTOR over
+    // {1..5} (template similarity to the game's own glyph art) and let the joint
+    // constraint solve below pick the assignment. `dilate` retries reconnect strokes
+    // that antialiasing broke on downscaled captures.
+    // A box is a DIGIT candidate only if its best match over the FULL atlas is a
+    // gold digit (g1-5) — otherwise the "L"/"v" of "Lv." spuriously matches g5 and we
+    // read the wrong box. Returns the g1-5 score vector + whether it's really a digit.
+    // Gold level digits are the SAME glyph shapes as the white footer digits once
+    // chroma-masked (color-independent silhouettes), so both match ONE digit template
+    // set '0'-'9'. (The separate gold 'g1-g5' templates were a harvest artifact —
+    // they'd grabbed the diamond ▲ tip, identical across values, so 1/2/3/4 scored
+    // flat and couldn't discriminate.)
+    function digitScoreVec(mask, box) {
+      var bm = L.glyphBitmap(mask, box), vec = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }, top = 0;
+      for (var v = 1; v <= 5; v++) {
+        var t = GLYPHS && GLYPHS["" + v];
+        var s = t ? L.bitmapSim(bm, t) : 0;
+        vec[v] = s; if (s > top) top = s;
+      }
+      var full = GLYPHS ? L.matchGlyph(mask, box, GLYPHS) : null;
+      var isDigit = full && /^[1-5]$/.test(full.ch);
+      return { vec: vec, top: top, isDigit: isDigit };
+    }
+    // Read one level node: return the committed digit (template if strong, else the
+    // OCR ladder — "Lv. N" isolation is the hard case) AND the raw template score
+    // vector (feeds the constraint enumeration for the weak/free nodes below).
+    async function readLevelFull(p, isGoldFace) {
       var box = { x: p.x - gap * 0.5, y: p.y - gap * 0.35, w: gap * 1.0, h: gap * 0.72 };
       var line = L.findMaskedTextLine(raster, box, L.isGoldText, {
         rejectFill: 0.22, maxRowFill: 0.6,
-        minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.22),
-        minRowPx: 3,
-        // the text is centered on the node — a diagonal sliver of the gold S-diamond
-        // frame poking into a box corner is off-center and gets skipped
-        accept: function (r) {
-          var cx = r.x + r.w / 2;
-          return Math.abs(cx - p.x) <= gap * 0.28 && r.w >= gap * 0.03 && r.w <= gap * 0.85;
-        }
+        minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.22), minRowPx: 3,
+        accept: function (r) { var c = r.x + r.w / 2; return Math.abs(c - p.x) <= gap * 0.28 && r.w >= gap * 0.03 && r.w <= gap * 0.85; }
       });
-      if (!line) return { level: null, conf: 0 };
-      // expand VERTICALLY only: a fragmented band must not clip glyph tops/bottoms,
-      // but horizontal growth reaches the gold S-frame sliver beside the line
+      if (!line) return { value: null, conf: 0, vec: null };
       var grow = Math.round(line.h * 0.5);
       var lineX = { x: line.x, y: line.y - grow, w: line.w, h: line.h + grow * 2 };
-      // template match FIRST: pixel comparison against the game's own digit art —
-      // no OCR call, honest margin-based confidence. OCR chain only as fallback.
-      var tm = lastGoldDigit(lineX, L.isGoldText);
-      if (tm) {
-        return { level: tm.value, conf: isGoldFace ? Math.min(tm.conf, 0.45) : tm.conf };
+
+      // template pass: rightmost digit-classified box → value + score vector
+      var vec = null, tmVal = null, tmMargin = 0;
+      if (GLYPHS) {
+        var mask = L.chromaMask(L.crop(raster, lineX), L.isGoldText);
+        var boxes = L.segmentGlyphs(mask, { minColPx: 1, gapCols: 1 });
+        var hs = boxes.map(function (b) { return b.h; }).sort(function (a, b) { return a - b; });
+        var medH = hs.length ? hs[hs.length >> 1] : 0;
+        boxes = boxes.filter(function (b) { return b.h >= medH * 0.55 && b.h <= medH * 1.7 && b.w >= 2; });
+        var db = null;
+        for (var i = 0; i < boxes.length; i++) { var sv = digitScoreVec(mask, boxes[i]); if (sv.isDigit) db = sv; }
+        if (db) {
+          vec = db.vec;
+          var b1 = -1, b1v = null, b2 = -1;
+          for (var v = 1; v <= 5; v++) { var s = db.vec[v]; if (s > b1) { b2 = b1; b1 = s; b1v = v; } else if (s > b2) b2 = s; }
+          if (b1 >= 0.78 && (b1 - b2) >= 0.05) { tmVal = b1v; tmMargin = b1 - b2; }
+        }
       }
+      if (tmVal != null) {
+        var tconf = Math.min(0.95, 0.75 + tmMargin * 2);
+        return { value: tmVal, conf: isGoldFace ? Math.min(tconf, 0.45) : tconf, vec: vec };
+      }
+      // OCR ladder (proven on "Lv. N"): plain → single-char → dilate
       var read = await maskedOcr(lineX, L.isGoldText, { whitelist: "Lv.12345 ", psm: 7 });
       var m = read.text.match(/([1-5])\s*$/) || read.text.match(/([1-5])/);
+      if (!m) { read = await maskedOcr(lineX, L.isGoldText, { whitelist: "12345", psm: 10 }); m = read.text.match(/([1-5])/); }
       if (!m) {
-        // bare single digit (N/S nodes): retry as one character
-        read = await maskedOcr(lineX, L.isGoldText, { whitelist: "12345", psm: 10 });
-        m = read.text.match(/([1-5])/);
-      }
-      if (!m) {
-        // small/blurry strokes (downscaled full-screen captures): dilate + bigger upscale
-        var sub2 = L.crop(raster, lineX);
-        var masked2 = dilateDark(L.chromaMask(sub2, L.isGoldText));
+        var sub2 = L.crop(raster, lineX), masked2 = dilateDark(L.chromaMask(sub2, L.isGoldText));
         read = await ocrText(upscale(masked2, Math.max(2, Math.min(5, Math.round(160 / Math.max(1, sub2.height))))), { whitelist: "Lv.12345 ", psm: 7 });
         m = read.text.match(/([1-5])\s*$/) || read.text.match(/([1-5])/);
       }
-      var conf = m ? Math.min(0.95, read.conf + 0.25) : 0;
-      // gold digit over the gold S face is structurally unreliable — never let it
-      // outrank the checksum solve below
+      var conf = m ? Math.min(0.9, read.conf + 0.2) : 0;
       if (isGoldFace) conf = Math.min(conf, 0.45);
-      return { level: m ? parseInt(m[1], 10) : null, conf: conf };
+      return { value: m ? parseInt(m[1], 10) : null, conf: conf, vec: vec };
     }
-    var lvN = await readLevel(nodes.nodeN, false);
-    var lvW = await readLevel(nodes.nodeW, false);
-    var lvE = await readLevel(nodes.nodeE, false);
-    var lvS = await readLevel(nodes.nodeS, true);
+    var lvFull = [
+      await readLevelFull(nodes.nodeN, false),   // willpower
+      await readLevelFull(nodes.nodeW, false),   // effect1
+      await readLevelFull(nodes.nodeE, false),   // effect2
+      await readLevelFull(nodes.nodeS, true)     // order (gold-on-gold)
+    ];
+    var scoreVecs = lvFull.map(function (r) { return r.vec; });
+    if (out._debug) out._debug.levelReads = lvFull.map(function (r) { return r.value + "@" + r.conf.toFixed(2); });
 
     // ---- the points checksum ("N Astrogem Points" = level sum) ----
     // Only a digit sitting directly before "As(trogem)" counts — masked reads on dim
@@ -565,48 +592,88 @@
         if (rv >= 4 && rv <= 20) { pts = rv; ptsSoft = true; }
       }
     }
-    var LV = [lvN, lvW, lvE, lvS];
+    // ---- JOINT LEVEL SOLVE ----
+    // The 4 levels are 1-5 and SUM to the header points — a hard constraint that
+    // couples the nodes. Pick the assignment maximizing total template score subject
+    // to that sum; the unreadable gold-on-gold S digit is then forced by the other
+    // three + points, not guessed. Each node's confidence = how much total score
+    // you'd sacrifice to change JUST it (constraint-forced => near-certain; two
+    // near-tied assignments => flagged). One solver, no special cases.
+    function nodeScore(i, v) { return scoreVecs[i] ? (scoreVecs[i][v] || 0) : 0; }
+    var indep = lvFull.map(function (r) { return { v: r.value, conf: r.conf }; });
+    // PIN every committed read (template OR OCR, any confidence): the constraint must
+    // NEVER override a value we actually read — it only FILLS truly-null nodes and
+    // resolves a sum mismatch. (Overriding low-conf-but-correct reads was the
+    // regression.) A committed read keeps its own confidence unless the checksum
+    // confirms it. Free nodes (gold-on-gold S, unreadable blur) are the null ones.
+    var pinned = indep.map(function (x) { return x.v != null; });
+    var levels = [null, null, null, null], conf4 = [0, 0, 0, 0];
+    var freeIdx = [];
+    for (var i = 0; i < 4; i++) { if (pinned[i]) { levels[i] = indep[i].v; conf4[i] = indep[i].conf; } else freeIdx.push(i); }
+
     if (pts != null) {
-      var known = LV.filter(function (l) { return l.level != null; });
-      var sum = known.reduce(function (s, l) { return s + l.level; }, 0);
-      if (known.length === 4 && sum === pts) {
-        LV.forEach(function (l) { l.conf = Math.max(l.conf, ptsSoft ? 0.85 : 0.92); });
-      } else if (known.length === 3) {
-        // solve the one unreadable node (typically S, the gold-on-gold face). With a
-        // STRICT pts read and three confident siblings this is arithmetic, not a
-        // guess — it earns an unflagged confidence (measured: 0 wrong on the corpus
-        // when pts was strict), and the siblings get the same checksum boost.
-        var missing = LV.filter(function (l) { return l.level == null; })[0];
-        var solved = pts - sum;
-        if (solved >= 1 && solved <= 5) {
-          missing.level = solved;
-          var minKnown = Math.min.apply(null, known.map(function (l) { return l.conf; }));
-          if (!ptsSoft && minKnown >= 0.55) {
-            missing.conf = 0.85;
-            known.forEach(function (l) { l.conf = Math.max(l.conf, 0.85); });
-          } else {
-            missing.conf = Math.min(ptsSoft ? 0.65 : 0.9, 0.55 + minKnown * 0.4);
-          }
-        }
-      } else if (known.length === 4 && sum !== pts) {
-        // mismatch: RE-SOLVE the weakest read from the checksum (the header points
-        // line is a clean white-on-dark read; a single bad gold digit is the likely
-        // culprit — typically S, whose gold-face read is capped at 0.45)
-        var weakest = LV.slice().sort(function (p, q) { return p.conf - q.conf; })[0];
-        var resolved = pts - (sum - weakest.level);
-        if (resolved >= 1 && resolved <= 5) {
-          weakest.level = resolved;
-          // below the 0.8 UI threshold either way: still shows "confirm me"
-          weakest.conf = ptsSoft ? 0.6 : 0.75;
+      var pinnedSum = 0; for (var pI = 0; pI < 4; pI++) if (pinned[pI]) pinnedSum += levels[pI];
+      var remaining = pts - pinnedSum;
+      if (freeIdx.length === 0) {
+        if (remaining === 0) {
+          // all four read AND they sum to points: mutually confirmed
+          for (var bi = 0; bi < 4; bi++) conf4[bi] = Math.max(conf4[bi], ptsSoft ? 0.85 : 0.92);
         } else {
-          weakest.conf = Math.min(weakest.conf, 0.3);
+          // mismatch: one committed read (or points) is wrong — re-solve the
+          // LEAST-confident read from the checksum, flag it
+          var wi = indep.map(function (x, ii) { return { m: x.conf, ii: ii }; })
+            .sort(function (p, q) { return p.m - q.m; })[0].ii;
+          var fix = pts - (pinnedSum - levels[wi]);
+          if (fix >= 1 && fix <= 5) { levels[wi] = fix; conf4[wi] = ptsSoft ? 0.6 : 0.75; }
+          else conf4[wi] = 0.3;
         }
+      } else if (freeIdx.length === 1) {
+        // exactly one unknown: the constraint DETERMINES it (arithmetic, not a guess);
+        // clean solve also confirms the 3 committed siblings
+        var fi = freeIdx[0];
+        if (remaining >= 1 && remaining <= 5) {
+          levels[fi] = remaining;
+          var minSib = Math.min.apply(null, [0, 1, 2, 3].filter(function (q) { return q !== fi; }).map(function (q) { return indep[q].conf; }));
+          if (!ptsSoft && minSib >= 0.5) {
+            conf4[fi] = 0.85;
+            for (var sb = 0; sb < 4; sb++) if (sb !== fi) conf4[sb] = Math.max(conf4[sb], 0.85);
+          } else conf4[fi] = Math.min(ptsSoft ? 0.65 : 0.9, 0.55 + minSib * 0.4);
+        } else { levels[fi] = indep[fi].v != null ? indep[fi].v : 1; conf4[fi] = 0.3; }
+      } else {
+        // ≥2 unknowns: enumerate their assignments summing to `remaining`, pick the
+        // max-template-score one; confidence from the assignment margin per node
+        var vals = [1, 2, 3, 4, 5], combos = [];
+        (function rec(k, acc, sum) {
+          if (k === freeIdx.length) { if (sum === remaining) combos.push(acc.slice()); return; }
+          for (var vi = 0; vi < 5; vi++) rec(k + 1, acc.concat(vals[vi]), sum + vals[vi]);
+        })(0, [], 0);
+        if (combos.length) {
+          combos.forEach(function (cm) { cm._s = 0; for (var q = 0; q < freeIdx.length; q++) cm._s += nodeScore(freeIdx[q], cm[q]); });
+          combos.sort(function (x, y) { return y._s - x._s; });
+          var best = combos[0];
+          for (var q2 = 0; q2 < freeIdx.length; q2++) {
+            var fidx = freeIdx[q2];
+            var alt = -Infinity;
+            for (var r = 1; r < combos.length; r++) { if (combos[r][q2] !== best[q2]) { alt = combos[r]._s; break; } }
+            levels[fidx] = best[q2];
+            if (alt === -Infinity) conf4[fidx] = 0.9;
+            else conf4[fidx] = Math.max(0.15, Math.min(0.9, 0.5 + (best._s - alt) * 3.0));
+          }
+        } else { freeIdx.forEach(function (fi2) { levels[fi2] = indep[fi2].v || 1; conf4[fi2] = 0.3; }); }
       }
     }
-    out.config.willpowerLevel = lvN.level; confidence.config.willpowerLevel = lvN.conf;
-    out.config.effect1Level = lvW.level; confidence.config.effect1Level = lvW.conf;
-    out.config.effect2Level = lvE.level; confidence.config.effect2Level = lvE.conf;
-    out.config.orderLevel = lvS.level; confidence.config.orderLevel = lvS.conf;
+    // no points (or unsolved free nodes): fall back to the committed per-node reads
+    for (var f = 0; f < 4; f++) if (levels[f] == null) {
+      levels[f] = indep[f].v != null ? indep[f].v : 1;
+      conf4[f] = indep[f].v == null ? 0 : Math.min(0.85, indep[f].conf);
+    }
+    if (ptsSoft) conf4 = conf4.map(function (cv) { return Math.min(cv, 0.7); });
+
+    out.config.willpowerLevel = levels[0]; confidence.config.willpowerLevel = conf4[0];
+    out.config.effect1Level = levels[1]; confidence.config.effect1Level = conf4[1];
+    out.config.effect2Level = levels[2]; confidence.config.effect2Level = conf4[2];
+    out.config.orderLevel = levels[3]; confidence.config.orderLevel = conf4[3];
+    if (out._debug) out._debug.pts = pts + (ptsSoft ? "(soft)" : "") + " levels=" + levels.join(",");
 
     // ---- effect NAMES: W/E caption OCR (white serif over art — masked) ----
     // Tall band: 2-line names ("Ally Damage / Enh.") start ~0.28·gap above center; the

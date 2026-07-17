@@ -132,16 +132,17 @@ function segRect(raster, rect, pred) {
       if (!line) return;
       var grow2 = Math.round(line.h * 0.5);
       var segL = segRect(raster, { x: line.x - grow2, y: line.y - grow2, w: line.w + grow2 * 2, h: line.h + grow2 * 2 }, isGold);
+      // Gold level digits share the WHITE digit templates (same masked shape). Harvest
+      // them as plain digit labels ONLY when the digit box is unambiguous, so we don't
+      // poison the clean footer-digit templates with the diamond-tip mis-segmentation.
       if (j.kind === "bare") {
-        if (segL.boxes.length === 1) addInstance("g" + j.val, segL.mask, segL.boxes[0]);
+        if (segL.boxes.length === 1) addInstance(String(j.val), segL.mask, segL.boxes[0]);
       } else {
-        // "Lv. N": letters may merge — 2 to 4 boxes; the digit is always LAST
-        if (segL.boxes.length >= 2 && segL.boxes.length <= 4) {
-          addInstance("g" + j.val, segL.mask, segL.boxes[segL.boxes.length - 1]);
-          if (segL.boxes.length >= 3) {
-            addInstance("L", segL.mask, segL.boxes[0]);
-            addInstance("v", segL.mask, segL.boxes[1]);
-          }
+        // "Lv. N": the digit is the RIGHTMOST box; only accept clean 3-4 box splits
+        if (segL.boxes.length === 3 || segL.boxes.length === 4) {
+          addInstance(String(j.val), segL.mask, segL.boxes[segL.boxes.length - 1]);
+          addInstance("L", segL.mask, segL.boxes[0]);
+          addInstance("v", segL.mask, segL.boxes[1]);
         }
       }
     });
@@ -166,7 +167,7 @@ function segRect(raster, rect, pred) {
       // "+N"/"-N" = 2 boxes; "Lv. N" = 2-4 boxes; the digit is LAST either way (the
       // ▲/▼ is green/red-solid, outside the text masks' line bounds)
       if (segA.boxes.length >= 2 && segA.boxes.length <= 4) {
-        addInstance("g" + (o.amount || 1), segA.mask, segA.boxes[segA.boxes.length - 1]);
+        addInstance(String(o.amount || 1), segA.mask, segA.boxes[segA.boxes.length - 1]);
         if (segA.boxes.length === 2 && segA.boxes[0].w <= segA.boxes[1].w * 1.4) {
           addInstance(isLower ? "-" : "+", segA.mask, segA.boxes[0]);
         }

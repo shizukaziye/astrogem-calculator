@@ -636,14 +636,20 @@
   // Resample a glyph box out of a mask into a normalized W×H binary bitmap
   // (Float64Array of 0/1) for comparison.
   var GLYPH_W = 12, GLYPH_H = 16;
+  // ASPECT-PRESERVING: normalize HEIGHT to GLYPH_H, keep width proportional, center in
+  // a GLYPH_W frame. Digit width is the strongest cue in a fixed font (a "1" is narrow,
+  // a "5" wide) — the old stretch-to-fill threw it away, making 1/2/3 near-identical.
   function glyphBitmap(mask, box) {
     var out = new Float64Array(GLYPH_W * GLYPH_H);
+    // scaled width at height GLYPH_H, clamped to the frame
+    var sw = Math.max(1, Math.min(GLYPH_W, Math.round(GLYPH_H * box.w / Math.max(1, box.h))));
+    var x0 = ((GLYPH_W - sw) / 2) | 0;   // centered
     for (var gy = 0; gy < GLYPH_H; gy++) {
       var sy = box.y + (gy + 0.5) / GLYPH_H * box.h;
-      for (var gx = 0; gx < GLYPH_W; gx++) {
-        var sx = box.x + (gx + 0.5) / GLYPH_W * box.w;
+      for (var gx = 0; gx < sw; gx++) {
+        var sx = box.x + (gx + 0.5) / sw * box.w;
         var i = ((sy | 0) * mask.width + (sx | 0)) * 4;
-        out[gy * GLYPH_W + gx] = mask.data[i] < 128 ? 1 : 0;
+        out[(gy * GLYPH_W) + x0 + gx] = mask.data[i] < 128 ? 1 : 0;
       }
     }
     return out;
