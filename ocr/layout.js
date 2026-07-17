@@ -133,13 +133,17 @@
   };
 
   function findBlobs(small, wantClass, minSat, minVal) {
-    // connected-components on the class mask (4-neighborhood, iterative flood)
+    // connected-components on the class mask (4-neighborhood, iterative flood).
+    // wantClass "sat" accepts ANY saturated non-grey class (the W/E effect faces can
+    // be green/blue/violet/orange depending on the rolled effects).
     var w = small.width, h = small.height, N = w * h;
     var mask = new Uint8Array(N);
     for (var i = 0; i < N; i++) {
       var o = i * 4;
       var c = hsv(small.data[o], small.data[o + 1], small.data[o + 2]);
-      if (c.s >= minSat && c.v >= minVal && hueClass(small.data[o], small.data[o + 1], small.data[o + 2]) === wantClass) mask[i] = 1;
+      if (c.s < minSat || c.v < minVal) continue;
+      var cls = hueClass(small.data[o], small.data[o + 1], small.data[o + 2]);
+      if (wantClass === "sat" ? cls !== "grey" : cls === wantClass) mask[i] = 1;
     }
     var seen = new Uint8Array(N), blobs = [], stack = [];
     for (var s0 = 0; s0 < N; s0++) {
@@ -157,7 +161,13 @@
         if (py > 0 && mask[p - w] && !seen[p - w]) { seen[p - w] = 1; stack.push(p - w); }
         if (py < h - 1 && mask[p + w] && !seen[p + w]) { seen[p + w] = 1; stack.push(p + w); }
       }
-      if (cnt >= 12) blobs.push({ cx: sx / cnt, cy: sy / cnt, count: cnt, w: maxX - minX + 1, h: maxY - minY + 1 });
+      if (cnt >= 12) blobs.push({
+        cx: sx / cnt, cy: sy / cnt, count: cnt,
+        w: maxX - minX + 1, h: maxY - minY + 1,
+        // bbox center: symmetric even when the interior mask is patchy (the level
+        // digit punches a hole that drags the CENTROID but not the bbox)
+        bx: (minX + maxX) / 2, by: (minY + maxY) / 2
+      });
     }
     blobs.sort(function (a, b) { return b.count - a.count; });
     return blobs.slice(0, 12);
@@ -530,6 +540,57 @@
     };
   }
 
+  // Fit the wheel from ALL FOUR diamond faces at FULL resolution, with a built-in
+  // cross-check: the red→gold vertical distance and the W→E horizontal distance
+  // measure the SAME gap (W/E sit at ±0.70·gap), so the two estimates must agree.
+  // Uses blob BBOX CENTERS (symmetric under interior holes), replacing the two
+  // downsampled centroids whose glow-bias squeezed the gap 15-20% on some captures.
+  // Returns corrected anchors, or the originals when the fit isn't trustworthy.
+  function fitWheel(img, anchors) {
+    var cx0 = (anchors.red.x + anchors.gold.x) / 2;
+    var cy0 = (anchors.red.y + anchors.gold.y) / 2;
+    var gap0 = Math.max(8, anchors.gold.y - anchors.red.y);
+    var region = {
+      x: cx0 - gap0 * 1.6, y: cy0 - gap0 * 1.45,
+      w: gap0 * 3.2, h: gap0 * 2.9
+    };
+    var ox = Math.max(0, Math.round(region.x)), oy = Math.max(0, Math.round(region.y));
+    var sub = crop(img, region);
+    var minArea = gap0 * gap0 * 0.08, maxArea = gap0 * gap0 * 1.1;
+    function pick(blobs, tx, ty, maxDist) {
+      var best = null;
+      for (var i = 0; i < blobs.length; i++) {
+        var b = blobs[i];
+        if (b.count < minArea || b.count > maxArea) continue;
+        var d = Math.hypot(b.bx + ox - tx, b.by + oy - ty);
+        if (d > maxDist) continue;
+        if (!best || d < best.d) best = { b: b, d: d };
+      }
+      return best && best.b;
+    }
+    var reds = findBlobs(sub, "red", 0.42, 0.22);
+    var golds = findBlobs(sub, "gold", 0.42, 0.25);
+    var sats = findBlobs(sub, "sat", 0.42, 0.22);
+    var N = pick(reds, cx0, cy0 - gap0 * 0.5, gap0 * 0.45);
+    var S = pick(golds, cx0, cy0 + gap0 * 0.5, gap0 * 0.45);
+    var W = pick(sats, cx0 - gap0 * 0.70, cy0, gap0 * 0.5);
+    var E = pick(sats, cx0 + gap0 * 0.70, cy0, gap0 * 0.5);
+    if (!N || !S || !W || !E) return anchors;
+    var gapV = S.by - N.by;
+    var gapH = (E.bx - W.bx) / 1.40;
+    if (gapV <= 0 || gapH <= 0) return anchors;
+    // the cross-check: both rulers must measure the same wheel
+    if (Math.abs(gapV - gapH) / Math.max(gapV, gapH) > 0.08) return anchors;
+    var gap = (gapV + gapH) / 2;
+    if (!(gap > gap0 * 0.7 && gap < gap0 * 1.6)) return anchors;
+    var cx = ((N.bx + S.bx) / 2 + (W.bx + E.bx) / 2) / 2 + ox;
+    var cy = ((N.by + S.by) / 2 + (W.by + E.by) / 2) / 2 + oy;
+    return {
+      red: { x: cx, y: cy - gap / 2 },
+      gold: { x: cx, y: cy + gap / 2 }
+    };
+  }
+
   // ---- glyph template matching ----
   // The game renders its digits from ONE fixed font at (post-normalization) one
   // fixed size — so the closed-vocabulary reads (levels 1-5, Process x/N, points,
@@ -620,6 +681,7 @@
     findBlobs: findBlobs,
     findPanel: findPanel,
     panelOrWhole: panelOrWhole,
+    fitWheel: fitWheel,
     wheelGeometry: wheelGeometry,
     ROI: ROI,
     SIG: SIG,

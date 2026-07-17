@@ -107,6 +107,15 @@
       out._debug = { panel: null };
       return out;
     }
+    // Four-landmark wheel fit BEFORE anything else: the coarse two-blob anchors can
+    // come in with the gap squeezed 15-20% (glow-biased centroids), which mis-scales
+    // the normalization AND every anchor-relative region. fitWheel cross-validates
+    // two independent rulers (red↔gold vertical vs W↔E horizontal) and keeps the
+    // originals when they disagree.
+    if (found.anchors && L.fitWheel) {
+      found.anchors = L.fitWheel(raster, found.anchors);
+    }
+
     // ---- resolution normalization ----
     // The red→gold wheel distance is the game-UI ruler: it scales 1:1 with however
     // the capture was rendered (720p crop, 1440p, 4K, windowed). Crop to the panel
@@ -208,20 +217,23 @@
         return { box: b, ch: m ? m.ch : null, score: m ? m.score : 0, margin: m ? m.margin : 0 };
       });
     }
-    // Last confidently-matched GOLD digit (g1..g5) in a line — levels and amounts
-    // both end with their digit.
+    // Best confidently-matched GOLD digit (g1..g5) in a line. BEST-of, not last-of:
+    // a gold frame sliver trailing the line segments as its own box and matches "4"
+    // (diagonals do) — the true digit outscores it.
     function lastGoldDigit(rect, pred, maxVal) {
       var tl = templateGlyphs(rect, pred);
       if (!tl) return null;
-      for (var i = tl.length - 1; i >= 0; i--) {
+      var best = null;
+      for (var i = 0; i < tl.length; i++) {
         var t = tl[i];
         if (t.ch && /^g[1-5]$/.test(t.ch) && t.score >= 0.78 && t.margin >= 0.03) {
           var v = parseInt(t.ch.slice(1), 10);
           if (maxVal && v > maxVal) continue;
-          return { value: v, conf: (t.score >= 0.86 && t.margin >= 0.06) ? 0.95 : 0.85 };
+          if (!best || t.score >= best.score) best = { score: t.score, margin: t.margin, v: v };
         }
       }
-      return null;
+      if (!best) return null;
+      return { value: best.v, conf: (best.score >= 0.86 && best.margin >= 0.06) ? 0.95 : 0.85 };
     }
 
     // Self-locate a text line in a zone, then return a padded OCR rect. Fixed offsets
@@ -433,9 +445,10 @@
         }
       });
       if (!line) return { level: null, conf: 0 };
-      // expand: band fragmentation (a broken "2") must not clip glyph edges
+      // expand VERTICALLY only: a fragmented band must not clip glyph tops/bottoms,
+      // but horizontal growth reaches the gold S-frame sliver beside the line
       var grow = Math.round(line.h * 0.5);
-      var lineX = { x: line.x - grow, y: line.y - grow, w: line.w + grow * 2, h: line.h + grow * 2 };
+      var lineX = { x: line.x, y: line.y - grow, w: line.w, h: line.h + grow * 2 };
       // template match FIRST: pixel comparison against the game's own digit art —
       // no OCR call, honest margin-based confidence. OCR chain only as fallback.
       var tm = lastGoldDigit(lineX, L.isGoldText);
@@ -485,13 +498,18 @@
     var ptsT = null;
     var tgP = templateGlyphs(ptsRect, dimBtnWhite);
     if (tgP) {
-      var lead = "";
-      for (var pi = 0; pi < tgP.length; pi++) {
+      var lead = "", pi = 0;
+      for (; pi < tgP.length; pi++) {
         var tpg = tgP[pi];
-        if (tpg.ch && /^\d$/.test(tpg.ch) && tpg.score >= 0.8) lead += tpg.ch;
+        if (tpg.ch && /^\d$/.test(tpg.ch) && tpg.score >= 0.86 && tpg.margin >= 0.05) lead += tpg.ch;
         else break;
       }
-      if (lead.length >= 1 && lead.length <= 2) {
+      // the number must END cleanly: if the NEXT box also reads as a digit, the
+      // digit/letter boundary is ambiguous ("Astrogem" letters matching digits) —
+      // a wrong pts poisons the level checksum, so bail to the OCR ladder instead
+      var nxt = tgP[pi];
+      var nxtDigitish = nxt && nxt.ch && /^\d$/.test(nxt.ch) && nxt.score >= 0.8;
+      if (!nxtDigitish && lead.length >= 1 && lead.length <= 2) {
         var pv = parseInt(lead, 10);
         if (pv >= 4 && pv <= 20) ptsT = pv;
       }
@@ -680,7 +698,7 @@
         });
         if (amtLine) {
           var agrow = Math.round(amtLine.h * 0.5);
-          var amtRectX = { x: amtLine.x - agrow, y: amtLine.y - agrow, w: amtLine.w + agrow * 2, h: amtLine.h + agrow * 2 };
+          var amtRectX = { x: amtLine.x, y: amtLine.y - agrow, w: amtLine.w, h: amtLine.h + agrow * 2 };
           // template match first (amounts use the same glyph art as the wheel digits)
           var amTm = lastGoldDigit(amtRectX, L.isAmountText, 4);
           if (amTm) amt = amTm.value;

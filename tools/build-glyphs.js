@@ -62,6 +62,7 @@ function segRect(raster, rect, pred) {
     var raster = { width: dec.info.width, height: dec.info.height, data: new Uint8ClampedArray(dec.data.buffer, dec.data.byteOffset, dec.data.length) };
     var found = L.panelOrWhole(raster);
     if (!found || !found.anchors) continue;
+    if (L.fitWheel) found.anchors = L.fitWheel(raster, found.anchors);
 
     // mirror the engine's normalization (crop margin skipped: coordinates only)
     var g0 = found.anchors.gold.y - found.anchors.red.y;
@@ -100,22 +101,15 @@ function segRect(raster, rect, pred) {
     var ptsRect = { x: cx - gap * 1.55, y: redY - gap * 1.23, w: gap * 3.1, h: gap * 0.26 };
     var segP = segRect(raster, ptsRect, isWhite);
     var digits = String(pts).split("");
-    // label only the LEADING digit run: it is separated from "Astrogem" by a word
-    // space wider than the intra-word gaps
-    if (segP.boxes.length >= digits.length + 4) {
-      var gapAfter = segP.boxes[digits.length].x - (segP.boxes[digits.length - 1].x + segP.boxes[digits.length - 1].w);
-      var innerGaps = [];
-      for (var gI = digits.length + 1; gI < Math.min(segP.boxes.length, digits.length + 5); gI++) {
-        innerGaps.push(segP.boxes[gI].x - (segP.boxes[gI - 1].x + segP.boxes[gI - 1].w));
-      }
-      var medInner = innerGaps.sort(function (a, b) { return a - b; })[innerGaps.length >> 1] || 2;
-      if (gapAfter > medInner * 1.4) {
-        for (var b2 = 0; b2 < digits.length; b2++) addInstance(digits[b2], segP.mask, segP.boxes[b2]);
-        // the following letters feed the distractor pool ("Astrogem")
-        var letters = ["A", "s", "t", "r", "o", "g", "e", "m"];
-        for (var b3 = 0; b3 < Math.min(letters.length, segP.boxes.length - digits.length); b3++) {
-          addInstance(letters[b3], segP.mask, segP.boxes[digits.length + b3]);
-        }
+    // label the LEADING digit run positionally when the box count is in the plausible
+    // window for "N Astrogem Points" (digits + 8..16 letter boxes; bad merges change
+    // the count and skip the sample). The letters feed the DISTRACTOR pool — without
+    // them, "Astrogem" letters can pass as digits in the matcher.
+    if (segP.boxes.length >= digits.length + 8 && segP.boxes.length <= digits.length + 16) {
+      for (var b2 = 0; b2 < digits.length; b2++) addInstance(digits[b2], segP.mask, segP.boxes[b2]);
+      var letters = ["A", "s", "t", "r", "o", "g", "e", "m"];
+      for (var b3 = 0; b3 < Math.min(letters.length, segP.boxes.length - digits.length); b3++) {
+        addInstance(letters[b3], segP.mask, segP.boxes[digits.length + b3]);
       }
     }
 
