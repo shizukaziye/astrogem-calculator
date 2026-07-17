@@ -6,3 +6,7 @@ node_modules/
 # Tesseract.js auto-downloads its language data when the Node eval harness runs.
 *.traineddata
 worker/.wrangler/
+
+# Collected parse records (tools/pull-collected.js) — review locally, promote the
+# good ones into samples/ as named pairs; the raw feed stays out of the repo.
+samples/collected/

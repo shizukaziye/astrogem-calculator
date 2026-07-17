@@ -151,20 +151,25 @@ function segRect(raster, rect, pred) {
     var iconXs = geo.outIconXs, iconY = geo.outIconY;
     for (var oi = 0; oi < Math.min(4, outs.length); oi++) {
       var o = outs[oi];
-      if (!o || (o.type !== "raise_effect")) continue;   // red lowers use another pigment
+      if (!o || (o.type !== "raise_effect" && o.type !== "lower_effect")) continue;
+      var isLower = o.type === "lower_effect";
+      var amtPred = isLower ? L.isRedAmountText : L.isAmountText;   // lowers render RED
       var capRect = { x: iconXs[oi] - gap * 0.44, y: iconY - gap * 0.16, w: gap * 0.88, h: gap * 0.52 };
-      var amtLine = L.findMaskedTextLine(raster, capRect, L.isAmountText, {
+      var amtLine = L.findMaskedTextLine(raster, capRect, amtPred, {
+        rejectFill: isLower ? 0.3 : undefined,
         maxRowFill: 0.7, minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.2), minRowPx: 3,
-        accept: function (r) { var c = r.x + r.w / 2; return Math.abs(c - iconXs[oi]) <= gap * 0.24 && r.w >= gap * 0.05 && r.w <= gap * 0.6; }
+        accept: function (r) { var c = r.x + r.w / 2; return Math.abs(c - iconXs[oi]) <= gap * 0.24 && r.w >= gap * 0.04 && r.w <= gap * 0.6; }
       });
       if (!amtLine) continue;
       var ag = Math.round(amtLine.h * 0.5);
-      var segA = segRect(raster, { x: amtLine.x - ag, y: amtLine.y - ag, w: amtLine.w + ag * 2, h: amtLine.h + ag * 2 }, L.isAmountText);
-      // "+N" = 2 boxes; "Lv. N" = 2-4 boxes; the digit is LAST either way (the ▲ is
-      // green, outside the chartreuse mask)
+      var segA = segRect(raster, { x: amtLine.x, y: amtLine.y - ag, w: amtLine.w, h: amtLine.h + ag * 2 }, amtPred);
+      // "+N"/"-N" = 2 boxes; "Lv. N" = 2-4 boxes; the digit is LAST either way (the
+      // ▲/▼ is green/red-solid, outside the text masks' line bounds)
       if (segA.boxes.length >= 2 && segA.boxes.length <= 4) {
         addInstance("g" + (o.amount || 1), segA.mask, segA.boxes[segA.boxes.length - 1]);
-        if (segA.boxes.length === 2 && segA.boxes[0].w <= segA.boxes[1].w * 1.4) addInstance("+", segA.mask, segA.boxes[0]);
+        if (segA.boxes.length === 2 && segA.boxes[0].w <= segA.boxes[1].w * 1.4) {
+          addInstance(isLower ? "-" : "+", segA.mask, segA.boxes[0]);
+        }
       }
     }
 

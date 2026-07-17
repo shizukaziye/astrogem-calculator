@@ -1,0 +1,11 @@
+# wrangler config for the parse-collection worker (separate from the bible worker).
+# Storage: KV (R2 needs a one-time dashboard enable — code 10042; migrate later if
+# volume demands it: KV free tier = 1GB / 1k writes/day, one write per record).
+# Deploy:  npx wrangler deploy -c wrangler-data.toml
+name = "astrogem-data"
+main = "astrogem-data.js"
+compatibility_date = "2026-06-01"
+
+[[kv_namespaces]]
+binding = "COLLECT"
+id = "4e2fd2e025f24b0c872c2dfe8d911dd4"

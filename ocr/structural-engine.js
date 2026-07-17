@@ -341,10 +341,16 @@
     if (out.state.processCost == null) confidence.state.processCostMultiplier = 0.3;
 
     // ---- reroll pill (ROI-scoped: the "Reset (1/1)" trap can't reach here) ----
+    // The pill's full state machine (Shizu, 2026-07-17):
+    //   "2/2" greyed  = turn 1 (nothing spent; the DIM text defeated the old white
+    //                   mask — this was "rerolls never parse")
+    //   "n/m" bright  = free rerolls remaining
+    //   gold Charge   = free spent, PAID reroll purchasable  -> model 1
+    //   grey Charge   = paid reroll ALSO spent               -> model 0
     var pillRect = geo
       ? rectAround(geo.rerollPill, geo.gap * 0.42, geo.gap * 0.14)
       : L.roiRect(panel, "rerollPill");
-    var pillRead = await maskedOcr(pillRect, L.isWhiteText, { whitelist: "0123456789/", psm: 7 });
+    var pillRead = await maskedOcr(pillRect, dimBtnWhite, { whitelist: "0123456789/", psm: 7 });
     var pillM = pillRead.text.match(/(\d)\s*\/\s*(\d)/);
     if (pillM) {
       var pa = parseInt(pillM[1], 10), pb = parseInt(pillM[2], 10);
@@ -355,19 +361,6 @@
       }
     }
     if (out.state.rerollsShownFree == null) {
-      // free rerolls exhausted: the pill becomes a solid GOLD "Charge" button (pay
-      // 3,800g for the extra reroll) — that gold face is the signature, no OCR needed.
-      // Charge visible ⇒ the paid reroll is UNSPENT ⇒ model rerollsRemaining = 1.
-      var pillCrop = L.crop(raster, pillRect);
-      var goldBtn = L.colorClusterStats(pillCrop, function (r, g, b) {
-        var c = L.hsv(r, g, b); return c.h >= 30 && c.h < 55 && c.s > 0.45 && c.v > 0.5;
-      });
-      if (goldBtn.frac > 0.35) {
-        out.state.rerollsChargeSeen = true;
-        confidence.state.rerollsRemaining = 0.85;
-      }
-    }
-    if (out.state.rerollsShownFree == null && !out.state.rerollsChargeSeen) {
       // template rescue: the pill is "n / m" in the footer font
       var tgR = templateGlyphs(pillRect, dimBtnWhite);
       if (tgR) {
@@ -382,7 +375,26 @@
         }
       }
     }
-    if (out.state.rerollsShownFree == null && !out.state.rerollsChargeSeen) confidence.state.rerollsRemaining = 0.25;
+    if (out.state.rerollsShownFree == null) {
+      // Charge states: confirm the WORD (any brightness), then the BUTTON COLOR
+      // decides — gold = paid reroll purchasable (1), grey = paid spent (0).
+      var pillCrop = L.crop(raster, pillRect);
+      var goldBtn = L.colorClusterStats(pillCrop, function (r, g, b) {
+        var c = L.hsv(r, g, b); return c.h >= 30 && c.h < 55 && c.s > 0.45 && c.v > 0.5;
+      });
+      var chRead = await maskedOcr(pillRect, dimBtnWhite, { psm: 7 });
+      var chWord = /charg|harge|chorge/i.test(normText(chRead.text));
+      if (goldBtn.frac > 0.35) {
+        out.state.rerollsChargeSeen = true;                       // gold face is decisive
+        confidence.state.rerollsRemaining = 0.85;
+      } else if (chWord) {
+        out.state.rerollsChargeSpent = true;                      // grey Charge
+        confidence.state.rerollsRemaining = 0.8;
+      }
+    }
+    if (out.state.rerollsShownFree == null && !out.state.rerollsChargeSeen && !out.state.rerollsChargeSpent) {
+      confidence.state.rerollsRemaining = 0.25;
+    }
 
     // ---- gem name → gemType + baseCost (suffix table) ----
     // Fixed band primary (best measured); if it produces neither the type keyword nor
@@ -754,11 +766,16 @@
           });
           if (redLine) {
             var rgrow = Math.round(redLine.h * 0.5);
-            var redRead = await maskedOcr(
-              { x: redLine.x - rgrow, y: redLine.y - rgrow, w: redLine.w + rgrow * 2, h: redLine.h + rgrow * 2 },
-              L.isRedAmountText, { whitelist: "Lv.-12345 ", psm: 7 });
-            var rm2 = redRead.text.match(/(?:lv\.?|-|−)\s*([1-4])/i) || redRead.text.match(/([1-4])/);
-            if (rm2) amt = parseInt(rm2[1], 10);
+            var redRectX = { x: redLine.x, y: redLine.y - rgrow, w: redLine.w, h: redLine.h + rgrow * 2 };
+            // template first: the red lower digits are the same glyph art as the gold
+            // ones (the chroma mask makes them identical binary shapes)
+            var redTm = lastGoldDigit(redRectX, L.isRedAmountText, 4);
+            if (redTm) amt = redTm.value;
+            if (amt == null) {
+              var redRead = await maskedOcr(redRectX, L.isRedAmountText, { whitelist: "Lv.-12345 ", psm: 7 });
+              var rm2 = redRead.text.match(/(?:lv\.?|-|−)\s*([1-4])/i) || redRead.text.match(/([1-4])/);
+              if (rm2) amt = parseInt(rm2[1], 10);
+            }
             dirDown = true; dirUp = false;
           }
         }

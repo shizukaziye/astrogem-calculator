@@ -146,6 +146,23 @@ Damage Enh.}; 9 → {Boss Damage, Attack Power, Ally Damage Enh., Ally Attack En
 Outcome order does **not** matter for scoring — the harness matches them as an
 unordered set.
 
+## The collection flywheel (live labels)
+
+Every Advisor parse ("Read screen now" or an uploaded screenshot) is sent to the
+`astrogem-data` worker together with the parser's reading and — at Get advice —
+the state the user actually ran, i.e. **their corrections are ground-truth labels**
+(client: advisor.js `sendCollect`; store: Cloudflare KV, one record incl. the webp
+capture; gated with the site token).
+
+```bash
+node tools/pull-collected.js     # downloads new records into samples/collected/
+                                 # + prints correction hotspots (what to fix next)
+```
+
+Review the corrected records, promote good ones into `samples/` as `<name>.png` +
+`<name>.json` pairs (the record's `final` IS the truth), then re-run
+`node tools/build-glyphs.js` and `npm run eval-gate`.
+
 ## Running
 
 ```bash

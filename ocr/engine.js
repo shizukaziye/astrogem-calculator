@@ -288,7 +288,11 @@
     // (nested.js applies them with no cap; the DP models them the same way).
     var rerollsRemaining;
     var rerollAmbiguous = false;
-    if (sIn.rerollsChargeSeen) {
+    if (sIn.rerollsChargeSpent) {
+      // grey Charge button: the paid reroll was ALSO used — nothing left. Not
+      // ambiguous: the game keeps the greyed button on screen in exactly this state.
+      rerollsRemaining = 0;
+    } else if (sIn.rerollsChargeSeen) {
       rerollsRemaining = 1;
     } else if (sIn.rerollsShownFree != null) {
       var shown = clampInt(sIn.rerollsShownFree, 0, 9, 0);
@@ -300,7 +304,7 @@
       rerollsRemaining = maxRerolls;
     }
     // Turn 1 with NO read at all keeps the historical guarantee (full allotment).
-    if (currentTurn === 1 && !sIn.rerollsChargeSeen && sIn.rerollsShownFree == null && sIn.rerollsRemaining == null) {
+    if (currentTurn === 1 && !sIn.rerollsChargeSeen && !sIn.rerollsChargeSpent && sIn.rerollsShownFree == null && sIn.rerollsRemaining == null) {
       rerollsRemaining = maxRerolls;
     }
 
@@ -364,7 +368,8 @@
         currentTurn: fieldConf(sconf.currentTurn, sIn.currentTurn != null || sIn.turnsRemaining != null, false),
         rerollsRemaining: (function () {
           var base = fieldConf(sconf.rerollsRemaining,
-            sIn.rerollsShownFree != null || sIn.rerollsRemaining != null || currentTurn === 1, false);
+            sIn.rerollsShownFree != null || sIn.rerollsRemaining != null ||
+            sIn.rerollsChargeSeen || sIn.rerollsChargeSpent || currentTurn === 1, false);
           return rerollAmbiguous ? Math.min(base, 0.4) : base;
         })(),
         processCostMultiplier: fieldConf(sconf.processCostMultiplier,

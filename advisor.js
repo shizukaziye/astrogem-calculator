@@ -27,7 +27,13 @@
   // the exact DP ignores it; the MC only runs as a DPS-axis fallback).
   var MC_RUNS = 1000, MC_INNER = 150;
 
+  // Parse-collection endpoint (worker/astrogem-data.js): every parse + the state the
+  // user actually ran advice with (their corrections = ground-truth labels) goes to
+  // R2 so the corpus grows itself. Gated with the site token; fire-and-forget.
+  var DATA_URL = "https://astrogem-data.shizukaziye.workers.dev";
+
   var lastObjectUrl = null;
+  var pendingCollect = null;   // { blob, parsed, source } — one record per parse
 
   // ---------------- DOM helpers ----------------
   function $(id) { return document.getElementById(id); }
@@ -115,6 +121,7 @@
 '    <div class="av-share" id="av-share"></div>' +
 '    <div class="av-engines" id="av-engines"></div>' +
 '    <div class="av-status" id="av-status"></div>' +
+'    <div class="note" style="font-size:11px;margin-top:6px">Screenshots you read here are uploaded with the parse and your corrections to improve the reader.</div>' +
 '  </div>' +
 '</div>' +
 '<details class="method">' +
@@ -201,10 +208,76 @@
     s.appendChild(u);
   }
 
+  // ---------------- parse collection ----------------
+  // Re-encode the capture as a bounded webp data-URL (collection payloads stay small).
+  function toWebpDataUrl(blob, cb) {
+    try {
+      var url = URL.createObjectURL(blob);
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var maxW = 1600;
+          var sc = Math.min(1, maxW / img.naturalWidth);
+          var c = document.createElement("canvas");
+          c.width = Math.round(img.naturalWidth * sc);
+          c.height = Math.round(img.naturalHeight * sc);
+          c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+          URL.revokeObjectURL(url);
+          cb(c.toDataURL("image/webp", 0.8));
+        } catch (e) { cb(null); }
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); cb(null); };
+      img.src = url;
+    } catch (e) { cb(null); }
+  }
+  function diffParseVsFinal(parsed, finalState) {
+    var changed = [];
+    try {
+      var pc = (parsed && parsed.config) || {}, fc = finalState.config || {};
+      ["baseCost", "gemType", "willpowerLevel", "orderLevel", "effect1", "effect1Level", "effect2", "effect2Level"].forEach(function (k) {
+        if (String(pc[k]) !== String(fc[k])) changed.push({ field: "config." + k, parsed: pc[k], corrected: fc[k] });
+      });
+      var ps = (parsed && parsed.state) || {};
+      ["currentTurn", "maxTurns", "rerollsRemaining", "processCostMultiplier"].forEach(function (k) {
+        if (String(ps[k]) !== String(finalState[k])) changed.push({ field: "state." + k, parsed: ps[k], corrected: finalState[k] });
+      });
+      var po = (parsed && parsed.outcomes) || [], fo = finalState.outcomes || [];
+      for (var i = 0; i < 4; i++) {
+        var a = JSON.stringify(po[i] || null), b = JSON.stringify(fo[i] || null);
+        if (a !== b) changed.push({ field: "outcomes." + i, parsed: po[i] || null, corrected: fo[i] || null });
+      }
+    } catch (e) {}
+    return changed;
+  }
+  function sendCollect(finalState) {
+    if (!pendingCollect) return;
+    var rec = pendingCollect;
+    pendingCollect = null;   // one record per parse
+    var tok = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
+    if (!tok) return;
+    toWebpDataUrl(rec.blob, function (dataUrl) {
+      var payload = {
+        image: dataUrl,
+        parse: rec.parsed,
+        final: finalState,
+        changed: diffParseVsFinal(rec.parsed, finalState),
+        meta: { engine: selectedEngine, source: rec.source, v: 1, ua: navigator.userAgent.slice(0, 80) }
+      };
+      try {
+        fetch(DATA_URL + "/collect?k=" + tok, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }).catch(function () {});
+      } catch (e) {}
+    });
+  }
+
   // ---------------- screenshot handling ----------------
   // Shared parse path: `input` is anything the engine's toRaster accepts
-  // (File/Blob/canvas); `sourceNoun` only flavors the status line.
-  function parseWith(input, sourceNoun) {
+  // (File/Blob/canvas); `sourceNoun` flavors the status line; `collectBlob`
+  // (Blob or Promise<Blob>) is the image saved with the collection record.
+  function parseWith(input, sourceNoun, collectBlob) {
     var eng = window.ocrGetEngine ? window.ocrGetEngine(selectedEngine) : null;
     if (!eng) { setStatus("Engine not found: " + selectedEngine, "err"); return; }
     var ok = false; try { ok = eng.isAvailable(); } catch (e) { ok = false; }
@@ -216,6 +289,11 @@
     setStatus("Reading " + (sourceNoun || "screenshot") + " with " + (eng.label || eng.name) + "…", "working");
     eng.parseScreenshot(input).then(function (parsed) {
       window.AdvisorWindow.setParsed(parsed);
+      // stage the collection record; it ships when the user presses Get advice
+      // (their edits between now and then are the ground-truth labels)
+      Promise.resolve(collectBlob || (input instanceof Blob ? input : null)).then(function (b) {
+        if (b) pendingCollect = { blob: b, parsed: parsed, source: sourceNoun === "shared screen" ? "share" : "upload" };
+      }).catch(function () {});
       var n = window.AdvisorWindow.unconfirmedCount();
       setStatus(n
         ? "Parsed — " + n + " field" + (n > 1 ? "s" : "") + " highlighted below need a look."
@@ -235,14 +313,15 @@
   function onImageFile(file) {
     if (!file || !/^image\//.test(file.type)) { setStatus("Not an image file.", "err"); return; }
     showPreviewBlob(file);
-    parseWith(file, "screenshot");
+    parseWith(file, "screenshot", file);
   }
 
   // ---------------- live screen share (one click per turn, no screenshotting) ----------------
   // getDisplayMedia needs a user gesture and a secure context (https / localhost).
   // First click opens the browser's share picker (pick the Lost Ark window/monitor);
-  // after that each "Read screen" click grabs ONE frame and parses it. Nothing is
-  // recorded or uploaded — the frame goes straight into the local parser.
+  // after that each "Read screen" click grabs ONE frame and parses it locally; the
+  // frame + parse + your corrections are also sent to the collection endpoint to
+  // improve the parser (see the note under the drop zone).
   var shareStream = null, shareVideo = null;
   function shareSupported() {
     return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
@@ -301,8 +380,11 @@
     c.width = shareVideo.videoWidth;
     c.height = shareVideo.videoHeight;
     c.getContext("2d").drawImage(shareVideo, 0, 0);
-    try { c.toBlob(function (blob) { if (blob) showPreviewBlob(blob); }, "image/png"); } catch (e) {}
-    parseWith(c, "shared screen");
+    var blobP = new Promise(function (resolve) {
+      try { c.toBlob(function (blob) { if (blob) showPreviewBlob(blob); resolve(blob || null); }, "image/png"); }
+      catch (e) { resolve(null); }
+    });
+    parseWith(c, "shared screen", blobP);
   }
 
   // ---------------- run advice ----------------
@@ -314,6 +396,8 @@
     var m = window.AdvisorSetup.getMarket();
     var state = window.AdvisorWindow.getState();
     state.rosterBound = $("av-bound").dataset.on === "1";
+    // ship the staged collection record: parse + the state the user actually ran
+    sendCollect(state);
     if (typeof window.validateConfig === "function") {
       var v = window.validateConfig(state.config);
       if (!v.valid) { setStatus("Invalid gem: " + v.error, "err"); return; }
