@@ -450,21 +450,36 @@
     var nameText = normText(nameRead.text).toLowerCase();
     out.config.gemType = /chaos/.test(nameText) ? "chaos" : (/order/.test(nameText) ? "order" : null);
     confidence.config.gemType = out.config.gemType ? 0.9 : 0;
-    var suffixHit = null;
+    var suffixHit = null, suffixAmbig = false;
     Object.keys(GEM_NAME_COST).forEach(function (sfx) {
       if (nameText.indexOf(sfx) !== -1) suffixHit = sfx;
     });
     if (!suffixHit) {
-      // fuzzy: strip non-letters and look for a 4+char substring of a known suffix
+      // Fuzzy pass: SCORE every suffix by 5-gram coverage and take the best — never
+      // first-match-wins. "immutaBILITY" contains most of "staBILITY"'s grams, so the
+      // old first-hit loop returned stability (cost 8) whenever OCR (or Shizu's pet
+      // sprite sitting on the name) mangled "Immutability" — a systematic wrong cost
+      // that then poisoned the effect pool. Prefix grams get a bonus: the START of
+      // the word ("immut" vs "stab") is the discriminative part.
       var letters = nameText.replace(/[^a-z]/g, "");
+      var bestS = null, secondS = 0;
       Object.keys(GEM_NAME_COST).forEach(function (sfx) {
-        if (suffixHit) return;
+        var hits = 0, total = 0;
         for (var k = 0; k + 5 <= sfx.length; k++) {
-          if (letters.indexOf(sfx.slice(k, k + 5)) !== -1) { suffixHit = sfx; break; }
+          total++;
+          if (letters.indexOf(sfx.slice(k, k + 5)) !== -1) hits++;
         }
+        var score = total ? hits / total : 0;
+        if (letters.indexOf(sfx.slice(0, 5)) !== -1) score += 0.25;   // prefix bonus
+        if (!bestS || score > bestS.score) { secondS = bestS ? bestS.score : 0; bestS = { sfx: sfx, score: score }; }
+        else if (score > secondS) secondS = score;
       });
+      if (bestS && bestS.score >= 0.5) {
+        suffixHit = bestS.sfx;
+        suffixAmbig = (bestS.score - secondS) < 0.15;   // two suffixes nearly tied
+      }
     }
-    if (suffixHit) { out.config.baseCost = GEM_NAME_COST[suffixHit]; confidence.config.baseCost = 0.85; }
+    if (suffixHit) { out.config.baseCost = GEM_NAME_COST[suffixHit]; confidence.config.baseCost = suffixAmbig ? 0.6 : 0.85; }
     else confidence.config.baseCost = 0;
 
     // ---- wheel levels (gold digits) + effect hue references ----
@@ -823,17 +838,40 @@
     // Additional Damage/Brand Power — kills a whole class of misreads); `avoid` keeps
     // one slot's confident read from being duplicated into the other.
     var poolNames = (ENGINE_API.EFFECT_POOLS && ENGINE_API.EFFECT_POOLS[out.config.baseCost]) || null;
-    function lexEffect(t, avoid) {
+    function lexIn(t, pool, avoid) {
       for (var i = 0; i < EFFECT_LEX.length; i++) {
         var name = EFFECT_LEX[i][0];
-        if (poolNames && poolNames.indexOf(name) === -1) continue;
+        if (pool && pool.indexOf(name) === -1) continue;
         if (avoid && name === avoid) continue;
         if (EFFECT_LEX[i][1].test(t)) return name;
       }
       return null;
     }
+    function lexEffect(t, avoid) { return lexIn(t, poolNames, avoid); }
     var nmW = await readEffectName(nodes.nodeW, hueW);
     var nmE = await readEffectName(nodes.nodeE, hueE);
+
+    // ---- pair→cost CROSS-CHECK (before pool-constrained lexing) ----
+    // The effect pair constrains the cost: some pairs exist in exactly ONE pool
+    // (Additional Damage + Boss Damage ⇒ cost 10 only). If the RAW captions name
+    // such a pair and it contradicts the name-suffix cost, the suffix read is the
+    // likely casualty (pet occlusion / OCR mangle — Shizu's Immutability kept
+    // reading as a cost-8 Stability) — adopt the pair-implied cost, re-pool, and
+    // keep the cost FLAGGED for confirmation.
+    var rawE1 = lexIn(nmW.text, null, null);
+    var rawE2 = lexIn(nmE.text, null, rawE1);
+    if (rawE1 && rawE2 && rawE1 !== rawE2 && ENGINE_API.EFFECT_POOLS) {
+      var costsWithPair = Object.keys(ENGINE_API.EFFECT_POOLS).filter(function (ck) {
+        var pl = ENGINE_API.EFFECT_POOLS[ck];
+        return pl.indexOf(rawE1) !== -1 && pl.indexOf(rawE2) !== -1;
+      }).map(Number);
+      if (costsWithPair.length === 1 && out.config.baseCost != null && costsWithPair[0] !== out.config.baseCost) {
+        out.config.baseCost = costsWithPair[0];
+        confidence.config.baseCost = Math.min(confidence.config.baseCost, 0.75);   // below the flag threshold
+        poolNames = (ENGINE_API.EFFECT_POOLS && ENGINE_API.EFFECT_POOLS[out.config.baseCost]) || null;
+      }
+    }
+
     out.config.effect1 = lexEffect(nmW.text, null);
     out.config.effect2 = lexEffect(nmE.text, out.config.effect1);
     // a pool-constrained lexicon hit is strong evidence even when the raw OCR conf is
