@@ -78,7 +78,6 @@
 '  #tab-advisor .av-bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .1s}' +
 '  #tab-advisor .av-wip{background:rgba(217,83,79,.14);border:1px solid #d9534f;color:#ff9b97;border-radius:8px;padding:11px 14px;font-weight:800;letter-spacing:.05em;text-align:center;margin-bottom:14px}' +
 '  #tab-advisor .av-warn{font-size:12px;color:#e8b84a;margin-top:6px}' +
-'  #tab-advisor .linklike{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;padding:0 2px;text-decoration:underline}' +
 '</style>' +
 '<div class="av-wip">⚠ DO NOT USE — WORK IN PROGRESS</div>' +
 // two balanced columns: LEFT = the cut (the lookalike window),
@@ -173,30 +172,6 @@
     var s = $("av-status");
     s.textContent = msg || "";
     s.className = "av-status" + (kind ? " " + kind : "");
-  }
-
-  // ---------------- outcome applied (game chose one) ----------------
-  // The window advanced a turn: the old screenshot and the old advice both
-  // describe the PREVIOUS decision point — clear them, offer an undo.
-  function onOutcomeApplied(info) {
-    $("av-drop").classList.remove("has-img");
-    $("av-result").style.display = "none";
-    var empty = $("av-result-empty");
-    if (empty) empty.style.display = "";
-    var s = $("av-status");
-    s.className = "av-status";
-    s.textContent = info.finished
-      ? "Final turn processed — the cut is finished. "
-      : "Applied: " + info.description + " — now turn " + info.turn + "/" + info.maxTurns +
-        ". Drop the next screenshot or press Get advice. ";
-    var u = el("button", { class: "linklike", type: "button" }, "Undo");
-    u.addEventListener("click", function () {
-      if (window.AdvisorWindow.undoApply && window.AdvisorWindow.undoApply()) {
-        if ($("av-preview").src) $("av-drop").classList.add("has-img");
-        setStatus("Undone — previous turn restored.");
-      }
-    });
-    s.appendChild(u);
   }
 
   // ---------------- screenshot handling ----------------
@@ -398,7 +373,7 @@
     elTab.innerHTML = tabMarkup();
 
     window.AdvisorSetup.init($("av-setup"), { onChange: function () {} });
-    window.AdvisorWindow.init($("av-window"), { onChange: function () {}, onApplied: onOutcomeApplied });
+    window.AdvisorWindow.init($("av-window"), { onChange: function () {} });
     renderEngines();
 
     // simple on/off toggles
