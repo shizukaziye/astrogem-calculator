@@ -412,30 +412,42 @@
       : L.roiRect(panel, "rerollPill");
     var pillRead = await maskedOcr(pillRect, dimBtnWhite, { whitelist: "0123456789/", psm: 7 });
     var pillM = pillRead.text.match(/(\d)\s*\/\s*(\d)/);
+    // template view of the pill, with the ASPECT rule: '1' is the only narrow digit,
+    // and its serif flag makes dim OCR read it as '2' (three live "1/2" pills parsed
+    // as 2/2 — one model reroll too many). The box shape is the tiebreaker.
+    var tPair = null;
+    {
+      var tgR = templateGlyphs(pillRect, dimBtnWhite);
+      if (tgR) {
+        var digsR = tgR.filter(function (t) { return t.ch && /^[\d\/]$/.test(t.ch) && t.score >= 0.75; });
+        if (digsR.length === 3 && digsR[1].ch === "/" && /^\d$/.test(digsR[0].ch) && /^\d$/.test(digsR[2].ch)) {
+          var rn = digsR[0].box.w / Math.max(1, digsR[0].box.h) < 0.45 ? 1 : parseInt(digsR[0].ch, 10);
+          var rd = digsR[2].box.w / Math.max(1, digsR[2].box.h) < 0.45 ? 1 : parseInt(digsR[2].ch, 10);
+          if (rn <= 9 && (rd === 1 || rd === 2)) tPair = { n: rn, d: rd };   // stacked counters (3/2…) legal
+        }
+      }
+    }
     if (pillM) {
       var pa = parseInt(pillM[1], 10), pb = parseInt(pillM[2], 10);
       // rerolls STACK past the denominator (reroll_increase outcomes): 3/2, 5/2…
       // are legal — only the denominator is rarity-bounded (1 or 2)
       if (pa <= 9 && (pb === 1 || pb === 2)) {
-        out.state.rerollsShownFree = pa;
-        out.state.rerollsShownDenom = pb;
-        confidence.state.rerollsRemaining = 0.9;
-      }
-    }
-    if (out.state.rerollsShownFree == null) {
-      // template rescue: the pill is "n / m" in the footer font
-      var tgR = templateGlyphs(pillRect, dimBtnWhite);
-      if (tgR) {
-        var digsR = tgR.filter(function (t) { return t.ch && /^[\d\/]$/.test(t.ch) && t.score >= 0.8; });
-        if (digsR.length === 3 && digsR[1].ch === "/" && /^\d$/.test(digsR[0].ch) && /^\d$/.test(digsR[2].ch)) {
-          var rn = parseInt(digsR[0].ch, 10), rd = parseInt(digsR[2].ch, 10);
-          if (rn <= 9 && (rd === 1 || rd === 2)) {   // stacked counters (3/2…) are legal
-            out.state.rerollsShownFree = rn;
-            out.state.rerollsShownDenom = rd;
-            confidence.state.rerollsRemaining = 0.85;
-          }
+        if (tPair && (tPair.n !== pa || tPair.d !== pb)) {
+          // disagree → the aspect-checked template wins, flagged for a look
+          out.state.rerollsShownFree = tPair.n;
+          out.state.rerollsShownDenom = tPair.d;
+          confidence.state.rerollsRemaining = 0.75;
+        } else {
+          out.state.rerollsShownFree = pa;
+          out.state.rerollsShownDenom = pb;
+          confidence.state.rerollsRemaining = tPair ? 0.92 : 0.9;
         }
       }
+    }
+    if (out.state.rerollsShownFree == null && tPair) {
+      out.state.rerollsShownFree = tPair.n;
+      out.state.rerollsShownDenom = tPair.d;
+      confidence.state.rerollsRemaining = 0.85;
     }
     if (out.state.rerollsShownFree == null) {
       // Charge states: confirm the WORD (any brightness), then the BUTTON COLOR
