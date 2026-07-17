@@ -394,11 +394,13 @@
       if (cv >= 100 && cv <= 9999) cval = cv;
     }
     if (cval == null) {
-      var tokM = footText.match(/(^|\D)(450|900|1[.,]?800)(\D|$)/);
-      if (tokM) cval = parseInt(tokM[2].replace(/[.,]/g, ""), 10);
+      // "1,800" OCRs with the comma as '.', ',' or a bare SPACE ("1 800" — live miss)
+      var tokM = footText.match(/(^|\D)(450|900|1[.,\s]?800)(\D|$)/);
+      if (tokM) cval = parseInt(tokM[2].replace(/[.,\s]/g, ""), 10);
     }
     if (cval != null) { out.state.processCost = cval; confidence.state.processCostMultiplier = 0.9; }
     if (out.state.processCost == null) confidence.state.processCostMultiplier = 0.3;
+    if (out._debug) out._debug.costRead = { footText: footText.slice(0, 90), cval: cval };
 
     // ---- reroll pill (ROI-scoped: the "Reset (1/1)" trap can't reach here) ----
     // The pill's full state machine (Shizu, 2026-07-17):
@@ -448,6 +450,26 @@
       out.state.rerollsShownFree = tPair.n;
       out.state.rerollsShownDenom = tPair.d;
       confidence.state.rerollsRemaining = 0.85;
+    }
+    if (out.state.rerollsShownFree == null) {
+      // dim-pill rescue: on dark captures BOTH the plain OCR and the template view
+      // come up empty and the snap then DEFAULTS by rarity (three live "1/2" pills
+      // became 2/2 → one phantom reroll). Same medicine as the grey captions:
+      // dilate + ×3 upscale before OCR. Capped conf — a rescue read stays checkable.
+      var pillSub = L.crop(raster, pillRect);
+      // the pill text can render DIMMER than the standard mask floor (v≈0.55 grey on
+      // a dark pill — verified by eye on a live "1 / 2"): use a lower threshold here
+      var pillDim = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.35 && c.v > 0.45; };
+      var pillR2 = await ocrText(upscale(dilateDark(L.chromaMask(pillSub, pillDim)), 3), { whitelist: "0123456789/", psm: 7 });
+      var pillM2 = pillR2.text.match(/(\d)\s*\/\s*(\d)/);
+      if (pillM2) {
+        var pa2 = parseInt(pillM2[1], 10), pb2 = parseInt(pillM2[2], 10);
+        if (pa2 <= 9 && (pb2 === 1 || pb2 === 2)) {
+          out.state.rerollsShownFree = pa2;
+          out.state.rerollsShownDenom = pb2;
+          confidence.state.rerollsRemaining = 0.75;
+        }
+      }
     }
     if (out.state.rerollsShownFree == null) {
       // Charge states: confirm the WORD (any brightness), then the BUTTON COLOR
@@ -753,6 +775,19 @@
                 // solved levels stay in "confirm me" territory, preserving 0-silent
                 ptsTSoft = minSc < 0.5 || constrained;
               }
+            } else if (aIdx >= 1) {
+              // template couldn't resolve the digit run (a dim '3' matches nothing
+              // well) — OCR the RUN CROP alone at high magnification; accept only a
+              // bounds-consistent value, always soft
+              var runX0 = tgP[0].box.x, runX1 = tgP[aIdx - 1].box.x + tgP[aIdx - 1].box.w;
+              var runBox = { x: ptsRect.x + Math.max(0, runX0 - 3), y: ptsRect.y, w: (runX1 - runX0) + 6, h: ptsRect.h };
+              var runSub = L.crop(raster, runBox);
+              var runRead = await ocrText(upscale(dilateDark(L.chromaMask(runSub, dimBtnWhite)), 4), { whitelist: "0123456789", psm: 7 });
+              var runM = (runRead.text || "").match(/(\d{1,2})/);
+              if (runM) {
+                var rv2 = parseInt(runM[1], 10);
+                if (rv2 >= Math.max(4, loP) && rv2 <= Math.min(20, hiP)) { ptsT = rv2; ptsTSoft = true; }
+              }
             }
           }
         }
@@ -995,6 +1030,7 @@
       var capRect = { x: iconXs[oi] - gap * 0.44, y: iconY - gap * 0.16, w: gap * 0.88, h: gap * 0.52 };
       var capRead = await maskedOcr(capRect, captionText, { psm: 6 });
       var cap = normText(capRead.text).toLowerCase();
+      if (out._debug) (out._debug.caps = out._debug.caps || [])[oi] = cap.replace(/\n/g, "|").slice(0, 50);
 
       var o = null, oconf = 0;
       var target = null;
@@ -1035,22 +1071,33 @@
         }
         var costish = /1\s*[o0]\s*[o0]|[cjg]ost/.test(gTxt) || /1\s*[o0]\s*[o0]/.test(cap) || zeroPair;
         var maintainish = /maintain|tained/.test(gTxt) || /maintain|state\s*maint/.test(cap);
+        // the third grey candidate: "View Other Items +N time(s)" — two live cells
+        // read as do_nothing because only THIS dilated pass can see their captions
+        var rerollish = /time|view|item|other/.test(gTxt) || /time|view|item|other/.test(cap);
         if (costish && !maintainish) {
           // SIGN: a '+' is fat and survives dim OCR; the thin '−' is what drops.
           // '+' anywhere ⇒ +100; cost-confirmed with no '+' ⇒ −100, kept flagged.
           var plusSeen = /\+/.test(gTxt) || /\+/.test(cap);
           greyCost = { neg: !plusSeen, conf: plusSeen ? 0.85 : 0.7 };
+        } else if (rerollish && !maintainish) {
+          var rrG = gTxt.match(/\+\s*([12])/) || cap.match(/\+\s*([12])/);
+          o = { type: "reroll_increase", change: rrG ? parseInt(rrG[1], 10) : 1 };
+          oconf += rrG ? 0.8 : 0.55;
         }
       }
 
-      if (greyCost) {
+      if (o) {
+        // grey reroll decided above — confidence already accumulated
+      } else if (greyCost) {
         o = { type: "change_gold_cost", change: greyCost.neg ? -100 : 100 };
         oconf += greyCost.conf;
       } else if (/maintain|state\s*maint/.test(cap)) {
         // "Processing State Maintained" — the literal do-nothing outcome
         o = { type: "do_nothing" };
         oconf += Math.min(0.9, capRead.conf + 0.3);
-      } else if (/effect\s*chang|changed/.test(cap) && target && (target === "effect1" || target === "effect2")) {
+      } else if (/chang/.test(cap) && target && (target === "effect1" || target === "effect2")) {
+        // "Effect Changed" OCRs as 'ectoct chango' etc. — /chang/ alone is safe here:
+        // it's caption-scoped and gated on a colored side-effect icon
         o = { type: "change_side_option", target: target };
         oconf += Math.min(0.9, capRead.conf + 0.3);
       } else if (/time|view|other|item/.test(cap)) {
