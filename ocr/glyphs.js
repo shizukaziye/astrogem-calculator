@@ -3,7 +3,7 @@
  * Binary 12x16 templates of the game's own glyphs, harvested from the labeled
  * corpus at the engine's canonical scale. Digit keys: '0'-'9' white footer font,
  * 'g1'-'g5' gold wheel font. Letters are DISTRACTOR classes for rejection.
- * Instances per class: (:50  ):50  +:39  /:50  1:147  2:38  3:15  4:15  5:9  6:6  7:21  8:6  9:46  A:12  L:35  e:12  g:12  m:12  o:12  r:12  s:12  t:12  v:35
+ * Instances per class: (:52  ):52  +:39  /:52  1:149  2:40  3:16  4:15  5:10  6:6  7:21  8:6  9:48  A:12  L:35  e:12  g:12  m:12  o:12  r:12  s:12  t:12  v:35
  */
 (function (root) {
   "use strict";

@@ -17,15 +17,25 @@ This folder holds the A/B test set for the Advisor's screenshot-reading engines
 >
 > | engine | headline (per-field avg) | scalar fields | outcomes | whole-parse | flag-coverage | silent errors |
 > |--------|-------------------------|---------------|----------|-------------|---------------|---------------|
-> | **structural** (free tier) | **91.6%** | 92.2% | 85.0% | 27/50 | **100%** (62/62) | **0** |
+> | **structural** (free tier) | **94.3%** | 94.4% | 93.8% | 20/52 | **100%** (47/47) | **0** |
 >
-> The 88→92 jump came from **glyph template matching** (`ocr/glyphs.js`, built by
-> `tools/build-glyphs.js`): the closed-vocabulary reads (wheel levels, outcome
-> amounts, Process (x/N), points header, reroll pill) compare pixels against
-> harvested pictures of the game's own fixed-font digits instead of OCR, with
-> letters as distractor classes and match-margin as an honestly calibrated
-> confidence. Per-field movers: currentTurn 76→90, maxTurns 92→96, orderLevel
-> 74→88; false alarms 5.8→4.0 per shot.
+> **Resolution is the ceiling, not the method.** The corpus is 50 heavily-compressed
+> ~713px crops (artificially hard — ~10px digits) plus **2 native 4K full-screen
+> captures** (`Screenshot 2026-07-17 030847/031102`, the first ORDER gems + first
+> cost-8 order). On the 4K shots **every scalar field reads perfectly (12/12 both)** —
+> gem type, base cost, all four levels, turn, rarity, rerolls, cost. The headline is
+> dragged down almost entirely by the low-res crops (orderLevel 71%, effect1Level 87%,
+> currentTurn 90% there). So on the resolution real players actually screenshot at,
+> the parser is effectively perfect on config/state.
+>
+> Behind it: a **joint level constraint solver** (the 4 levels sum to the header
+> points; committed reads are pinned, the constraint fills the unreadable gold-on-gold
+> S digit) over an **aspect-preserving glyph matcher** (`ocr/glyphs.js`,
+> `tools/build-glyphs.js` — pixel-match the game's own fixed-font digits, aspect kept
+> so a narrow "1" is distinct). Direction on order/willpower outcomes (whose raise ▲
+> renders RED on the gold icon) is confidence-capped unless a +/− sign is read — so a
+> mis-read direction always flags rather than committing silently. **0 silent errors**
+> across all 52.
 >
 > Arc, for honesty: the engine scored **100% on the 3-shot dev corpus it was tuned on,
 > then 65.3% cold** on this unseen corpus; targeted calibration (resolution

@@ -1,0 +1,28 @@
+{
+  "_note": "First ORDER gem + first full-screen 4K capture (3813x1735). Order Astrogem: Stability (cost 8), station layout. W(green)=Brand Power, E(blue)=Additional Damage.",
+  "config": {
+    "baseCost": 8,
+    "gemType": "order",
+    "willpowerLevel": 1,
+    "orderLevel": 5,
+    "effect1": "Brand Power",
+    "effect1Level": 1,
+    "effect2": "Additional Damage",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 5,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "change_gold_cost", "change": -100 },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
+    { "type": "raise_effect", "target": "effect2", "amount": 2 },
+    { "type": "raise_effect", "target": "effect2", "amount": 3 }
+  ]
+}

@@ -886,6 +886,14 @@
         var type = dirDown && !dirUp ? "lower_effect" : "raise_effect";
         o = { type: type, target: target, amount: amt };
         oconf += (hadAmt ? 0.55 : 0.25) + (strongDir ? 0.3 : (dirUp || dirDown) ? 0.15 : 0.05);
+        // SAFETY: on order/points/willpower the direction arrow renders in the icon's
+        // OWN hue family (a red raise ▲ on the gold order icon), so the color test is
+        // unreliable there — a wrong direction must never be CONFIDENT. Require a clear
+        // +/− sign in the caption to keep it unflagged; else cap below the UI threshold.
+        if (target === "order" || target === "willpower") {
+          var signSeen = /\+\s*[1-5]/.test(cap) || (/(?:^|\s)[-−]\s*[1-5]/.test(cap) && !/lv/i.test(cap));
+          if (!signSeen) oconf = Math.min(oconf, 0.72);
+        }
       } else {
         o = { type: "do_nothing" };
         oconf += 0.2;

@@ -1,0 +1,28 @@
+{
+  "_note": "Full-screen 4K order gem, turn 8. W(green)=Brand Power, E(blue)=Additional Damage.",
+  "config": {
+    "baseCost": 8,
+    "gemType": "order",
+    "willpowerLevel": 1,
+    "orderLevel": 5,
+    "effect1": "Brand Power",
+    "effect1Level": 1,
+    "effect2": "Additional Damage",
+    "effect2Level": 5
+  },
+  "state": {
+    "currentTurn": 8,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "order", "amount": 1 },
+    { "type": "do_nothing" },
+    { "type": "raise_effect", "target": "effect1", "amount": 1 },
+    { "type": "change_side_option", "target": "effect2" }
+  ]
+}
