@@ -148,8 +148,16 @@ function scoreOne(parsed, truthRaw) {
   // conf < 0.8 (i.e. would have been highlighted "confirm me")?
   var CONF_T = 0.8;
   var wrongAll = scalarFields.filter(function (f) { return !f.ok; });
-  if (matched !== wantKeys.length) wrongAll = wrongAll.concat([{ conf: outcomeConf }]);
+  if (matched !== wantKeys.length) wrongAll = wrongAll.concat([{ label: "outcomes", conf: outcomeConf }]);
   var wrongFlagged = wrongAll.filter(function (f) { return (f.conf == null ? 1 : f.conf) < CONF_T; }).length;
+  // SILENT errors: wrong yet confident — the UI would NOT highlight these. The most
+  // dangerous class; --dump prints them so each one can be hunted individually.
+  var silent = wrongAll.filter(function (f) { return (f.conf == null ? 1 : f.conf) >= CONF_T; })
+    .map(function (f) { return f.label + (f.got !== undefined ? "(" + f.got + "≠" + f.want + ")" : "") + " conf=" + (f.conf == null ? 1 : f.conf).toFixed(2); });
+  // false alarms: flagged yet CORRECT (the cost of the safety net — each one is a
+  // needless "confirm me" tap for the user)
+  var falseAlarms = scalarFields.filter(function (f) { return f.ok && (f.conf == null ? 1 : f.conf) < CONF_T; }).length;
+  if (matched === wantKeys.length && outcomeConf < CONF_T) falseAlarms++;
   return {
     fields: fields,
     scalarCorrect: correct,
@@ -159,6 +167,8 @@ function scoreOne(parsed, truthRaw) {
     wholeParse: correct === scalarFields.length && matched === wantKeys.length,
     wrongTotal: wrongAll.length,
     wrongFlagged: wrongFlagged,
+    silent: silent,
+    falseAlarms: falseAlarms,
     gotOutcomeKeys: gotKeys,
     wantOutcomeKeys: wantKeys
   };
@@ -356,6 +366,7 @@ async function main() {
     console.log("--- " + eng.label + " ---");
     var totScalarCorrect = 0, totScalar = 0, totOutcome = 0, totHeadline = 0, n = 0;
     var whole = 0, wrongTotal = 0, wrongFlagged = 0;
+    var totSilent = 0, totFalseAlarms = 0, silentList = [];
     var fieldAgg = {}; // label -> {ok,total}
     var perSample = [];
     for (var si = 0; si < scored.length; si++) {
@@ -372,11 +383,14 @@ async function main() {
       totHeadline += sc.headline;
       if (sc.wholeParse) whole++;
       wrongTotal += sc.wrongTotal; wrongFlagged += sc.wrongFlagged;
+      totSilent += sc.silent.length; totFalseAlarms += sc.falseAlarms;
+      if (sc.silent.length) silentList.push(s.name + ": " + sc.silent.join(", "));
       sc.fields.forEach(function (f) {
         if (f.score != null) return;
-        fieldAgg[f.label] = fieldAgg[f.label] || { ok: 0, total: 0 };
+        fieldAgg[f.label] = fieldAgg[f.label] || { ok: 0, total: 0, fa: 0 };
         fieldAgg[f.label].total++;
         if (f.ok) fieldAgg[f.label].ok++;
+        if (f.ok && (f.conf == null ? 1 : f.conf) < 0.8) fieldAgg[f.label].fa++;
       });
       var wrong = sc.fields.filter(function (f) { return f.score == null && !f.ok; })
         .map(function (f) { return f.label + "(" + f.got + "≠" + f.want + ")"; });
@@ -399,6 +413,14 @@ async function main() {
       console.log("  HEADLINE per-field avg (12 scalars + outcome set): " + pct(headlineAvg) +
         "   whole-parse: " + whole + "/" + n + " (" + pct(whole / n) + ")" +
         "   flag-coverage: " + (wrongTotal ? wrongFlagged + "/" + wrongTotal + " wrong fields flagged (" + pct(wrongFlagged / wrongTotal) + ")" : "n/a (no errors)"));
+      console.log("  SILENT errors (wrong yet confident — the UI would not warn): " + totSilent +
+        "   false alarms (flagged yet correct): " + totFalseAlarms +
+        " (~" + (totFalseAlarms / n).toFixed(1) + "/shot)");
+      silentList.forEach(function (l) { console.log("    SILENT " + l); });
+      var faLine = Object.keys(fieldAgg).filter(function (l) { return fieldAgg[l].fa > 0; })
+        .sort(function (a, b) { return fieldAgg[b].fa - fieldAgg[a].fa; })
+        .map(function (l) { return l + " " + fieldAgg[l].fa; }).join("  ·  ");
+      if (faLine) console.log("  false alarms by field: " + faLine);
       var labels = Object.keys(fieldAgg);
       var line = labels.map(function (l) { return l + " " + pct(fieldAgg[l].ok / fieldAgg[l].total); }).join("  ·  ");
       console.log("  per-field: " + line);

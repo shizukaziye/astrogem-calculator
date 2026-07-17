@@ -19,7 +19,7 @@
     "rosterBound": false
   },
   "outcomes": [
-    { "type": "lower_effect", "target": "order", "amount": 1 },
+    { "type": "raise_effect", "target": "order", "amount": 1 },
     { "type": "raise_effect", "target": "effect2", "amount": 2 },
     { "type": "raise_effect", "target": "effect1", "amount": 1 },
     { "type": "raise_effect", "target": "effect1", "amount": 4 }

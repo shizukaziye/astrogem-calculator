@@ -20,7 +20,7 @@
     "rosterBound": false
   },
   "outcomes": [
-    { "type": "lower_effect", "target": "effect2", "amount": 1 },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
     { "type": "raise_effect", "target": "order", "amount": 1 },
     { "type": "change_side_option", "target": "effect1" },
     { "type": "raise_effect", "target": "willpower", "amount": 2 }

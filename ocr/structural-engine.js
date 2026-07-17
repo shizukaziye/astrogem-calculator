@@ -449,13 +449,21 @@
       if (known.length === 4 && sum === pts) {
         LV.forEach(function (l) { l.conf = Math.max(l.conf, ptsSoft ? 0.85 : 0.92); });
       } else if (known.length === 3) {
-        // solve the one unreadable node (typically S, the gold-on-gold face)
+        // solve the one unreadable node (typically S, the gold-on-gold face). With a
+        // STRICT pts read and three confident siblings this is arithmetic, not a
+        // guess — it earns an unflagged confidence (measured: 0 wrong on the corpus
+        // when pts was strict), and the siblings get the same checksum boost.
         var missing = LV.filter(function (l) { return l.level == null; })[0];
         var solved = pts - sum;
         if (solved >= 1 && solved <= 5) {
           missing.level = solved;
-          missing.conf = Math.min(ptsSoft ? 0.65 : 0.9,
-            0.55 + Math.min.apply(null, known.map(function (l) { return l.conf; })) * 0.4);
+          var minKnown = Math.min.apply(null, known.map(function (l) { return l.conf; }));
+          if (!ptsSoft && minKnown >= 0.55) {
+            missing.conf = 0.85;
+            known.forEach(function (l) { l.conf = Math.max(l.conf, 0.85); });
+          } else {
+            missing.conf = Math.min(ptsSoft ? 0.65 : 0.9, 0.55 + minKnown * 0.4);
+          }
         }
       } else if (known.length === 4 && sum !== pts) {
         // mismatch: RE-SOLVE the weakest read from the checksum (the header points
@@ -513,8 +521,11 @@
     var nmE = await readEffectName(nodes.nodeE);
     out.config.effect1 = lexEffect(nmW.text, null);
     out.config.effect2 = lexEffect(nmE.text, out.config.effect1);
-    confidence.config.effect1 = out.config.effect1 ? Math.min(0.92, nmW.conf + 0.3) : 0;
-    confidence.config.effect2 = out.config.effect2 ? Math.min(0.92, nmE.conf + 0.3) : 0;
+    // a pool-constrained lexicon hit is strong evidence even when the raw OCR conf is
+    // low (mangled-but-matched text): floor at 0.82 when the pool was known
+    var effFloor = poolNames ? 0.82 : 0;
+    confidence.config.effect1 = out.config.effect1 ? Math.max(effFloor, Math.min(0.92, nmW.conf + 0.3)) : 0;
+    confidence.config.effect2 = out.config.effect2 ? Math.max(effFloor, Math.min(0.92, nmE.conf + 0.3)) : 0;
 
     // ---- the 4 outcomes ----
     var iconXs = geo ? geo.outIconXs : L.ROI.outIconXs.map(function (fx) { return panel.x + fx * panel.w; });
@@ -547,14 +558,21 @@
       } else if (/effect\s*chang|changed/.test(cap) && target && (target === "effect1" || target === "effect2")) {
         o = { type: "change_side_option", target: target };
         oconf += Math.min(0.9, capRead.conf + 0.3);
-      } else if (/time|view|other|item/.test(cap) || (icls === "grey" && /\+\s*\d/.test(cap))) {
+      } else if (/time|view|other|item/.test(cap)) {
         var rrM = cap.match(/\+\s*([12])/);
         o = { type: "reroll_increase", change: rrM ? parseInt(rrM[1], 10) : 1 };
         oconf += rrM ? 0.9 : 0.6;
-      } else if (/cost/.test(cap)) {
-        var neg = /-\s*100|−/.test(cap);
+      } else if (/[cjg]ost|1\s*[o0]\s*[o0]\s*%|100/.test(cap)) {
+        // cost captions are the ONLY ones containing "100"; the word itself OCRs as
+        // Cost/Jost/Gost — the amount is the reliable signature. Checked BEFORE the
+        // grey-icon fallback: "+100%" contains "+1" and used to be eaten as reroll+1.
+        var neg = /-\s*10|−\s*10/.test(cap);
         o = { type: "change_gold_cost", change: neg ? -100 : 100 };
         oconf += 0.75;
+      } else if (icls === "grey" && /\+\s*\d/.test(cap)) {
+        var rrM2 = cap.match(/\+\s*([12])/);
+        o = { type: "reroll_increase", change: rrM2 ? parseInt(rrM2[1], 10) : 1 };
+        oconf += rrM2 ? 0.6 : 0.4;
       } else if (target) {
         // amount ("Lv. 2" / "+1") is the chartreuse line at the caption's bottom —
         // the name above it is white, so a chroma line-locate isolates it even over
@@ -588,9 +606,12 @@
             var c = L.hsv(rr, gg, bb); return c.h >= 75 && c.h < 145 && c.s > 0.35 && c.v > 0.45;
           });
           var aDown = L.colorClusterStats(arrowCrop, function (rr, gg, bb) {
-            var c = L.hsv(rr, gg, bb); return (c.h < 20 || c.h >= 345) && c.s > 0.5 && c.v > 0.5;
+            // ▼ renders dimmer than ▲ (v down to ~0.42 on blue/gold faces)
+            var c = L.hsv(rr, gg, bb); return (c.h < 20 || c.h >= 345) && c.s > 0.45 && c.v > 0.4;
           });
-          var upSolid = aUp.frac > 0.012 && aUp.count >= 8;
+          // arrows are SOLID triangles (density ≥~0.3 of their own bbox); nebula
+          // sparkle and face-edge blends are diffuse — density-gate BOTH colors
+          var upSolid = aUp.frac > 0.012 && aUp.count >= 8 && aUp.density > 0.25;
           var downSolid = aDown.frac > 0.012 && aDown.count >= 8 && aDown.density > 0.25;
           // the ICON FACE behind the caption shares a hue family with one arrow color:
           // evidence in the icon's own family is worthless (a red willpower face lands
@@ -634,6 +655,11 @@
         }
         var hadAmt = amt != null;
         if (amt == null) amt = 1;
+        // direction earns full confidence only with a STRONG signal: a located red
+        // amount line, or an arrow blob of real size — a borderline arrow read stays
+        // below the flag threshold (two silent lower→raise errors came from here)
+        var strongDir = (redLine != null && dirDown) ||
+          (dirUp && aUp && aUp.count >= 20) || (dirDown && aDown && aDown.count >= 20);
         if (!amtLine && !redLine && target === "willpower") {
           // red face + red text + red arrow: a willpower LOWER is invisible to every
           // color mask. But a willpower RAISE always shows a green ▲ (green-on-red
@@ -647,7 +673,7 @@
         }
         var type = dirDown && !dirUp ? "lower_effect" : "raise_effect";
         o = { type: type, target: target, amount: amt };
-        oconf += (hadAmt ? 0.55 : 0.25) + (dirUp || dirDown ? 0.3 : 0.05);
+        oconf += (hadAmt ? 0.55 : 0.25) + (strongDir ? 0.3 : (dirUp || dirDown) ? 0.15 : 0.05);
       } else {
         o = { type: "do_nothing" };
         oconf += 0.2;

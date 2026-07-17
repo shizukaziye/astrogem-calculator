@@ -354,8 +354,9 @@
   // isGoldText, still excluding true face greens (h≥100) and reds (h<20)
   function isWheelLevelText(r, g, b) { var c = hsv(r, g, b); return c.h >= 30 && c.h < 80 && c.s > 0.4 && c.v > 0.5; }
   // LOWER-outcome amounts ("Lv. 1"/"−1" beside a ▼) render RED, not chartreuse
-  // (measured on the 2026-07-16 corpus)
-  function isRedAmountText(r, g, b) { var c = hsv(r, g, b); return (c.h < 20 || c.h >= 340) && c.s > 0.5 && c.v > 0.45; }
+  // (measured on the 2026-07-16 corpus). Hue reaches ~22 when the red text blends
+  // with a gold icon face behind it (red-on-gold rows).
+  function isRedAmountText(r, g, b) { var c = hsv(r, g, b); return (c.h < 22 || c.h >= 340) && c.s > 0.45 && c.v > 0.4; }
 
   // Smooth resample (bilinear), fractional factors in BOTH directions: f>1 upscales
   // (half-res captures starve the micro-OCR — glyphs drop to ~10px), f<1 downscales

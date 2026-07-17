@@ -15,18 +15,26 @@ This folder holds the A/B test set for the Advisor's screenshot-reading engines
 > a persistent 1,800 footer), reroll pill states 2/2·1/2·1/1 and the gold **Charge**
 > button (free rerolls spent), View Other Items +1/+2, and chat-line noise.
 >
-> | engine | headline (per-field avg) | scalar fields | outcomes | whole-parse | flag-coverage |
-> |--------|-------------------------|---------------|----------|-------------|---------------|
-> | **structural** (free tier) | **88.1%** | 88.7% | 81.5% | 17/50 | 94.4% |
+> | engine | headline (per-field avg) | scalar fields | outcomes | whole-parse | flag-coverage | silent errors |
+> |--------|-------------------------|---------------|----------|-------------|---------------|---------------|
+> | **structural** (free tier) | **88.4%** | 88.7% | 85.0% | 19/50 | **100%** (83/83) | **0** |
 >
 > Arc, for honesty: the engine scored **100% on the 3-shot dev corpus it was tuned on,
-> then 65.3% cold** on this unseen corpus; targeted calibration (2× upscale for small
-> panels, red lower-amounts, Charge/Maintained/+2 vocab, anchor-relative + self-locating
-> text reads, footer read voting) brought it to 88.1%. The ≥95% FREE ship gate is NOT
-> yet met — dominant remaining misses are the points-header digit at low res (orderLevel
-> 74%) and Process (x/N) digit quality (currentTurn 76%). **Flag-coverage is the safety
-> net**: ~94% of wrong fields carry confidence < 0.8 and pulse "confirm me" in the UI.
-> The 3 dev shots still parse 3/3 whole.
+> then 65.3% cold** on this unseen corpus; targeted calibration (resolution
+> normalization to a canonical wheel gap, red lower-amounts, Charge/Maintained/+2
+> vocab, anchor-relative + self-locating text reads, footer read voting, the
+> cost-"100" signature) brought it to 88.4%. The ≥95% FREE ship gate is NOT yet met —
+> dominant remaining misses are the points-header digit at low res (orderLevel 74%)
+> and Process (x/N) digit quality (currentTurn 76%).
+>
+> **Every error is identifiable**: on this corpus, 100% of wrong fields carry
+> confidence < 0.8 and pulse "confirm me" in the Advisor window — zero
+> confident-but-wrong fields. The cost of that catch rate is ~5.8 flagged-but-correct
+> fields per (low-res) shot, i.e. the user confirms a handful of highlighted values.
+> `tools/eval-ocr.js` prints SILENT errors and per-field false alarms per run so this
+> property is re-verified with every corpus change. The 3 dev shots still parse 3/3
+> whole. (This audit also caught 2 transcription errors in the ground truth itself —
+> the parser out-read the human on two ▲/▼ cells.)
 >
 > **Why Tesseract alone was abandoned:** it reads the plain-background footer perfectly
 > (`Process (x/N)`, cost, balance = 100%) and fails on everything drawn over the nebula
