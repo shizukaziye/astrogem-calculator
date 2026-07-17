@@ -707,6 +707,38 @@
     ];
     actions.sort(function (a, b) { return b.value - a.value; });
 
+    // ---- Reset combinations (Shizu, 2026-07-17) ----
+    // An in-game reset MAY re-roll the two side nodes, so the single ranked Reset
+    // value (same-pair assumption) is not the whole story. Whenever reset is a live
+    // consideration — the last turn, or Complete winning the argmax — value EVERY
+    // side-effect pair the reset could land on, so the user can compare before
+    // pressing the in-game button. The class-keyed memo makes same-class pairs free.
+    var resetCombos = null;
+    if (A.COSTS && A.COSTS.reset != null &&
+        (t === 1 || (actions[0] && actions[0].name === "Complete"))) {
+      var poolR = A.EFFECT_POOLS[config.baseCost] || [];
+      var freshRr = solver.maxTurns === 5 ? 1 : solver.maxTurns === 7 ? 2 : 3;
+      resetCombos = [];
+      for (var pi = 0; pi < poolR.length; pi++) {
+        for (var pj = pi + 1; pj < poolR.length; pj++) {
+          var cfgR = {
+            baseCost: config.baseCost, gemType: config.gemType,
+            willpowerLevel: 1, orderLevel: 1,
+            effect1: poolR[pi], effect1Level: 1,
+            effect2: poolR[pj], effect2Level: 1
+          };
+          var nR = solver._node(cfgR, solver.maxTurns, freshRr, 0);
+          resetCombos.push({
+            effect1: poolR[pi], effect2: poolR[pj],
+            net: -A.COSTS.reset + nR.v, expectedScore: nR.expScore,
+            current: (poolR[pi] === config.effect1 && poolR[pj] === config.effect2) ||
+                     (poolR[pi] === config.effect2 && poolR[pj] === config.effect1)
+          });
+        }
+      }
+      resetCombos.sort(function (x, y) { return y.net - x.net; });
+    }
+
     return {
       bestAction: actions[0].name.toLowerCase(),
       includeSim2: excludeComplete,
@@ -714,6 +746,8 @@
       expectedScores: { process: processScore, reroll: rerollScore, delete: curScore },
       allActions: actions,
       currentValue: solver.gemValue(config),
+      resetCombos: resetCombos,
+      resetCost: A.COSTS ? A.COSTS.reset : null,
       _solverNodes: solver.nodes
     };
   }

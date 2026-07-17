@@ -131,7 +131,7 @@
 '    <li><b>Process</b> applies one of the 4 on-screen outcomes (25% each, from the outcomes you confirmed), then plays on optimally.</li>' +
 '    <li><b>Reroll</b> redraws the 4 outcomes; only the <i>last</i> reroll costs 3,800g (the on-screen counter shows the free ones; the window translates). Not available on turn 1 &mdash; the game greys it out until the gem has been processed once.</li>' +
 '    <li><b>Complete</b> stops now and keeps the current gem (Turn&nbsp;1 = dismantle, value 0). Ranked against Process/Reroll whenever the toggle is on &mdash; it wins when both are negative.</li>' +
-'    <li><b>Reset</b> (last turn only): pay 20,000g to return the gem to a fresh unprocessed state. Recommended when it beats both Process and Complete.</li>' +
+'    <li><b>Reset</b> (last turn only): pay 20,000g to return the gem to a fresh unprocessed state. Recommended when it beats both Process and Complete. Because a reset may re-roll the side effects, the advisor also lists the fresh-cut value of every effect pair whenever reset is a live option.</li>' +
 '    <li><b>P(above baseline)</b> is the probability the final gem clears your baseline under optimal play. A below-baseline gem is valued as fusion fodder, not zero.</li>' +
 '  </ul>' +
 '  <p class="note">The baseline is the S/A/B/C/D rank ladder the Grader uses (12 anchor grades); picking a character sets it one rank above your stronger 3rd-lowest gem, and sets the gold-per-1%-damage tier from combat power. On the Support axis gems are valued by party contribution (supportValue) against support-scale baselines; support advice has no Monte-Carlo fallback &mdash; if the exact model fails you get an error, never a silently mis-ranked answer.</p>' +
@@ -179,6 +179,19 @@
   }
 
   // ---------------- status ----------------
+  var EMPTY_HINT = 'The recommended action appears here once you press <b>Get advice</b>.';
+  // Blank the recommendation pane (stale advice must never sit next to new state):
+  // called on every new parse and at the start of every Get advice run.
+  function clearResult(msg) {
+    var res = $("av-result");
+    if (res) res.style.display = "none";
+    var empty = $("av-result-empty");
+    if (empty) { empty.style.display = ""; empty.innerHTML = msg || EMPTY_HINT; }
+    var h = document.getElementById("av-heur");
+    if (h) h.remove();
+    var rc = document.getElementById("av-reset-combos");
+    if (rc) rc.remove();
+  }
   function setStatus(msg, kind) {
     var s = $("av-status");
     s.textContent = msg || "";
@@ -190,9 +203,7 @@
   // the PREVIOUS decision point — clear them, offer an undo.
   function onOutcomeApplied(info) {
     $("av-drop").classList.remove("has-img");
-    $("av-result").style.display = "none";
-    var empty = $("av-result-empty");
-    if (empty) empty.style.display = "";
+    clearResult();
     var s = $("av-status");
     s.className = "av-status";
     s.textContent = info.finished
@@ -287,6 +298,7 @@
         ((typeof eng.unavailableReason === "function" && eng.unavailableReason()) || ""), "err");
       return;
     }
+    clearResult();   // new screenshot ⇒ any previous recommendation is stale
     setStatus("Reading " + (sourceNoun || "screenshot") + " with " + (eng.label || eng.name) + "…", "working");
     eng.parseScreenshot(input).then(function (parsed) {
       window.AdvisorWindow.setParsed(parsed);
@@ -423,6 +435,7 @@
     var bar = $("av-bar"), barI = $("av-bar-i");
     bar.style.display = "block"; barI.style.width = "0%";
     $("av-go").disabled = true;
+    clearResult("Calculating the recommended action…");
     setStatus(hasDP ? "Solving the exact decision model…" : "Simulating…", "working");
     function onProgress(done, total) { barI.style.width = (total ? Math.round((done / total) * 100) : 0) + "%"; }
 
@@ -440,6 +453,7 @@
             if (m.axis === "support" || !hasMC) {
               setStatus("The exact model failed" + (m.axis === "support" ? " — support-axis advice has no Monte-Carlo fallback" : "") + ": " + (dpErr && dpErr.message || dpErr), "err");
               $("av-go").disabled = false; bar.style.display = "none";
+              clearResult();
               return;
             }
             setStatus("Exact model errored; falling back to Monte Carlo…", "working");
@@ -457,6 +471,7 @@
       } catch (err) {
         console.error(err);
         setStatus("Solver error: " + (err && err.message || err), "err");
+        clearResult();
       } finally {
         $("av-go").disabled = false;
         setTimeout(function () { bar.style.display = "none"; }, 400);
@@ -541,6 +556,27 @@
         "</div>";
       cards.appendChild(c);
     });
+
+    // ---- Reset check (Shizu): a reset MAY re-roll the side nodes, so the single
+    // ranked Reset value (same-pair assumption) can't be trusted alone. Whenever
+    // reset is live (last turn, or Complete recommended) show the fresh-cut value
+    // of EVERY pair this gem could reset into, fee included.
+    var priorRc = document.getElementById("av-reset-combos");
+    if (priorRc) priorRc.remove();
+    if (result.resetCombos && result.resetCombos.length) {
+      var rcRows = result.resetCombos.map(function (cb) {
+        return '<tr><td style="padding:2px 0">' + cb.effect1 + " + " + cb.effect2 +
+          (cb.current ? ' <span style="opacity:.65">(current pair)</span>' : "") + "</td>" +
+          '<td style="text-align:right" class="ev ' + (cb.net >= 0 ? "good" : "bad") + '">' + fmtGold(cb.net) + "</td></tr>";
+      }).join("");
+      var rcBox = el("div", { id: "av-reset-combos", class: "note", style: "margin-top:8px" });
+      rcBox.innerHTML =
+        "⚠ <b>Before pressing Reset in game:</b> the ranked Reset assumes the side effects come back unchanged, " +
+        "but a reset may re-roll them — check the pair you'd accept. Net value of a fresh cut per pair " +
+        "(" + Math.round(result.resetCost || 20000).toLocaleString() + "g fee included):" +
+        '<table style="width:100%;margin-top:4px;border-collapse:collapse;font-size:12px">' + rcRows + "</table>";
+      cards.parentNode.insertBefore(rcBox, cards.nextSibling);
+    }
 
     var curVal = isFinite(result.currentValue) ? Math.round(result.currentValue).toLocaleString() + "g" : "—";
     var gpdLabel = (window.LoadoutEcon && window.LoadoutEcon.gpdLabel) ? window.LoadoutEcon.gpdLabel(market.gpd) : market.gpd;
