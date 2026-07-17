@@ -190,7 +190,9 @@
   // ---- styles ----
   function css() {
     return '<style id="pw-style">' +
-      '#av-window .pw-metabar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}' +
+      '#av-window .pw-metabar{display:flex;gap:8px 14px;flex-wrap:wrap;align-items:center;margin-bottom:10px}' +
+      // groups wrap as units — a lone "10" chip orphaned on its own line reads badly
+      '#av-window .pw-metabar .grp{display:inline-flex;gap:8px;align-items:center;white-space:nowrap}' +
       '#av-window .pw-metabar .lab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700}' +
       '#av-window .pw-frame{position:relative;max-width:420px;margin:0 auto;background:linear-gradient(180deg,#131a29 0%,#0e1420 100%);border:1px solid var(--border);outline:1px solid #39414f;outline-offset:-4px;border-radius:12px;padding:16px 14px 14px;font-family:Georgia,"Times New Roman",serif;color:#e7e9ee;box-shadow:0 10px 30px rgba(0,0,0,.45)}' +
       '#av-window .pw-title{text-align:center;font-size:22px;letter-spacing:.08em;color:#f5f7fb;margin:0 0 10px}' +
@@ -201,11 +203,15 @@
       '#av-window .pw-points{font-size:13px;color:#e7e9ee}' +
       '#av-window .pw-points .q{display:inline-flex;width:15px;height:15px;border-radius:50%;background:#2b8f7c;color:#dff6ef;font-size:10px;align-items:center;justify-content:center;margin-left:5px;font-family:sans-serif;cursor:help}' +
       '#av-window .pw-resetpill{display:block;margin:9px auto;background:#3a3f4a;border:1px solid #4a5160;border-radius:7px;color:#b9bfca;font-size:13px;padding:5px 0;width:72%;text-align:center}' +
-      '#av-window .pw-wheel{position:relative;width:300px;height:270px;margin:4px auto}' +
+      '#av-window .pw-wheel{position:relative;width:300px;height:286px;margin:4px auto}' +
       '#av-window .pw-node{position:absolute;width:96px;background:none;border:0;cursor:pointer;color:#f2f4f8;text-align:center;padding:0}' +
       '#av-window .pw-node .nm{display:block;font-size:12px;line-height:1.15;text-shadow:0 1px 3px #000;margin-top:2px}' +
-      '#av-window .pw-node .lv{display:inline-block;color:#f2c94c;font-size:13px;font-weight:700;margin-top:1px;padding:0 6px;border-radius:5px}' +
-      '#av-window .pw-node .lv:hover{background:rgba(242,201,76,.15)}' +
+      // display:table + margin auto: the badge shrink-wraps on its OWN centered line —
+      // inline-block let short names ("Chaos Points") pull it beside them instead.
+      // Explicit dark background: a bare <button> otherwise renders the UA's white
+      // chrome, which drowns the gold digits.
+      '#av-window .pw-node .lv{display:table;margin:2px auto 0;background:rgba(8,11,18,.72);border:1px solid rgba(242,201,76,.45);color:#f2c94c;font-size:13px;font-weight:700;padding:0 7px;border-radius:5px;cursor:pointer;text-shadow:0 1px 2px #000}' +
+      '#av-window .pw-node .lv:hover{background:rgba(242,201,76,.2);border-color:#f2c94c}' +
       '#av-window .pw-dial{position:absolute;inset:0;pointer-events:none;opacity:.10}' +
       '#av-window .pw-divider{border:0;border-top:1px solid #39414f;margin:8px 0 6px}' +
       '#av-window .pw-hint{text-align:center;color:#d7dbe4;font-size:13px;margin:2px 0 8px}' +
@@ -276,14 +282,14 @@
     host.innerHTML = css() +
       (unconfN ? '<div class="pw-confstrip">Parsed — <b>' + unconfN + '</b> field' + (unconfN > 1 ? "s" : "") + ' need a look; tap the highlighted ones to confirm.</div>' : "") +
       '<div class="pw-metabar">' +
-      '  <span class="lab">Rarity</span>' +
+      '<span class="grp"><span class="lab">Rarity</span>' +
       ["uncommon", "rare", "epic"].map(function (r) {
         return '<button type="button" class="mbtn' + (win.rarity === r ? " active" : "") + '" data-act="rarity" data-v="' + r + '">' + r.charAt(0).toUpperCase() + r.slice(1) + ' (' + RARITY[r].maxTurns + ')</button>';
-      }).join("") +
-      '  <span class="lab" style="margin-left:8px">Base cost</span>' +
+      }).join("") + '</span>' +
+      '<span class="grp"><span class="lab">Base cost</span>' +
       [8, 9, 10].map(function (b) {
         return '<button type="button" class="mbtn' + (c.baseCost === b ? " active" : "") + conf("config.baseCost") + '" data-act="basecost" data-v="' + b + '">' + b + '</button>';
-      }).join("") +
+      }).join("") + '</span>' +
       '</div>' +
       '<div class="pw-frame" id="pw-frame">' +
       '  <h3 class="pw-title">Processing</h3>' +

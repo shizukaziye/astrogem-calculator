@@ -51,8 +51,12 @@
 '  #tab-advisor .av-status.err{color:var(--bad)}' +
 '  #tab-advisor .av-engines{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}' +
 '  #tab-advisor .mbtn:disabled{opacity:.45;cursor:not-allowed}' +
-'  #tab-advisor .av-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:12px}' +
-'  @media(max-width:640px){#tab-advisor .av-cards{grid-template-columns:1fr}}' +
+'  #tab-advisor .av-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:12px}' +
+'  #tab-advisor .av-cols{display:flex;gap:14px;align-items:flex-start;margin-top:14px}' +
+'  #tab-advisor .av-col-l{flex:0 0 470px;max-width:470px;min-width:0}' +
+'  #tab-advisor .av-col-r{flex:1;min-width:280px;position:sticky;top:10px}' +
+'  @media(max-width:880px){#tab-advisor .av-cols{flex-direction:column}#tab-advisor .av-col-l{flex:1 1 auto;max-width:none;width:100%}#tab-advisor .av-col-r{position:static;width:100%}}' +
+'  #tab-advisor .av-result-empty{border:1px dashed var(--border);border-radius:10px;background:var(--panel2);color:var(--dim);font-size:13px;text-align:center;padding:30px 16px}' +
 '  #tab-advisor .av-card{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--panel2)}' +
 '  #tab-advisor .av-card.best{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}' +
 '  #tab-advisor .av-card .cn{font-size:15px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px}' +
@@ -81,7 +85,12 @@
 '    <img id="av-preview" class="av-preview" alt="screenshot preview">' +
 '    <div class="av-engines" id="av-engines"></div>' +
 '    <div class="av-status" id="av-status"></div>' +
-'    <div id="av-window" style="margin-top:12px"></div>' +
+'  </div>' +
+'</div>' +
+// two columns: the (thin) Processing window drives, advice fills the dead space
+'<div class="av-cols">' +
+'  <div class="av-col-l">' +
+'    <div id="av-window"></div>' +
 '    <div class="barrow" style="margin-top:12px">' +
 '      <button class="mbtn" id="av-sim2" data-on="1">Consider Complete: on</button>' +
 '      <button class="mbtn" id="av-bound" data-on="0">Roster bound: no</button>' +
@@ -91,12 +100,15 @@
 '    <div id="av-warns"></div>' +
 '    <div class="av-bar" id="av-bar"><i id="av-bar-i"></i></div>' +
 '  </div>' +
-'</div>' +
-'<div class="panel" id="av-result" style="display:none">' +
-'  <h2>Recommended action</h2>' +
-'  <p class="av-best" id="av-best-line"></p>' +
-'  <div class="av-cards" id="av-cards"></div>' +
-'  <div class="note" id="av-result-note"></div>' +
+'  <div class="av-col-r">' +
+'    <div class="av-result-empty" id="av-result-empty">Recommended action appears here.<br>Transcribe or drop a screenshot on the left, then press <b>Get advice</b>.</div>' +
+'    <div class="panel" id="av-result" style="display:none">' +
+'      <h2>Recommended action</h2>' +
+'      <p class="av-best" id="av-best-line"></p>' +
+'      <div class="av-cards" id="av-cards"></div>' +
+'      <div class="note" id="av-result-note"></div>' +
+'    </div>' +
+'  </div>' +
 '</div>' +
 '<details class="method">' +
 '  <summary>How the advice is computed</summary>' +
@@ -338,6 +350,8 @@
       " · current gem value ≈ " + curVal +
       (includeSim2 ? "" : " · Complete shown but not ranked");
     $("av-result").style.display = "block";
+    var empty = $("av-result-empty");
+    if (empty) empty.style.display = "none";
   }
 
   // ---------------- collapse toggle ----------------
