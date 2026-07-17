@@ -357,8 +357,9 @@
   // (measured on the 2026-07-16 corpus)
   function isRedAmountText(r, g, b) { var c = hsv(r, g, b); return (c.h < 20 || c.h >= 340) && c.s > 0.5 && c.v > 0.45; }
 
-  // Smooth 2x-style upscale (bilinear). Half-resolution captures (~720p crops) starve
-  // the micro-OCR — glyphs drop to ~10px; parsing at 2x restores dev-corpus scale.
+  // Smooth resample (bilinear), fractional factors in BOTH directions: f>1 upscales
+  // (half-res captures starve the micro-OCR — glyphs drop to ~10px), f<1 downscales
+  // (4K captures waste compute; interpolated point-sampling is adequate for f ≥ 0.5).
   // Bilinear (not nearest): Tesseract reads smooth edges far better than blocky ones.
   function upscaleBilinear(img, f) {
     var w = Math.round(img.width * f), h = Math.round(img.height * f);

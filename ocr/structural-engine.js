@@ -105,18 +105,43 @@
       out._debug = { panel: null };
       return out;
     }
-    // Half-resolution captures (~720p crops, measured 65% -> defaults everywhere on
-    // the 2026-07-16 corpus) starve every micro-OCR read. Re-parse at 2x: scale the
-    // raster bilinearly and carry the detection over (coords just double).
-    if (found.rect.h < 950) {
-      raster = L.upscaleBilinear(raster, 2);
+    // ---- resolution normalization ----
+    // The red→gold wheel distance is the game-UI ruler: it scales 1:1 with however
+    // the capture was rendered (720p crop, 1440p, 4K, windowed). Crop to the panel
+    // (bounds memory on huge frames), then resample so that distance equals the
+    // canonical gap every read below was calibrated at. Any resolution in, ONE
+    // effective resolution internally.
+    var CANON_GAP = 246;
+    var g0 = found.anchors
+      ? (found.anchors.gold.y - found.anchors.red.y)
+      : found.rect.h * L.SIG.GAP_RATIO;
+    var fRaw = CANON_GAP / Math.max(8, g0);
+    // snap to coarse steps: fractional factors (e.g. 1.99) interpolate EVERY row and
+    // blur thin glyphs below the chroma-mask thresholds; integer factors copy rows.
+    // Oversized captures barely need downscaling (bigger glyphs read fine — the
+    // resample exists to bound compute on 4K+), so the no-resample zone is wide.
+    var scaleF = fRaw <= 0.65 ? 0.5 : fRaw <= 1.25 ? 1 : Math.min(3, Math.round(fRaw));
+    {
+      // crop with a margin so edge regions (reroll pill, footer buttons) survive
+      var mg = 0.06;
+      var cr = {
+        x: found.rect.x - found.rect.w * mg, y: found.rect.y - found.rect.h * mg,
+        w: found.rect.w * (1 + 2 * mg), h: found.rect.h * (1 + 2 * mg)
+      };
+      // L.crop rounds+clamps the origin — mirror it so coordinate shifts stay exact
+      var ox = Math.max(0, Math.round(cr.x)), oy = Math.max(0, Math.round(cr.y));
+      raster = L.crop(raster, cr);
+      var sh2 = function (p) { return { x: (p.x - ox) * scaleF, y: (p.y - oy) * scaleF }; };
+      if (Math.abs(scaleF - 1) > 0.04) raster = L.upscaleBilinear(raster, scaleF);
+      else scaleF = 1;
       found = {
-        rect: { x: found.rect.x * 2, y: found.rect.y * 2, w: found.rect.w * 2, h: found.rect.h * 2 },
-        method: found.method + "+2x",
+        rect: {
+          x: (found.rect.x - ox) * scaleF, y: (found.rect.y - oy) * scaleF,
+          w: found.rect.w * scaleF, h: found.rect.h * scaleF
+        },
+        method: found.method + (scaleF !== 1 ? "+norm" + scaleF.toFixed(2) : ""),
         score: found.score,
-        anchors: found.anchors
-          ? { red: { x: found.anchors.red.x * 2, y: found.anchors.red.y * 2 }, gold: { x: found.anchors.gold.x * 2, y: found.anchors.gold.y * 2 } }
-          : null
+        anchors: found.anchors ? { red: sh2(found.anchors.red), gold: sh2(found.anchors.gold) } : null
       };
     }
     var panel = found.rect;
