@@ -611,7 +611,10 @@
     var t = Math.max(0, (state.maxTurns - state.currentTurn + 1)); // turns remaining incl. current
     var r = state.rerollsRemaining || 0;
     var cm = clampCm(state.processCostMultiplier || 0);
-    var excludeComplete = options.includeSim2 !== false; // mirror nested.js default
+    // includeSim2 === "Consider Complete" (the UI toggle): true/absent ⇒ Complete is
+    // RANKED. The old `!== false` read was inverted and silently excluded Complete
+    // from every ranking whenever the toggle was ON (caught by Shizu, 2026-07-17).
+    var excludeComplete = options.includeSim2 === false;
     var isFirstTurn = state.currentTurn === 1;
 
     // ---- COMPLETE ----
@@ -674,10 +677,33 @@
       rerollCost_ = rc + rch.expSpend;
     }
 
+    // ---- RESET (last turn only, per Shizu's rule) ----
+    // Reset (1/1) returns the gem to a fresh unprocessed state (all levels 1, full
+    // turns + rerolls, cost multiplier cleared) for COSTS.reset gold. Ranked only on
+    // the final turn: that's when "both Process and Complete are worse than starting
+    // over" is the live question. It wins the argmax exactly when it beats them.
+    var resetNet = -Infinity, resetScore = NaN, resetAbove = 0, resetCost_ = 0;
+    if (t === 1 && A.COSTS && A.COSTS.reset != null) {
+      var freshCfg = {
+        baseCost: config.baseCost, gemType: config.gemType,
+        willpowerLevel: 1, orderLevel: 1,
+        effect1: config.effect1, effect1Level: 1,
+        effect2: config.effect2, effect2Level: 1
+      };
+      var freshRerolls = solver.maxTurns === 5 ? 1 : solver.maxTurns === 7 ? 2 : 3;
+      var freshNode = solver._node(freshCfg, solver.maxTurns, freshRerolls, 0);
+      var resetGold = A.COSTS.reset;   // the reset itself is paid gold even roster-bound
+      resetNet = -resetGold + freshNode.v;
+      resetScore = freshNode.expScore;
+      resetAbove = freshNode.pAbove;
+      resetCost_ = resetGold + freshNode.expSpend;
+    }
+
     var actions = [
       { name: "Process", value: processNet, expectedScore: processScore, expectedCost: processCost_, aboveBaselineOdds: processAbove, description: "Process the gem with the current outcomes" },
       { name: "Reroll", value: rerollNet, expectedScore: rerollScore, expectedCost: rerollCost_, aboveBaselineOdds: rerollAbove, description: "Reroll to get new outcomes" },
-      { name: "Complete", value: excludeComplete ? -Infinity : completeNet, expectedScore: curScore, expectedCost: 0, aboveBaselineOdds: completeAbove, description: "Complete and keep the current gem" }
+      { name: "Complete", value: excludeComplete ? -Infinity : completeNet, expectedScore: curScore, expectedCost: 0, aboveBaselineOdds: completeAbove, description: "Complete and keep the current gem" },
+      { name: "Reset", value: resetNet, expectedScore: resetScore, expectedCost: resetCost_, aboveBaselineOdds: resetAbove, description: "Reset the gem to a fresh unprocessed state (once per gem)" }
     ];
     actions.sort(function (a, b) { return b.value - a.value; });
 

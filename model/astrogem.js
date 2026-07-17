@@ -131,7 +131,8 @@
   var COSTS = {
     processBase: 900,         // actual = 900 * (1 + mult/100), mult in [-100, +100]
     finalReroll: 3800,        // cost of the LAST reroll
-    fusion: 500               // gold to fuse 3 gems
+    fusion: 500,              // gold to fuse 3 gems
+    reset: 20000              // Reset (1/1): back to a fresh unprocessed gem, once per gem
   };
 
   var RARITY = {

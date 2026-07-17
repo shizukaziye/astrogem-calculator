@@ -354,7 +354,9 @@
     var pillM = pillRead.text.match(/(\d)\s*\/\s*(\d)/);
     if (pillM) {
       var pa = parseInt(pillM[1], 10), pb = parseInt(pillM[2], 10);
-      if (pa <= 4 && pb >= 1 && pb <= 4 && pa <= pb) {
+      // rerolls STACK past the denominator (reroll_increase outcomes): 3/2, 5/2…
+      // are legal — only the denominator is rarity-bounded (1 or 2)
+      if (pa <= 9 && (pb === 1 || pb === 2)) {
         out.state.rerollsShownFree = pa;
         out.state.rerollsShownDenom = pb;
         confidence.state.rerollsRemaining = 0.9;
@@ -367,7 +369,7 @@
         var digsR = tgR.filter(function (t) { return t.ch && /^[\d\/]$/.test(t.ch) && t.score >= 0.8; });
         if (digsR.length === 3 && digsR[1].ch === "/" && /^\d$/.test(digsR[0].ch) && /^\d$/.test(digsR[2].ch)) {
           var rn = parseInt(digsR[0].ch, 10), rd = parseInt(digsR[2].ch, 10);
-          if (rn <= 4 && rd >= 1 && rd <= 4 && rn <= rd) {
+          if (rn <= 9 && (rd === 1 || rd === 2)) {   // stacked counters (3/2…) are legal
             out.state.rerollsShownFree = rn;
             out.state.rerollsShownDenom = rd;
             confidence.state.rerollsRemaining = 0.85;
@@ -609,17 +611,30 @@
     // ---- effect NAMES: W/E caption OCR (white serif over art — masked) ----
     // Tall band: 2-line names ("Ally Damage / Enh.") start ~0.28·gap above center; the
     // level line begins ~+0.02·gap, so stop just above it. PSM 6: multi-line.
-    async function readEffectName(p) {
+    // The mask is SLOT-AWARE: the diamond's bright specular highlight is near-white
+    // but tinted toward the face hue (W is always green, E always blue) — excluding
+    // white-ish pixels tinted toward the known face hue keeps the highlight out of
+    // the text mask (this was most of the "Ally Damage" misreads).
+    function effectNamePred(faceHue) {
+      return function (r, g, b) {
+        var c = L.hsv(r, g, b);
+        if (!(c.v > 0.62 && c.s < 0.35)) return false;
+        if (c.s > 0.12 && hueDist(c.h, faceHue) < 45) return false;   // tinted highlight
+        return true;
+      };
+    }
+    async function readEffectName(p, faceHue) {
       var rect = { x: p.x - gap * 0.55, y: p.y - gap * 0.34, w: gap * 1.1, h: gap * 0.36 };
-      var read = await maskedOcr(rect, L.isWhiteText, { psm: 6 });
+      var read = await maskedOcr(rect, effectNamePred(faceHue), { psm: 6 });
       return { text: normText(read.text).toLowerCase().replace(/\n/g, " "), conf: read.conf };
     }
     // Most-specific patterns FIRST: "Enh." appears only in the two Ally effects, so an
     // occluded read like "Damage Enh." (a pet covering "Ally" — real case, 2026-07-16)
     // must hit Ally Damage Enh. before the generic /damage|attack/ effects get a shot.
     var EFFECT_LEX = [
-      ["Ally Damage Enh.", /ally\s*dam|damage\s*enh|dmg\s*enh/],
-      ["Ally Attack Enh.", /ally\s*at|attack\s*enh|atk\s*enh/],
+      // "Ally" OCRs as Aliy/AIly/A11y — accept fuzzed leading tokens too
+      ["Ally Damage Enh.", /a[li1|]{2}y\s*dam|ally\s*dam|damage\s*enh|dmg\s*enh/],
+      ["Ally Attack Enh.", /a[li1|]{2}y\s*at|ally\s*at|attack\s*enh|atk\s*enh/],
       ["Additional Damage", /additional|addit/],
       ["Boss Damage", /boss/],
       ["Brand Power", /brand/],
@@ -638,8 +653,8 @@
       }
       return null;
     }
-    var nmW = await readEffectName(nodes.nodeW);
-    var nmE = await readEffectName(nodes.nodeE);
+    var nmW = await readEffectName(nodes.nodeW, hueW);
+    var nmE = await readEffectName(nodes.nodeE, hueE);
     out.config.effect1 = lexEffect(nmW.text, null);
     out.config.effect2 = lexEffect(nmE.text, out.config.effect1);
     // a pool-constrained lexicon hit is strong evidence even when the raw OCR conf is

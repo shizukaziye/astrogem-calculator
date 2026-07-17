@@ -130,7 +130,8 @@
 '  <ul>' +
 '    <li><b>Process</b> applies one of the 4 on-screen outcomes (25% each, from the outcomes you confirmed), then plays on optimally.</li>' +
 '    <li><b>Reroll</b> redraws the 4 outcomes; only the <i>last</i> reroll costs 3,800g (the on-screen counter shows the free ones; the window translates). Not available on turn 1 &mdash; the game greys it out until the gem has been processed once.</li>' +
-'    <li><b>Complete</b> stops now and keeps the current gem (Turn&nbsp;1 = dismantle, value 0).</li>' +
+'    <li><b>Complete</b> stops now and keeps the current gem (Turn&nbsp;1 = dismantle, value 0). Ranked against Process/Reroll whenever the toggle is on &mdash; it wins when both are negative.</li>' +
+'    <li><b>Reset</b> (last turn only): pay 20,000g to return the gem to a fresh unprocessed state. Recommended when it beats both Process and Complete.</li>' +
 '    <li><b>P(above baseline)</b> is the probability the final gem clears your baseline under optimal play. A below-baseline gem is valued as fusion fodder, not zero.</li>' +
 '  </ul>' +
 '  <p class="note">The baseline is the S/A/B/C/D rank ladder the Grader uses (12 anchor grades); picking a character sets it one rank above your stronger 3rd-lowest gem, and sets the gold-per-1%-damage tier from combat power. On the Support axis gems are valued by party contribution (supportValue) against support-scale baselines; support advice has no Monte-Carlo fallback &mdash; if the exact model fails you get an error, never a silently mis-ranked answer.</p>' +
@@ -509,7 +510,7 @@
     var scoreLabel = sup ? "party value (support axis)" : "% dmg";
     var cards = $("av-cards");
     cards.innerHTML = "";
-    ["Process", "Reroll", "Complete"].forEach(function (name) {
+    ["Process", "Reroll", "Complete", "Reset"].forEach(function (name) {
       var a = byName[name];
       if (!a) return;
       var isBest = (a.name === best.name);
@@ -527,7 +528,7 @@
         '<div class="cn">' + name + (isBest ? ' <span class="pill">Recommended</span>' : "") + "</div>" +
         '<div class="cm">' +
           (disabled
-            ? '<div style="color:var(--dim)">Not applicable' + (name === "Complete" && includeSim2 === false ? " (not ranked)" : (name === "Reroll" ? (state.currentTurn === 1 ? " (turn 1 — process once first)" : " (no rerolls left)") : (name === "Complete" ? " (turn 1 — process once first)" : ""))) + "</div>"
+            ? '<div style="color:var(--dim)">Not applicable' + (name === "Complete" && includeSim2 === false ? " (not ranked)" : (name === "Reroll" ? (state.currentTurn === 1 ? " (turn 1 — process once first)" : " (no rerolls left)") : (name === "Complete" ? " (turn 1 — process once first)" : (name === "Reset" ? " (ranked on the last turn)" : "")))) + "</div>"
             : '<div>P(above baseline): <span class="ev">' + odds + '%</span></div>' +
               '<div>Net EV: <span class="ev ' + evClass + '">' + fmtGold(a.value) + "</span></div>" +
               scoreLine + costLine) +

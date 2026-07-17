@@ -390,14 +390,14 @@
   }
 
   // Public: rank Process / Reroll / Complete by NET expected value.
-  // options.includeSim2 (default true): when true, Complete is excluded from being
-  // chosen as the best action (mirrors the old behaviour where the advisor focuses
-  // on Process-vs-Reroll), but its computed value is still reported.
+  // options.includeSim2 === "Consider Complete" (the UI toggle): true/absent ⇒
+  // Complete is RANKED like any action; false ⇒ shown but excluded from the ranking.
+  // (The old `!== false` read was inverted and Complete could never win.)
   function evaluateActions(state, baseline, goldPerDamage, numRuns, onProgress, options) {
     numRuns = numRuns || 200;
     options = options || {};
     var currentOutcomes = state.outcomes || null;
-    var excludeComplete = options.includeSim2 !== false;
+    var excludeComplete = options.includeSim2 === false;
 
     var res = monteCarloSimulation(state, baseline, goldPerDamage, numRuns, currentOutcomes);
 

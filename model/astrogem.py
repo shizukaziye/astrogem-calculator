@@ -71,6 +71,7 @@ COSTS = {
     "processBase": 900,
     "finalReroll": 3800,
     "fusion": 500,
+    "reset": 20000,  # Reset (1/1): back to a fresh unprocessed gem, once per gem
 }
 
 RARITY = {

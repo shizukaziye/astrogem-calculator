@@ -327,7 +327,7 @@
           '<span class="ic">' + makeDiamond(outcomeStatKey(o), 22) + '</span>' + captionFor(o) + '</button>';
       }).join("") +
       '    <button type="button" class="pw-rerollpill' + conf("state.rerollsRemaining") + (win.currentTurn === 1 ? " pw-pill-off" : "") + '" data-act="rerolls" title="Rerolls — the game counts only the FREE ones here; the paid one is handled in the editor' + (win.currentTurn === 1 ? ". Greyed out on turn 1, like the game (process once first)" : "") + '">' +
-             refreshSvg() + ' ' + Math.min(freeShown, freeDenom) + ' / ' + freeDenom + '</button>' +
+             refreshSvg() + ' ' + freeShown + ' / ' + freeDenom + '</button>' +
       '  </div>' +
       '  <div class="pw-footer">' +
       '    <div class="pw-frow"><span>Processing Cost</span>' +
@@ -424,10 +424,12 @@
   function editRerolls(anchor) {
     var freeDenom = Math.max(1, maxRerolls() - 1);
     var opts = [];
-    for (var m = 0; m <= freeDenom + 1; m++) {
+    // reroll_increase outcomes STACK the counter past its denominator (3/2, 5/2…) —
+    // offer up to 9 model rerolls
+    for (var m = 0; m <= 9; m++) {
       var free = Math.max(0, m - 1);
       var label = m === 0 ? "0 <span style='opacity:.6'>(all spent)</span>"
-        : Math.min(free, freeDenom) + "/" + freeDenom + " free " + (m >= 1 ? "+ paid" : "");
+        : free + "/" + freeDenom + " free " + (m >= 1 ? "+ paid" : "");
       opts.push(optBtn(m, label, win.rerollsRemaining === m));
     }
     var body = '<div class="opts" style="flex-direction:column;align-items:stretch">' + opts.join("") + '</div>' +
