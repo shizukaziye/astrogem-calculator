@@ -296,9 +296,15 @@
         if (b) pendingCollect = { blob: b, parsed: parsed, source: sourceNoun === "shared screen" ? "share" : "upload" };
       }).catch(function () {});
       var n = window.AdvisorWindow.unconfirmedCount();
-      setStatus(n
-        ? "Parsed — " + n + " field" + (n > 1 ? "s" : "") + " highlighted below need a look."
-        : "Parsed. Double-check the window, then Get advice.", "");
+      if (parsed.ocrDegraded) {
+        // the Tesseract worker never loaded (blocked CDN / network) or crashed —
+        // text reads are guesses, every field is flagged; tell the user why
+        setStatus("Text-reading engine failed to load (network/CDN?) — values below are rough guesses from colour only. Check them all, or retry the screenshot.", "err");
+      } else {
+        setStatus(n
+          ? "Parsed — " + n + " field" + (n > 1 ? "s" : "") + " highlighted below need a look."
+          : "Parsed. Double-check the window, then Get advice.", "");
+      }
     }).catch(function (err) {
       console.error(err);
       setStatus("Could not read the " + (sourceNoun || "screenshot") + ": " + (err && err.message || err) + " — fill the window manually.", "err");

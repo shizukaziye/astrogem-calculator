@@ -98,6 +98,7 @@
   async function parseStructural(raster, ocrFn) {
     var confidence = { config: {}, state: {}, outcomes: [0, 0, 0, 0] };
     var out = { config: {}, state: {}, outcomes: [], rarity: null, confidence: confidence };
+    var ocrFails = 0;   // dead-OCR calls (worker never loaded / crashed mid-parse)
 
     var found = L.panelOrWhole(raster);
     if (!found) {
@@ -162,8 +163,11 @@
 
     function roiCrop(key) { return L.crop(raster, L.roiRect(panel, key)); }
     async function ocrText(sub, opts) {
-      try { var r = await ocrFn(sub, opts || {}); return { text: r.text || "", conf: r.conf != null ? r.conf : 0.5 }; }
-      catch (e) { return { text: "", conf: 0 }; }
+      try {
+        var r = await ocrFn(sub, opts || {});
+        if (r && r.failed) ocrFails++;   // resolved-but-dead OCR backend
+        return { text: r.text || "", conf: r.conf != null ? r.conf : 0.5 };
+      } catch (e) { ocrFails++; return { text: "", conf: 0 }; }
     }
     // masked micro-OCR: crop → chroma mask → upscale → OCR
     async function maskedOcr(rect, pred, opts) {
@@ -1005,6 +1009,19 @@
     ["willpowerLevel", "orderLevel", "effect1Level", "effect2Level", "effect1", "effect2"].forEach(function (k) {
       confidence.config[k] = (confidence.config[k] || 0) * panelConf;
     });
+
+    // ---- HONESTY GUARD: degraded OCR must never look confident ----
+    // If the OCR backend died (worker failed to load, CDN blocked, crash), the
+    // parse silently completes on color/template reads alone and the text-derived
+    // fields become pool-plausible GUESSES. Measured in the wild: effect names
+    // invented at conf ~0.8 in 1-second parses. Cap EVERYTHING at 0.5 so the whole
+    // window flags "confirm me", and mark the parse so the UI can say why.
+    if (ocrFails >= 3) {
+      out.ocrDegraded = true;
+      Object.keys(confidence.config).forEach(function (k) { confidence.config[k] = Math.min(confidence.config[k] || 0, 0.5); });
+      Object.keys(confidence.state).forEach(function (k) { confidence.state[k] = Math.min(confidence.state[k] || 0, 0.5); });
+      for (var ci = 0; ci < confidence.outcomes.length; ci++) confidence.outcomes[ci] = Math.min(confidence.outcomes[ci] || 0, 0.5);
+    }
     return out;
   }
 
@@ -1028,6 +1045,9 @@
   function getWorker() {
     if (!_workerP) {
       _workerP = window.Tesseract.createWorker("eng", 1, { logger: function () {} });
+      // a failed creation (CDN worker/wasm/traineddata blocked or flaky) must not
+      // stick: null the cache so the NEXT call retries instead of failing forever
+      _workerP.catch(function () { _workerP = null; });
     }
     return _workerP;
   }
@@ -1042,8 +1062,15 @@
   }
   var _ocrQueue = Promise.resolve();
   function browserOcr(raster, opts) {
-    // serialize on one worker; set per-call params (whitelist / psm)
-    _ocrQueue = _ocrQueue.then(function () {
+    // Serialize on one worker; set per-call params (whitelist / psm).
+    // RESILIENCE (this was a production bug): the queue must never carry a
+    // rejection forward — one failed worker init used to poison every later OCR
+    // call for the session, so parses "succeeded" in ~1s with pool-guessed effect
+    // names at ~0.8 confidence. Now each call starts from a settled queue, a
+    // failure resolves to {failed:true} (counted by the engine's honesty guard,
+    // which caps ALL confidences at 0.5), and the dead worker is discarded so
+    // the next parse retries from scratch.
+    var call = _ocrQueue.catch(function () {}).then(function () {
       return getWorker().then(function (w) {
         var params = { tessedit_pageseg_mode: String(opts.psm || 6), user_defined_dpi: "150" };
         params.tessedit_char_whitelist = opts.whitelist || "";
@@ -1052,9 +1079,13 @@
         }).then(function (res) {
           return { text: (res && res.data && res.data.text) || "", conf: ((res && res.data && res.data.confidence) || 40) / 100 };
         });
+      }).catch(function () {
+        _workerP = null;   // worker is dead — force a fresh createWorker next time
+        return { text: "", conf: 0, failed: true };
       });
     });
-    return _ocrQueue;
+    _ocrQueue = call;
+    return call;
   }
 
   StructuralEngine.prototype.parseScreenshot = function (input) {
@@ -1064,6 +1095,7 @@
     }).then(function (raw) {
       var snapped = self.constraintSnap(raw);
       snapped.confidence = raw.confidence ? snapped.confidence : undefined;
+      if (raw.ocrDegraded) snapped.ocrDegraded = true;
       return snapped;
     });
   };
