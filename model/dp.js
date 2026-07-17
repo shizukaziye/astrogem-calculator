@@ -12,7 +12,8 @@
  *   W(config,t,r,cm) = E_{4 outcomes O}[ max(
  *       COMPLETE: gemValue(config),
  *       PROCESS (t>=1): -procCost(cm) + (1/4)·Σ_{o∈O} W(apply(config,o), t-1, r_o, cm_o),
- *       REROLL  (r>=1): -rerollCost(r) + W(config, t, r-1, cm)
+ *       REROLL  (r>=1, t<maxTurns): -rerollCost(r) + W(config, t, r-1, cm)
+ *                (the game greys the reroll out until the gem has been processed once)
  *   )]
  *
  * COMPLETE and REROLL do not depend on WHICH 4 are drawn; only PROCESS does, via
@@ -544,9 +545,10 @@
     var complete = (t < this.maxTurns) ? this.gemValue(config) : 0;
     var scTerminal = this._score(config);
 
-    // REROLL does not depend on the draw.
+    // REROLL does not depend on the draw. Gated on having processed at least once
+    // (t < maxTurns): the game greys the reroll out on a fresh gem.
     var reroll = -Infinity, rerollRec = null;
-    if (r >= 1) {
+    if (r >= 1 && t < this.maxTurns) {
       rerollRec = this._node(config, t, r - 1, cm);
       reroll = -this.rerollCost(r) + rerollRec.v;
     }
@@ -659,13 +661,11 @@
     }
 
     // ---- REROLL ----
-    // Turn 1 CAN reroll: the game shows the "View Other Items" counter on an unprocessed
-    // gem, and the first two are free (only the last costs finalReroll). The turn-1 rule
-    // is that you cannot COMPLETE ("Available after processing 1 time"), which is handled
-    // above — it never applied to rerolling. This mirrors W()/chooseAction, which have
-    // always gated reroll on `r >= 1` alone.
+    // Turn 1 CANNOT reroll: the counter is visible on a fresh gem but the button is
+    // greyed out until the gem has been processed once (confirmed in-game by Shizu,
+    // 2026-07-17 — this corrects an earlier wrong reading). Mirrors W()/chooseAction.
     var rerollNet = -Infinity, rerollScore = NaN, rerollCost_ = 0, rerollAbove = 0;
-    if (r >= 1 && t >= 1) {
+    if (r >= 1 && t >= 1 && !isFirstTurn) {
       var rc = rb ? 0 : rerollCost(r);
       var rch = solver._node(config, t, r - 1, cm);
       rerollNet = -rc + rch.v;
@@ -773,9 +773,9 @@
       if (cnt > 0) process = -pc + sumV / cnt;
     }
 
-    // REROLL
+    // REROLL (illegal on a fresh gem: t === maxTurns)
     var reroll = -Infinity;
-    if (r >= 1 && t >= 1) {
+    if (r >= 1 && t >= 1 && t < solver.maxTurns) {
       reroll = -solver.rerollCost(r) + solver.W(config, t, r - 1, cm);
     }
 

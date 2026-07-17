@@ -228,6 +228,8 @@
       '#av-window .pw-sub2{color:#c8cdd8;font-size:10.5px}' +
       '#av-window .pw-dim{color:#8a93a5;font-style:italic}' +
       '#av-window .pw-rerollpill{align-self:center;display:inline-flex;gap:5px;align-items:center;background:#2c3240;border:1px solid #454c5c;border-radius:8px;color:#e7e9ee;font-size:13px;padding:5px 8px;cursor:pointer;font-variant-numeric:tabular-nums}' +
+      // turn 1: the game shows the counter greyed out (reroll locked until one process)
+      '#av-window .pw-rerollpill.pw-pill-off{opacity:.45}' +
       '#av-window .pw-footer{margin-top:10px;font-size:14px}' +
       '#av-window .pw-frow{display:flex;justify-content:space-between;align-items:center;padding:4px 2px;border-top:1px solid #232a38}' +
       '#av-window .pw-frow .v{display:inline-flex;gap:6px;align-items:center;font-variant-numeric:tabular-nums}' +
@@ -324,7 +326,7 @@
         return '<button type="button" class="pw-orow' + conf("outcomes." + i) + '" data-act="outcome" data-i="' + i + '">' +
           '<span class="ic">' + makeDiamond(outcomeStatKey(o), 22) + '</span>' + captionFor(o) + '</button>';
       }).join("") +
-      '    <button type="button" class="pw-rerollpill' + conf("state.rerollsRemaining") + '" data-act="rerolls" title="Rerolls — the game counts only the FREE ones here; the paid one is handled in the editor">' +
+      '    <button type="button" class="pw-rerollpill' + conf("state.rerollsRemaining") + (win.currentTurn === 1 ? " pw-pill-off" : "") + '" data-act="rerolls" title="Rerolls — the game counts only the FREE ones here; the paid one is handled in the editor' + (win.currentTurn === 1 ? ". Greyed out on turn 1, like the game (process once first)" : "") + '">' +
              refreshSvg() + ' ' + Math.min(freeShown, freeDenom) + ' / ' + freeDenom + '</button>' +
       '  </div>' +
       '  <div class="pw-footer">' +

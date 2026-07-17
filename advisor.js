@@ -122,7 +122,7 @@
 '  <p>Each option is scored by an <b>exact decision model</b> (a Bellman dynamic program): the model computes, in closed form, the <i>optimal</i> expected outcome of every line of play to the end of the cut &mdash; assuming you keep playing optimally afterward. The number reported per option is <b>net expected gold</b> = expected final gem value &minus; the processing/reroll gold you&rsquo;d still spend from here on.</p>' +
 '  <ul>' +
 '    <li><b>Process</b> applies one of the 4 on-screen outcomes (25% each, from the outcomes you confirmed), then plays on optimally.</li>' +
-'    <li><b>Reroll</b> redraws the 4 outcomes; only the <i>last</i> reroll costs 3,800g (the on-screen counter shows the free ones; the window translates).</li>' +
+'    <li><b>Reroll</b> redraws the 4 outcomes; only the <i>last</i> reroll costs 3,800g (the on-screen counter shows the free ones; the window translates). Not available on turn 1 &mdash; the game greys it out until the gem has been processed once.</li>' +
 '    <li><b>Complete</b> stops now and keeps the current gem (Turn&nbsp;1 = dismantle, value 0).</li>' +
 '    <li><b>P(above baseline)</b> is the probability the final gem clears your baseline under optimal play. A below-baseline gem is valued as fusion fodder, not zero.</li>' +
 '  </ul>' +
@@ -443,7 +443,7 @@
         '<div class="cn">' + name + (isBest ? ' <span class="pill">Recommended</span>' : "") + "</div>" +
         '<div class="cm">' +
           (disabled
-            ? '<div style="color:var(--dim)">Not applicable' + (name === "Complete" && includeSim2 === false ? " (not ranked)" : (name === "Reroll" ? " (no rerolls left)" : (name === "Complete" ? " (turn 1 — process once first)" : ""))) + "</div>"
+            ? '<div style="color:var(--dim)">Not applicable' + (name === "Complete" && includeSim2 === false ? " (not ranked)" : (name === "Reroll" ? (state.currentTurn === 1 ? " (turn 1 — process once first)" : " (no rerolls left)") : (name === "Complete" ? " (turn 1 — process once first)" : ""))) + "</div>"
             : '<div>P(above baseline): <span class="ev">' + odds + '%</span></div>' +
               '<div>Net EV: <span class="ev ' + evClass + '">' + fmtGold(a.value) + "</span></div>" +
               scoreLine + costLine) +
