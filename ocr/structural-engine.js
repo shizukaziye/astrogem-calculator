@@ -1007,7 +1007,46 @@
         if (Math.abs(dW - dE) < 12) oconf -= 0.35;   // near-tie: same-family effects
       }
 
-      if (/maintain|state\s*maint/.test(cap)) {
+      // GREY cells are exactly two candidates: "Processing Cost ±100%" and
+      // "Processing State Maintained" — both captions render DIM GREY, which the
+      // white-text OCR half-misses (live: −100% cells read as +100% when the thin
+      // '−' dropped, or as do_nothing when the caption missed entirely). Decide by
+      // TEMPLATE: a '1','0','0' digit run under a grey mask = the cost cell, and
+      // the sign is the box left of the run classified by SHAPE — the '−' bar is
+      // short and wide, geometrically unlike '+'.
+      var greyCost = null;
+      if (icls === "grey") {
+        var greyPred = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.32 && c.v > 0.42; };
+        // dedicated dim-grey OCR: dilate + ×4 (the standard caption pass only gets ×2
+        // and misses most of the grey text — 4 live −100% cells parsed as do_nothing)
+        var gSub = L.crop(raster, capRect);
+        var gRead2 = await ocrText(upscale(dilateDark(L.chromaMask(gSub, greyPred)), 3), { psm: 6 });
+        var gTxt = normText(gRead2.text).toLowerCase();
+        // cost evidence: "100"-ish in either OCR, or a '0','0' template pair (round
+        // dim glyphs match '0' well even when '1'/'−' merge away)
+        var zeroPair = false;
+        if (GLYPHS) {
+          var tgC = templateGlyphs(capRect, greyPred);
+          if (tgC) {
+            for (var gi = 0; gi + 1 < tgC.length; gi++) {
+              if (tgC[gi].ch === "0" && tgC[gi + 1].ch === "0" && tgC[gi].score >= 0.72 && tgC[gi + 1].score >= 0.72) zeroPair = true;
+            }
+          }
+        }
+        var costish = /1\s*[o0]\s*[o0]|[cjg]ost/.test(gTxt) || /1\s*[o0]\s*[o0]/.test(cap) || zeroPair;
+        var maintainish = /maintain|tained/.test(gTxt) || /maintain|state\s*maint/.test(cap);
+        if (costish && !maintainish) {
+          // SIGN: a '+' is fat and survives dim OCR; the thin '−' is what drops.
+          // '+' anywhere ⇒ +100; cost-confirmed with no '+' ⇒ −100, kept flagged.
+          var plusSeen = /\+/.test(gTxt) || /\+/.test(cap);
+          greyCost = { neg: !plusSeen, conf: plusSeen ? 0.85 : 0.7 };
+        }
+      }
+
+      if (greyCost) {
+        o = { type: "change_gold_cost", change: greyCost.neg ? -100 : 100 };
+        oconf += greyCost.conf;
+      } else if (/maintain|state\s*maint/.test(cap)) {
         // "Processing State Maintained" — the literal do-nothing outcome
         o = { type: "do_nothing" };
         oconf += Math.min(0.9, capRead.conf + 0.3);
