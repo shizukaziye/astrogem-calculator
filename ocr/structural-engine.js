@@ -347,22 +347,34 @@
       var read = await maskedOcr(rect, L.isWhiteText, { psm: 7 });
       return { text: normText(read.text).toLowerCase(), conf: read.conf };
     }
+    // Most-specific patterns FIRST: "Enh." appears only in the two Ally effects, so an
+    // occluded read like "Damage Enh." (a pet covering "Ally" — real case, 2026-07-16)
+    // must hit Ally Damage Enh. before the generic /damage|attack/ effects get a shot.
     var EFFECT_LEX = [
-      ["Attack Power", /atk|attack/],
+      ["Ally Damage Enh.", /ally\s*dam|damage\s*enh|dmg\s*enh/],
+      ["Ally Attack Enh.", /ally\s*at|attack\s*enh|atk\s*enh/],
       ["Additional Damage", /additional|addit/],
       ["Boss Damage", /boss/],
       ["Brand Power", /brand/],
-      ["Ally Damage Enh.", /ally\s*d|allyd/],
-      ["Ally Attack Enh.", /ally\s*a|allya/]
+      ["Attack Power", /atk|attack/]
     ];
-    function lexEffect(t) {
-      for (var i = 0; i < EFFECT_LEX.length; i++) if (EFFECT_LEX[i][1].test(t)) return EFFECT_LEX[i][0];
+    // Only effects legal for the gem's base cost are candidates (the cost-9 pool has no
+    // Additional Damage/Brand Power — kills a whole class of misreads); `avoid` keeps
+    // one slot's confident read from being duplicated into the other.
+    var poolNames = (ENGINE_API.EFFECT_POOLS && ENGINE_API.EFFECT_POOLS[out.config.baseCost]) || null;
+    function lexEffect(t, avoid) {
+      for (var i = 0; i < EFFECT_LEX.length; i++) {
+        var name = EFFECT_LEX[i][0];
+        if (poolNames && poolNames.indexOf(name) === -1) continue;
+        if (avoid && name === avoid) continue;
+        if (EFFECT_LEX[i][1].test(t)) return name;
+      }
       return null;
     }
     var nmW = await readEffectName(nodes.nodeW);
     var nmE = await readEffectName(nodes.nodeE);
-    out.config.effect1 = lexEffect(nmW.text);
-    out.config.effect2 = lexEffect(nmE.text);
+    out.config.effect1 = lexEffect(nmW.text, null);
+    out.config.effect2 = lexEffect(nmE.text, out.config.effect1);
     confidence.config.effect1 = out.config.effect1 ? Math.min(0.92, nmW.conf + 0.3) : 0;
     confidence.config.effect2 = out.config.effect2 ? Math.min(0.92, nmE.conf + 0.3) : 0;
 

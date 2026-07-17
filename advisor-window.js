@@ -40,6 +40,12 @@
   var STAT_STYLE = {
     willpower:            { g1: "#c0392b", g2: "#e0533f", label: "Willpower Efficiency" },
     points:               { g1: "#c98a2e", g2: "#e0a83f", label: "Points" },
+    // In-game, the side diamonds are colored by SLOT, not by effect (verified on
+    // Shizu's rare frame 2026-07-16: Atk. Power rendered green as the LEFT effect on
+    // the epic cut but blue as the RIGHT effect on the rare one). W = green, E = blue.
+    slotW:                { g1: "#4a9e3f", g2: "#6ab84f" },
+    slotE:                { g1: "#2f7fd0", g2: "#3f9be0" },
+    // effect-name colors remain only as picker swatches
     "Attack Power":       { g1: "#4a9e3f", g2: "#6ab84f" },
     "Boss Damage":        { g1: "#2f7fd0", g2: "#3f9be0" },
     "Additional Damage":  { g1: "#b5722a", g2: "#d98f35", placeholder: true },
@@ -162,12 +168,11 @@
     return c.effect2;
   }
   function outcomeStatKey(o) {
-    var c = win.config;
     if (!o || o.type === "do_nothing" || o.type === "reroll_increase" || o.type === "change_gold_cost") return "grey";
     if (o.target === "willpower") return "willpower";
     if (o.target === "order") return "points";
-    if (o.target === "effect1") return statKey(c.effect1);
-    if (o.target === "effect2") return statKey(c.effect2);
+    if (o.target === "effect1") return "slotW";   // slot color, like the game
+    if (o.target === "effect2") return "slotE";
     return "grey";
   }
   function captionFor(o) {
@@ -308,8 +313,8 @@
       '      <path d="M150 16 v20 M150 228 v20 M34 132 h20 M246 132 h20" stroke="#8892a3" stroke-width="1.5"/>' +
       '    </svg>' +
       wheelNode("N", "willpower", "Willpower Efficiency", c.willpowerLevel, "", "pw-noedit-n", "config.willpowerLevel") +
-      wheelNode("W", statKey(c.effect1), c.effect1, "Lv. " + c.effect1Level, "effect1", "config.effect1", "config.effect1Level") +
-      wheelNode("E", statKey(c.effect2), c.effect2, "Lv. " + c.effect2Level, "effect2", "config.effect2", "config.effect2Level") +
+      wheelNode("W", "slotW", c.effect1, "Lv. " + c.effect1Level, "effect1", "config.effect1", "config.effect1Level") +
+      wheelNode("E", "slotE", c.effect2, "Lv. " + c.effect2Level, "effect2", "config.effect2", "config.effect2Level") +
       wheelNode("S", "points", (c.gemType === "chaos" ? "Chaos" : "Order") + " Points", c.orderLevel, "gemtype", "config.gemType2", "config.orderLevel") +
       '  </div>' +
       '  <hr class="pw-divider">' +
