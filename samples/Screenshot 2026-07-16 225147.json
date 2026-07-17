@@ -1,0 +1,28 @@
+{
+  "_note": "Multiplier PERSISTS across turns (still 1,800 on the turn after it applied) - confirms the accumulate-don't-reset model semantics.",
+  "config": {
+    "baseCost": 8,
+    "gemType": "chaos",
+    "willpowerLevel": 2,
+    "orderLevel": 1,
+    "effect1": "Ally Damage Enh.",
+    "effect1Level": 1,
+    "effect2": "Attack Power",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 3,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 1800,
+    "processCostMultiplier": 100,
+    "totalGoldSpent": 2700,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "lower_effect", "target": "effect2", "amount": 1 },
+    { "type": "raise_effect", "target": "order", "amount": 1 },
+    { "type": "change_side_option", "target": "effect1" },
+    { "type": "raise_effect", "target": "willpower", "amount": 2 }
+  ]
+}

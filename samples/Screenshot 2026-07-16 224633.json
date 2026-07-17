@@ -1,0 +1,28 @@
+{
+  "_note": "Same turn-7 state as 224627 after spending the FREE reroll: the reroll pill is replaced by a gold 'Charge' button (pay 3,800g for the extra reroll). rerollsRemaining=1 = the unspent paid one.",
+  "config": {
+    "baseCost": 9,
+    "gemType": "chaos",
+    "willpowerLevel": 2,
+    "orderLevel": 1,
+    "effect1": "Ally Damage Enh.",
+    "effect1Level": 5,
+    "effect2": "Boss Damage",
+    "effect2Level": 5
+  },
+  "state": {
+    "currentTurn": 7,
+    "maxTurns": 7,
+    "rerollsRemaining": 1,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 5400,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "lower_effect", "target": "effect2", "amount": 1 },
+    { "type": "raise_effect", "target": "willpower", "amount": 1 },
+    { "type": "raise_effect", "target": "order", "amount": 1 },
+    { "type": "raise_effect", "target": "order", "amount": 2 }
+  ]
+}

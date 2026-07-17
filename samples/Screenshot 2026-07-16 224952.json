@@ -1,0 +1,27 @@
+{
+  "config": {
+    "baseCost": 8,
+    "gemType": "chaos",
+    "willpowerLevel": 4,
+    "orderLevel": 5,
+    "effect1": "Additional Damage",
+    "effect1Level": 1,
+    "effect2": "Brand Power",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 6,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 4500,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "reroll_increase", "change": 1 },
+    { "type": "change_gold_cost", "change": 100 },
+    { "type": "raise_effect", "target": "effect1", "amount": 3 },
+    { "type": "change_gold_cost", "change": -100 }
+  ]
+}

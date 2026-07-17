@@ -1,0 +1,27 @@
+{
+  "config": {
+    "baseCost": 8,
+    "gemType": "chaos",
+    "willpowerLevel": 3,
+    "orderLevel": 5,
+    "effect1": "Attack Power",
+    "effect1Level": 1,
+    "effect2": "Ally Damage Enh.",
+    "effect2Level": 5
+  },
+  "state": {
+    "currentTurn": 7,
+    "maxTurns": 9,
+    "rerollsRemaining": 2,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 5400,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "willpower", "amount": 1 },
+    { "type": "reroll_increase", "change": 1 },
+    { "type": "raise_effect", "target": "effect1", "amount": 4 },
+    { "type": "lower_effect", "target": "order", "amount": 1 }
+  ]
+}

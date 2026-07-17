@@ -1,0 +1,28 @@
+{
+  "_note": "Turn-6 state of 224952 after one free reroll (pill 1/2). Outcome 2 is 'Willpower Efficiency -1 v' - a LOWER on the red willpower icon (red amount + red arrow on a red face).",
+  "config": {
+    "baseCost": 8,
+    "gemType": "chaos",
+    "willpowerLevel": 4,
+    "orderLevel": 5,
+    "effect1": "Additional Damage",
+    "effect1Level": 1,
+    "effect2": "Brand Power",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 6,
+    "maxTurns": 9,
+    "rerollsRemaining": 2,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 4500,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "change_side_option", "target": "effect2" },
+    { "type": "lower_effect", "target": "willpower", "amount": 1 },
+    { "type": "change_gold_cost", "change": 100 },
+    { "type": "raise_effect", "target": "effect1", "amount": 1 }
+  ]
+}

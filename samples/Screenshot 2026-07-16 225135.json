@@ -1,0 +1,28 @@
+{
+  "_note": "First 'View Other Items +2 times' (reroll_increase change 2).",
+  "config": {
+    "baseCost": 8,
+    "gemType": "chaos",
+    "willpowerLevel": 1,
+    "orderLevel": 1,
+    "effect1": "Ally Damage Enh.",
+    "effect1Level": 1,
+    "effect2": "Attack Power",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 1,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "change_gold_cost", "change": 100 },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
+    { "type": "raise_effect", "target": "effect1", "amount": 1 },
+    { "type": "reroll_increase", "change": 2 }
+  ]
+}

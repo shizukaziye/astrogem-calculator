@@ -1,0 +1,28 @@
+{
+  "_note": "First do_nothing sample: the caption reads 'Processing State Maintained' with a grey icon.",
+  "config": {
+    "baseCost": 8,
+    "gemType": "chaos",
+    "willpowerLevel": 4,
+    "orderLevel": 4,
+    "effect1": "Additional Damage",
+    "effect1Level": 4,
+    "effect2": "Attack Power",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 8,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 6300,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
+    { "type": "do_nothing" },
+    { "type": "raise_effect", "target": "willpower", "amount": 1 },
+    { "type": "raise_effect", "target": "effect2", "amount": 2 }
+  ]
+}

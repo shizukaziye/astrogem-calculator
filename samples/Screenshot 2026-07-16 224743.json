@@ -1,0 +1,28 @@
+{
+  "_note": "Same turn-6 state as 224735 after ONE free reroll: pill shows 1/2 => model rerollsRemaining 2 (1 free + the paid one).",
+  "config": {
+    "baseCost": 8,
+    "gemType": "chaos",
+    "willpowerLevel": 3,
+    "orderLevel": 4,
+    "effect1": "Attack Power",
+    "effect1Level": 1,
+    "effect2": "Ally Damage Enh.",
+    "effect2Level": 5
+  },
+  "state": {
+    "currentTurn": 6,
+    "maxTurns": 9,
+    "rerollsRemaining": 2,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 4500,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "change_gold_cost", "change": 100 },
+    { "type": "raise_effect", "target": "willpower", "amount": 2 },
+    { "type": "raise_effect", "target": "effect1", "amount": 1 },
+    { "type": "raise_effect", "target": "order", "amount": 1 }
+  ]
+}

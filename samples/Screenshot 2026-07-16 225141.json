@@ -1,0 +1,28 @@
+{
+  "_note": "The turn-1 'Processing Cost +100%' outcome was applied: footer now reads 1,800 (multiplier +100).",
+  "config": {
+    "baseCost": 8,
+    "gemType": "chaos",
+    "willpowerLevel": 1,
+    "orderLevel": 1,
+    "effect1": "Ally Damage Enh.",
+    "effect1Level": 1,
+    "effect2": "Attack Power",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 2,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 1800,
+    "processCostMultiplier": 100,
+    "totalGoldSpent": 900,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "willpower", "amount": 1 },
+    { "type": "raise_effect", "target": "effect1", "amount": 2 },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
+    { "type": "raise_effect", "target": "effect1", "amount": 3 }
+  ]
+}

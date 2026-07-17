@@ -1,0 +1,28 @@
+{
+  "_note": "Charge button (both free rerolls spent) => model rerollsRemaining 1 (the paid one).",
+  "config": {
+    "baseCost": 8,
+    "gemType": "chaos",
+    "willpowerLevel": 3,
+    "orderLevel": 5,
+    "effect1": "Additional Damage",
+    "effect1Level": 1,
+    "effect2": "Brand Power",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 7,
+    "maxTurns": 9,
+    "rerollsRemaining": 1,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 5400,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "lower_effect", "target": "willpower", "amount": 1 },
+    { "type": "raise_effect", "target": "willpower", "amount": 1 },
+    { "type": "raise_effect", "target": "effect1", "amount": 1 },
+    { "type": "raise_effect", "target": "effect1", "amount": 2 }
+  ]
+}
