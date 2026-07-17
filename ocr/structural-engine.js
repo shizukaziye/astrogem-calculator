@@ -230,9 +230,10 @@
     // bitmapSim's mean-abs-diff is dominated by the empty background, so every sparse
     // glyph scores ~0.7 and a narrow '1' ties a wide '7'; IoU only counts ink, so a
     // width mismatch collapses the score. Used where a box is a digit BY POSITION.
-    function iouDigit(mask, box) {
+    function iouDigit(mask, box, allowed) {
       var bm = L.glyphBitmap(mask, box), scored = [];
       Object.keys(DIGIT_ATLAS).forEach(function (k) {
+        if (allowed && allowed.indexOf(k) === -1) return;
         var t = DIGIT_ATLAS[k], inter = 0, uni = 0;
         for (var i = 0; i < bm.length; i++) {
           var a = bm[i] >= 0.5, b = t[i] >= 0.4;
@@ -602,17 +603,39 @@
             if (tgP[li].ch && /^[a-z]$/i.test(tgP[li].ch) && tgP[li].score >= 0.7) letterHits++;
           }
           if (letterHits >= 2) {
-            var digs = "", minSc = 1;
+            // CONSTRAINT PROPAGATION: the committed level reads already bound the
+            // points value (each unread node contributes 1..5), so match each digit
+            // only against the values that keep the total FEASIBLE — a dim '0' no
+            // longer loses to a lookalike '9' that would imply an impossible sum.
+            var kSum = 0, nUnk = 0;
+            for (var ki = 0; ki < 4; ki++) { if (lvFull[ki].value != null) kSum += lvFull[ki].value; else nUnk++; }
+            var loP = Math.max(4, kSum + nUnk), hiP = Math.min(20, kSum + 5 * nUnk);
+            var digs = "", minSc = 1, constrained = false;
             for (var di = 0; di < aIdx; di++) {
               var dbox = tgP[di].box, dch = null, dsc = 0;
+              var allowed = null;
+              if (aIdx === 2) {
+                if (di === 0) allowed = ["1", "2"];   // two-digit pts is 10..20
+                else {
+                  allowed = [];
+                  var tens = digs === "2" ? 20 : 10;
+                  for (var dd = 0; dd <= 9; dd++) { if (tens + dd >= loP && tens + dd <= hiP) allowed.push(String(dd)); }
+                }
+              } else {
+                allowed = [];
+                for (var d1 = 4; d1 <= 9; d1++) { if (d1 >= loP && d1 <= hiP) allowed.push(String(d1)); }
+              }
+              if (!allowed.length) { digs = null; break; }
+              if (allowed.length < (aIdx === 2 && di === 0 ? 2 : 6)) constrained = true;
               if (dbox.w / Math.max(1, dbox.h) < 0.45) {
                 // the ONLY narrow digit is '1' — aspect alone identifies it (dim thin
                 // strokes score weak IoU against the thick averaged templates)
+                if (allowed.indexOf("1") === -1) { digs = null; break; }   // narrow but '1' infeasible → bail
                 dch = "1"; dsc = 0.6;
               } else {
-                var dm = iouDigit(tgP.mask, dbox);
+                var dm = iouDigit(tgP.mask, dbox, allowed);
                 if (out._debug) (out._debug.ptsDig = out._debug.ptsDig || []).push(
-                  dm ? dm.top3 + " w" + dbox.w + "h" + dbox.h : "nomatch");
+                  (dm ? dm.top3 : "nomatch") + " w" + dbox.w + "h" + dbox.h + " [" + allowed.join("") + "]");
                 if (dm && dm.score >= 0.3) { dch = dm.ch; dsc = dm.score; }
               }
               if (!dch) { digs = null; break; }
@@ -622,9 +645,9 @@
               var pv2 = parseInt(digs, 10);
               if (pv2 >= 4 && pv2 <= 20) {
                 ptsT = pv2;
-                // dim reads (IoU <0.5) keep checksum authority CAPPED: solved
-                // levels stay in "confirm me" territory, preserving 0-silent
-                ptsTSoft = minSc < 0.5;
+                // dim or constraint-assisted reads keep checksum authority CAPPED:
+                // solved levels stay in "confirm me" territory, preserving 0-silent
+                ptsTSoft = minSc < 0.5 || constrained;
               }
             }
           }
