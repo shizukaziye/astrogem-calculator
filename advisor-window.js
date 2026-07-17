@@ -51,7 +51,7 @@
   var RARITY_COLOR = { epic: "#b06fe0", rare: "#4f9be0", uncommon: "#5aae4a" };
 
   // ---- state ----
-  var host = null, onChangeCb = null;
+  var host = null, onChangeCb = null, onAppliedCb = null;
   var win = {
     rarity: "epic",
     config: { baseCost: 9, gemType: "chaos", willpowerLevel: 1, orderLevel: 1,
@@ -250,6 +250,9 @@
       '#av-window .pw-pop button.opt.on{border-color:var(--accent,#66c7ff);background:rgba(102,199,255,.12)}' +
       '#av-window .pw-pop button.opt:disabled{opacity:.3;cursor:default}' +
       '#av-window .pw-pop .sw{display:inline-block;width:10px;height:10px;border-radius:3px}' +
+      '#av-window .pw-pop .pfoot{display:flex;justify-content:flex-end;margin-top:9px;padding-top:9px;border-top:1px solid var(--border,#2a3142)}' +
+      '#av-window .pw-pop button.papply{border-color:var(--accent,#66c7ff);color:var(--accent,#66c7ff);font-weight:700}' +
+      '#av-window .pw-pop button.papply:hover{background:rgba(102,199,255,.14)}' +
       '@media (max-width:480px){#av-window .pw-pop{position:fixed;left:8px;right:8px;bottom:8px;min-width:0}}' +
       '</style>';
   }
@@ -425,6 +428,55 @@
     openPop(anchor, "Rerolls remaining (model units)", body,
       function (b) { win.rerollsRemaining = parseInt(b.getAttribute("data-v"), 10); markConfirmed("state.rerollsRemaining"); closePop(); render(); emit(); });
   }
+  // ---- "process this outcome" (the game chose it) ----
+  // Mirrors model/nested.js _applyProcessStep: cost multiplier ACCUMULATES (never
+  // auto-resets), reroll_increase stacks, change_side_option keeps the level and only
+  // swaps the name (the player is asked what it rolled into). Entry point: the
+  // Process button in the outcome editor — never a bare row click.
+  var lastApply = null;   // pre-apply snapshot for undo
+  function describeOutcome(o) {
+    var amt = o.amount || 1;
+    if (o.type === "raise_effect") return statDisplay(o.target) + " +" + amt + " ▲";
+    if (o.type === "lower_effect") return statDisplay(o.target) + " −" + amt + " ▼";
+    if (o.type === "change_side_option") return statDisplay(o.target) + " → effect changed";
+    if (o.type === "change_gold_cost") return "Cost " + (o.change > 0 ? "+" : "") + o.change + "%";
+    if (o.type === "reroll_increase") return "View Other Items +" + (o.change || 1);
+    return "nothing";
+  }
+  function applyChosenOutcome(i) {
+    var o = win.outcomes[i] || { type: "do_nothing" };
+    lastApply = JSON.parse(JSON.stringify(win));
+    var c = win.config, amt = o.amount || 1;
+    var pickEffect = null;
+    if (o.type === "raise_effect") {
+      if (o.target === "willpower") c.willpowerLevel = Math.min(5, c.willpowerLevel + amt);
+      else if (o.target === "order") c.orderLevel = Math.min(5, c.orderLevel + amt);
+      else if (o.target === "effect1") c.effect1Level = Math.min(5, c.effect1Level + amt);
+      else if (o.target === "effect2") c.effect2Level = Math.min(5, c.effect2Level + amt);
+    } else if (o.type === "lower_effect") {
+      if (o.target === "willpower") c.willpowerLevel = Math.max(1, c.willpowerLevel - amt);
+      else if (o.target === "order") c.orderLevel = Math.max(1, c.orderLevel - amt);
+      else if (o.target === "effect1") c.effect1Level = Math.max(1, c.effect1Level - amt);
+      else if (o.target === "effect2") c.effect2Level = Math.max(1, c.effect2Level - amt);
+    } else if (o.type === "change_side_option") {
+      pickEffect = o.target;   // level stays; the game rolled a new name — ask below
+    } else if (o.type === "change_gold_cost") {
+      win.costMult = Math.max(-100, Math.min(100, win.costMult + o.change));
+    } else if (o.type === "reroll_increase") {
+      win.rerollsRemaining = Math.min(9, win.rerollsRemaining + (o.change || 1));
+    }
+    var finished = win.currentTurn >= maxTurns();
+    win.currentTurn = Math.min(maxTurns(), win.currentTurn + 1);
+    win.outcomes = [{ type: "do_nothing" }, { type: "do_nothing" }, { type: "do_nothing" }, { type: "do_nothing" }];
+    win.unconfirmed = {};
+    normalize(); render(); emit();
+    if (onAppliedCb) try { onAppliedCb({ outcome: o, description: describeOutcome(o), turn: win.currentTurn, maxTurns: maxTurns(), finished: finished }); } catch (e) {}
+    if (pickEffect) {
+      var slotBtn = host.querySelector('[data-act="' + pickEffect + '"]');
+      editEffect(slotBtn || host.querySelector(".pw-frame"), pickEffect);
+    }
+  }
+
   function editOutcome(anchor, i) {
     var c = win.config;
     function raiseRow(target, level) {
@@ -450,8 +502,16 @@
       optBtn(JSON.stringify({ type: "reroll_increase", change: 1 }), "+1 time", false, false) +
       optBtn(JSON.stringify({ type: "reroll_increase", change: 2 }), "+2 times", false, false) + '</div></div>' +
       '<div class="grp"><div class="gl">Other</div><div class="opts">' +
-      optBtn(JSON.stringify({ type: "do_nothing" }), "— nothing", false, false) + '</div></div>';
+      optBtn(JSON.stringify({ type: "do_nothing" }), "— nothing", false, false) + '</div></div>' +
+      // Process = "the game applied THIS one": advances the turn, resets the board
+      '<div class="pfoot"><button type="button" class="opt papply" data-apply="1" ' +
+      'title="The game chose this outcome — apply it and advance to the next turn">Process ▸</button></div>';
     openPop(anchor, "Outcome " + (i + 1), body, function (b) {
+      if (b.getAttribute("data-apply")) {
+        closePop();
+        applyChosenOutcome(i);
+        return;
+      }
       try { win.outcomes[i] = JSON.parse(b.getAttribute("data-v")); } catch (e) {}
       markConfirmed("outcomes." + i);
       closePop(); render(); emit();
@@ -499,7 +559,16 @@
     init: function (hostEl, opts) {
       host = hostEl;
       onChangeCb = (opts && opts.onChange) || null;
+      onAppliedCb = (opts && opts.onApplied) || null;
       render();
+    },
+    // revert the last Process (one level deep)
+    undoApply: function () {
+      if (!lastApply) return false;
+      win = lastApply;
+      lastApply = null;
+      normalize(); render(); emit();
+      return true;
     },
     getState: function () {
       normalize();

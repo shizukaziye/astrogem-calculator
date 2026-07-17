@@ -78,6 +78,8 @@
 '  #tab-advisor .av-bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .1s}' +
 '  #tab-advisor .av-wip{background:rgba(217,83,79,.14);border:1px solid #d9534f;color:#ff9b97;border-radius:8px;padding:11px 14px;font-weight:800;letter-spacing:.05em;text-align:center;margin-bottom:14px}' +
 '  #tab-advisor .av-warn{font-size:12px;color:#e8b84a;margin-top:6px}' +
+'  #tab-advisor .linklike{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;padding:0 2px;text-decoration:underline}' +
+'  #tab-advisor .av-share{display:flex;gap:10px;align-items:center;margin-top:8px}' +
 '</style>' +
 '<div class="av-wip">⚠ DO NOT USE — WORK IN PROGRESS</div>' +
 // two balanced columns: LEFT = the cut (the lookalike window),
@@ -110,6 +112,7 @@
 '      <span class="cap">click, drop, or paste a new screenshot to replace</span>' +
 '      <input type="file" id="av-file" accept="image/*" style="display:none">' +
 '    </div>' +
+'    <div class="av-share" id="av-share"></div>' +
 '    <div class="av-engines" id="av-engines"></div>' +
 '    <div class="av-status" id="av-status"></div>' +
 '  </div>' +
@@ -174,15 +177,34 @@
     s.className = "av-status" + (kind ? " " + kind : "");
   }
 
-  // ---------------- screenshot handling ----------------
-  function onImageFile(file) {
-    if (!file || !/^image\//.test(file.type)) { setStatus("Not an image file.", "err"); return; }
-    var url = URL.createObjectURL(file);
-    if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
-    lastObjectUrl = url;
-    $("av-preview").src = url;
-    $("av-drop").classList.add("has-img");
+  // ---------------- outcome processed (via the editor's Process button) ----------------
+  // The window advanced a turn: the old screenshot and the old advice both describe
+  // the PREVIOUS decision point — clear them, offer an undo.
+  function onOutcomeApplied(info) {
+    $("av-drop").classList.remove("has-img");
+    $("av-result").style.display = "none";
+    var empty = $("av-result-empty");
+    if (empty) empty.style.display = "";
+    var s = $("av-status");
+    s.className = "av-status";
+    s.textContent = info.finished
+      ? "Final turn processed — the cut is finished. "
+      : "Processed: " + info.description + " — now turn " + info.turn + "/" + info.maxTurns +
+        ". Read the next screen or press Get advice. ";
+    var u = el("button", { class: "linklike", type: "button" }, "Undo");
+    u.addEventListener("click", function () {
+      if (window.AdvisorWindow.undoApply && window.AdvisorWindow.undoApply()) {
+        if ($("av-preview").src) $("av-drop").classList.add("has-img");
+        setStatus("Undone — previous turn restored.");
+      }
+    });
+    s.appendChild(u);
+  }
 
+  // ---------------- screenshot handling ----------------
+  // Shared parse path: `input` is anything the engine's toRaster accepts
+  // (File/Blob/canvas); `sourceNoun` only flavors the status line.
+  function parseWith(input, sourceNoun) {
     var eng = window.ocrGetEngine ? window.ocrGetEngine(selectedEngine) : null;
     if (!eng) { setStatus("Engine not found: " + selectedEngine, "err"); return; }
     var ok = false; try { ok = eng.isAvailable(); } catch (e) { ok = false; }
@@ -191,9 +213,8 @@
         ((typeof eng.unavailableReason === "function" && eng.unavailableReason()) || ""), "err");
       return;
     }
-
-    setStatus("Reading screenshot with " + (eng.label || eng.name) + "…", "working");
-    eng.parseScreenshot(file).then(function (parsed) {
+    setStatus("Reading " + (sourceNoun || "screenshot") + " with " + (eng.label || eng.name) + "…", "working");
+    eng.parseScreenshot(input).then(function (parsed) {
       window.AdvisorWindow.setParsed(parsed);
       var n = window.AdvisorWindow.unconfirmedCount();
       setStatus(n
@@ -201,8 +222,87 @@
         : "Parsed. Double-check the window, then Get advice.", "");
     }).catch(function (err) {
       console.error(err);
-      setStatus("Could not read the screenshot: " + (err && err.message || err) + " — fill the window manually.", "err");
+      setStatus("Could not read the " + (sourceNoun || "screenshot") + ": " + (err && err.message || err) + " — fill the window manually.", "err");
     });
+  }
+  function showPreviewBlob(blob) {
+    var url = URL.createObjectURL(blob);
+    if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
+    lastObjectUrl = url;
+    $("av-preview").src = url;
+    $("av-drop").classList.add("has-img");
+  }
+  function onImageFile(file) {
+    if (!file || !/^image\//.test(file.type)) { setStatus("Not an image file.", "err"); return; }
+    showPreviewBlob(file);
+    parseWith(file, "screenshot");
+  }
+
+  // ---------------- live screen share (one click per turn, no screenshotting) ----------------
+  // getDisplayMedia needs a user gesture and a secure context (https / localhost).
+  // First click opens the browser's share picker (pick the Lost Ark window/monitor);
+  // after that each "Read screen" click grabs ONE frame and parses it. Nothing is
+  // recorded or uploaded — the frame goes straight into the local parser.
+  var shareStream = null, shareVideo = null;
+  function shareSupported() {
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+  }
+  function renderShareBar() {
+    var bar = $("av-share");
+    if (!bar) return;
+    bar.innerHTML = "";
+    if (!shareSupported()) return;
+    if (!shareStream) {
+      var b = el("button", { class: "mbtn", type: "button",
+        title: "Pick the Lost Ark window once; then one click reads each turn" }, "🖥 Share game screen &amp; read");
+      b.addEventListener("click", startShare);
+      bar.appendChild(b);
+    } else {
+      var read = el("button", { class: "mbtn active", type: "button" }, "📷 Read screen now");
+      read.addEventListener("click", grabAndParse);
+      var stop = el("button", { class: "linklike", type: "button" }, "stop sharing");
+      stop.addEventListener("click", stopShare);
+      bar.appendChild(read);
+      bar.appendChild(stop);
+    }
+  }
+  function startShare() {
+    navigator.mediaDevices.getDisplayMedia({
+      video: { width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 5, max: 10 } },
+      audio: false
+    }).then(function (stream) {
+      shareStream = stream;
+      shareVideo = document.createElement("video");
+      shareVideo.muted = true;
+      shareVideo.srcObject = stream;
+      var track = stream.getVideoTracks()[0];
+      if (track) track.addEventListener("ended", stopShare);   // user hit the browser's Stop
+      shareVideo.addEventListener("loadeddata", function () {
+        renderShareBar();
+        grabAndParse();   // read immediately — the picker click IS the first read
+      }, { once: true });
+      return shareVideo.play();
+    }).catch(function (err) {
+      var name = err && err.name || "";
+      setStatus(name === "NotAllowedError"
+        ? "Screen share was cancelled."
+        : "Screen share failed: " + (err && err.message || err), "err");
+      stopShare();
+    });
+  }
+  function stopShare() {
+    if (shareStream) shareStream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} });
+    shareStream = null; shareVideo = null;
+    renderShareBar();
+  }
+  function grabAndParse() {
+    if (!shareVideo || !shareVideo.videoWidth) { setStatus("No frame from the shared screen yet — try again.", "err"); return; }
+    var c = document.createElement("canvas");
+    c.width = shareVideo.videoWidth;
+    c.height = shareVideo.videoHeight;
+    c.getContext("2d").drawImage(shareVideo, 0, 0);
+    try { c.toBlob(function (blob) { if (blob) showPreviewBlob(blob); }, "image/png"); } catch (e) {}
+    parseWith(c, "shared screen");
   }
 
   // ---------------- run advice ----------------
@@ -373,8 +473,9 @@
     elTab.innerHTML = tabMarkup();
 
     window.AdvisorSetup.init($("av-setup"), { onChange: function () {} });
-    window.AdvisorWindow.init($("av-window"), { onChange: function () {} });
+    window.AdvisorWindow.init($("av-window"), { onChange: function () {}, onApplied: onOutcomeApplied });
     renderEngines();
+    renderShareBar();
 
     // simple on/off toggles
     [["av-sim2", "Consider Complete: ", ["off", "on"]], ["av-bound", "Roster bound: ", ["no", "yes (free)"]]].forEach(function (t) {
@@ -427,6 +528,7 @@
       var t = window.ocrGetEngine && window.ocrGetEngine("structural");
       if (t && typeof t.disposeWorker === "function") t.disposeWorker();
       if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
+      stopShare();
     });
   }
 
