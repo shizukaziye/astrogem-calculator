@@ -719,8 +719,12 @@
       var remaining = pts - pinnedSum;
       if (freeIdx.length === 0) {
         if (remaining === 0) {
-          // all four read AND they sum to points: mutually confirmed
-          for (var bi = 0; bi < 4; bi++) conf4[bi] = Math.max(conf4[bi], ptsSoft ? 0.85 : 0.92);
+          // all four read AND they sum to points: mutually corroborated — but lift
+          // proportionally (same coordinated-error risk as the 3-known solve: a
+          // wrong pts offsetting one wrong level), so a near-guess stays flagged
+          for (var bi = 0; bi < 4; bi++) {
+            conf4[bi] = Math.max(conf4[bi], Math.min(ptsSoft ? 0.85 : 0.92, indep[bi].conf + 0.25));
+          }
         } else {
           // mismatch: one committed read (or points) is wrong — re-solve the
           // LEAST-confident read from the checksum, flag it
@@ -737,10 +741,15 @@
         if (remaining >= 1 && remaining <= 5) {
           levels[fi] = remaining;
           var minSib = Math.min.apply(null, [0, 1, 2, 3].filter(function (q) { return q !== fi; }).map(function (q) { return indep[q].conf; }));
-          if (!ptsSoft && minSib >= 0.5) {
-            conf4[fi] = 0.85;
-            for (var sb = 0; sb < 4; sb++) if (sb !== fi) conf4[sb] = Math.max(conf4[sb], 0.85);
-          } else conf4[fi] = Math.min(ptsSoft ? 0.65 : 0.9, 0.55 + minSib * 0.4);
+          if (!ptsSoft) {
+            // The checksum closing CORROBORATES the siblings — it is not proof. A
+            // wrong pts plus one wrong level can cohere (seen live: pts '8'→'6'
+            // with wp '3'→'1' promoted a 0.52 willpower read to confident). Lift
+            // each sibling proportionally to its OWN evidence: a near-guess
+            // (<0.55) stays under the 0.8 flag threshold no matter what.
+            for (var sb = 0; sb < 4; sb++) if (sb !== fi) conf4[sb] = Math.max(conf4[sb], Math.min(0.88, indep[sb].conf + 0.25));
+            conf4[fi] = Math.min(0.85, 0.5 + minSib * 0.5);
+          } else conf4[fi] = Math.min(0.65, 0.55 + minSib * 0.4);
         } else { levels[fi] = indep[fi].v != null ? indep[fi].v : 1; conf4[fi] = 0.3; }
       } else {
         // ≥2 unknowns: enumerate their assignments summing to `remaining`, pick the

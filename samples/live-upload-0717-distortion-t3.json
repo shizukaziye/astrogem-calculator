@@ -1,0 +1,42 @@
+{
+  "_note": "PROMOTED from the collection flywheel (record mromx8qy, Shizu upload 2026-07-17). Parser SILENTLY misread willpowerLevel 1@conf0.84 (truth 3, user-corrected) - coordinated pts+wp misread the checksum could not catch.",
+  "config": {
+    "baseCost": 9,
+    "gemType": "chaos",
+    "willpowerLevel": 3,
+    "orderLevel": 2,
+    "effect1": "Attack Power",
+    "effect1Level": 1,
+    "effect2": "Boss Damage",
+    "effect2Level": 2
+  },
+  "state": {
+    "currentTurn": 3,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    {
+      "type": "change_side_option",
+      "target": "effect1"
+    },
+    {
+      "type": "raise_effect",
+      "target": "effect2",
+      "amount": 2
+    },
+    {
+      "type": "raise_effect",
+      "target": "effect1",
+      "amount": 2
+    },
+    {
+      "type": "reroll_increase",
+      "change": 1
+    }
+  ]
+}
