@@ -670,6 +670,11 @@
             // longer loses to a lookalike '9' that would imply an impossible sum.
             var kSum = 0, nUnk = 0;
             for (var ki = 0; ki < 4; ki++) { if (lvFull[ki].value != null) kSum += lvFull[ki].value; else nUnk++; }
+            // The S-hint participates in the BOUNDS (never pinned): on three live
+            // misses the hint was right (1/4/4) while the header's second digit
+            // matched a lookalike — hint-tightened bounds prune those candidates,
+            // and a wrong hint only yields a wrong-but-SOFT pts the solve flags.
+            if (sHint != null && nUnk > 0) { kSum += sHint; nUnk--; }
             var loP = Math.max(4, kSum + nUnk), hiP = Math.min(20, kSum + 5 * nUnk);
             var digs = "", minSc = 1, constrained = false;
             for (var di = 0; di < aIdx; di++) {
@@ -846,8 +851,11 @@
         } else { freeIdx.forEach(function (fi2) { levels[fi2] = indep[fi2].v || 1; conf4[fi2] = 0.3; }); }
       }
     }
-    // no points (or unsolved free nodes): fall back to the committed per-node reads
+    // no points (or unsolved free nodes): fall back to the committed per-node reads;
+    // the S node takes its luminance hint instead of a blind default-to-1 (live
+    // case: hint=4 correct, pts unreadable, S defaulted to 1)
     for (var f = 0; f < 4; f++) if (levels[f] == null) {
+      if (f === 3 && sHint != null) { levels[3] = sHint; conf4[3] = 0.6; continue; }
       levels[f] = indep[f].v != null ? indep[f].v : 1;
       conf4[f] = indep[f].v == null ? 0 : Math.min(0.85, indep[f].conf);
     }

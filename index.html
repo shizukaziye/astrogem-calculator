@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,14 +8,14 @@
 <meta name="theme-color" content="#0d1017">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Astrogem Calculator">
-<meta property="og:title" content="Astrogem Calculator — Lost Ark">
+<meta property="og:title" content="Astrogem Calculator â€” Lost Ark">
 <meta property="og:description" content="Grade any character's astrogems in % damage, get cut/fuse EV verdicts, and see the cross-region leaderboard.">
 <meta property="og:url" content="https://shizukaziye.github.io/astrogem-calculator/">
 <meta property="og:image" content="https://shizukaziye.github.io/astrogem-calculator/assets/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Astrogem Calculator — Lost Ark">
+<meta name="twitter:title" content="Astrogem Calculator â€” Lost Ark">
 <meta name="twitter:description" content="Grade any character's astrogems in % damage, get cut/fuse EV verdicts, and see the cross-region leaderboard.">
 <meta name="twitter:image" content="https://shizukaziye.github.io/astrogem-calculator/assets/og-image.png">
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
@@ -53,7 +53,7 @@
   <div class="appbar">
     <div>
       <h1>Astrogem Calculator</h1>
-      <div class="tag">Lost Ark astrogem cutting — expected value, fusion fodder, and per-turn advice.</div>
+      <div class="tag">Lost Ark astrogem cutting â€” expected value, fusion fodder, and per-turn advice.</div>
     </div>
   </div>
 
@@ -85,7 +85,7 @@ var LAZY_TABS = {
     "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
     "model/nested.js?v=50", "model/dp.js?v=51",
     "ocr/engine.js?v=49", "ocr/layout.js?v=52", "ocr/glyphs.js?v=53", "ocr/tesseract-engine.js?v=41",
-    "ocr/structural-engine.js?v=58", "ocr/workersai-engine.js?v=39",
+    "ocr/structural-engine.js?v=59", "ocr/workersai-engine.js?v=39",
     "advisor-setup.js?v=41", "advisor-window.js?v=50",
     "advisor.js?v=52"
   ],
@@ -104,7 +104,7 @@ function ensureTabLoaded(name){
   if (!LAZY_TABS[name] || lazyLoaded[name]) return;
   lazyLoaded[name] = true;
   var pane = document.getElementById('tab-'+name);
-  if (pane && !pane.childNodes.length) pane.innerHTML = '<div style="padding:24px;opacity:.65">Loading…</div>'; // replaced by the module's init
+  if (pane && !pane.childNodes.length) pane.innerHTML = '<div style="padding:24px;opacity:.65">Loadingâ€¦</div>'; // replaced by the module's init
   loadScriptsSeq(LAZY_TABS[name], function(){
     // re-announce the activation for anything keyed on the event (the modules just initialized)
     try { document.dispatchEvent(new CustomEvent('tabselected', { detail: { tab: name } })); } catch (e) {}
