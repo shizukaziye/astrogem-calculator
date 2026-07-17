@@ -80,19 +80,11 @@
 '  #tab-advisor .av-warn{font-size:12px;color:#e8b84a;margin-top:6px}' +
 '</style>' +
 '<div class="av-wip">⚠ DO NOT USE — WORK IN PROGRESS</div>' +
-// two balanced columns: LEFT = the cut (drop bar + lookalike window),
-// RIGHT = your economy (character/market) + the verdict. Both stay tall, no dead corner.
+// two balanced columns: LEFT = the cut (the lookalike window),
+// RIGHT = your economy (character/market), the verdict, then the screenshot intake.
 '<div class="av-cols">' +
 '  <div class="av-col-l">' +
-'    <div class="av-drop" id="av-drop">' +
-'      <span class="hint"><b>Drop, paste, or click</b> — a Processing screenshot prefills the window. Or just tap the fields.</span>' +
-'      <img id="av-preview" class="av-preview" alt="screenshot preview">' +
-'      <span class="cap">click, drop, or paste a new screenshot to replace</span>' +
-'      <input type="file" id="av-file" accept="image/*" style="display:none">' +
-'    </div>' +
-'    <div class="av-engines" id="av-engines"></div>' +
-'    <div class="av-status" id="av-status"></div>' +
-'    <div id="av-window" style="margin-top:10px"></div>' +
+'    <div id="av-window"></div>' +
 '  </div>' +
 '  <div class="av-col-r">' +
 '    <div class="panel av-setup-panel"><div id="av-setup"></div>' +
@@ -112,6 +104,14 @@
 '      <div class="av-cards" id="av-cards"></div>' +
 '      <div class="note" id="av-result-note"></div>' +
 '    </div>' +
+'    <div class="av-drop" id="av-drop">' +
+'      <span class="hint"><b>Drop, paste, or click</b> — a Processing screenshot prefills the window. Or just tap the fields.</span>' +
+'      <img id="av-preview" class="av-preview" alt="screenshot preview">' +
+'      <span class="cap">click, drop, or paste a new screenshot to replace</span>' +
+'      <input type="file" id="av-file" accept="image/*" style="display:none">' +
+'    </div>' +
+'    <div class="av-engines" id="av-engines"></div>' +
+'    <div class="av-status" id="av-status"></div>' +
 '  </div>' +
 '</div>' +
 '<details class="method">' +
