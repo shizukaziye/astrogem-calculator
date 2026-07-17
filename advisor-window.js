@@ -339,6 +339,8 @@
     pop = null;
   }
   function openPop(anchor, title, bodyHtml, onClick) {
+    // clicking the control that opened the popover closes it (toggle)
+    if (pop && pop.anchor === anchor) { closePop(); return; }
     closePop();
     var frame = host.querySelector("#pw-frame");
     var el = document.createElement("div");
@@ -358,7 +360,7 @@
       if (b && !b.disabled) onClick(b);
       ev.stopPropagation();
     };
-    pop = { el: el };
+    pop = { el: el, anchor: anchor };
   }
   function optBtn(v, label, on, disabled, extra) {
     return '<button type="button" class="opt' + (on ? " on" : "") + '"' + (disabled ? " disabled" : "") +
