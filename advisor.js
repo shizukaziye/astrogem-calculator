@@ -42,10 +42,16 @@
   function tabMarkup() {
     return '' +
 '<style>' +
-'  #tab-advisor .av-drop{border:2px dashed var(--border);border-radius:10px;padding:10px 14px;text-align:center;color:var(--dim);cursor:pointer;transition:border-color .15s,background .15s;background:var(--panel2);font-size:13px}' +
+'  #tab-advisor .av-drop{border:2px dashed var(--border);border-radius:10px;padding:22px 14px;text-align:center;color:var(--dim);cursor:pointer;transition:border-color .15s,background .15s;background:var(--panel2);font-size:13px}' +
 '  #tab-advisor .av-drop.drag{border-color:var(--accent);background:rgba(102,199,255,.08);color:var(--text)}' +
 '  #tab-advisor .av-drop b{color:var(--text)}' +
-'  #tab-advisor .av-preview{max-width:100%;max-height:110px;border-radius:8px;border:1px solid var(--border);margin-top:8px;display:none;opacity:.85}' +
+// once a screenshot lands, it fills the zone at full column width, undimmed
+'  #tab-advisor .av-drop.has-img{padding:8px}' +
+'  #tab-advisor .av-drop.has-img .hint{display:none}' +
+'  #tab-advisor .av-preview{display:none;width:100%;height:auto;border-radius:8px;border:1px solid var(--border)}' +
+'  #tab-advisor .av-drop.has-img .av-preview{display:block}' +
+'  #tab-advisor .av-drop .cap{display:none;font-size:11px;color:var(--dim);margin-top:7px}' +
+'  #tab-advisor .av-drop.has-img .cap{display:block}' +
 '  #tab-advisor .av-status{font-size:12px;color:var(--dim);margin-top:6px;min-height:16px}' +
 '  #tab-advisor .av-status.working{color:var(--accent)}' +
 '  #tab-advisor .av-status.err{color:var(--bad)}' +
@@ -79,10 +85,11 @@
 '<div class="av-cols">' +
 '  <div class="av-col-l">' +
 '    <div class="av-drop" id="av-drop">' +
-'      <b>Drop, paste, or click</b> — a Processing screenshot prefills the window. Or just tap the fields.' +
+'      <span class="hint"><b>Drop, paste, or click</b> — a Processing screenshot prefills the window. Or just tap the fields.</span>' +
+'      <img id="av-preview" class="av-preview" alt="screenshot preview">' +
+'      <span class="cap">click, drop, or paste a new screenshot to replace</span>' +
 '      <input type="file" id="av-file" accept="image/*" style="display:none">' +
 '    </div>' +
-'    <img id="av-preview" class="av-preview" alt="screenshot preview">' +
 '    <div class="av-engines" id="av-engines"></div>' +
 '    <div class="av-status" id="av-status"></div>' +
 '    <div id="av-window" style="margin-top:10px"></div>' +
@@ -173,9 +180,8 @@
     var url = URL.createObjectURL(file);
     if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
     lastObjectUrl = url;
-    var img = $("av-preview");
-    img.src = url;
-    img.style.display = "block";
+    $("av-preview").src = url;
+    $("av-drop").classList.add("has-img");
 
     var eng = window.ocrGetEngine ? window.ocrGetEngine(selectedEngine) : null;
     if (!eng) { setStatus("Engine not found: " + selectedEngine, "err"); return; }
