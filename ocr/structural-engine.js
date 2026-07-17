@@ -518,42 +518,78 @@
     // vector (feeds the constraint enumeration for the weak/free nodes below).
     async function readLevelFull(p, isGoldFace) {
       var box = { x: p.x - gap * 0.5, y: p.y - gap * 0.35, w: gap * 1.0, h: gap * 0.72 };
-      var line = L.findMaskedTextLine(raster, box, L.isGoldText, {
+      var pred = L.isGoldText;
+      if (isGoldFace) {
+        // tight, digit-centred box: the wide generic box mixes dark nebula corners
+        // into the median, dragging the luminance threshold under the FACE level so
+        // the whole diamond passes and the locate rejects (measured onFrac 0.31)
+        box = { x: p.x - gap * 0.35, y: p.y - gap * 0.06, w: gap * 0.7, h: gap * 0.42 };
+      }
+      if (isGoldFace) {
+        // GOLD-ON-GOLD (the S/order digit): the ink is VIVID pure yellow (s≈0.9)
+        // while the face is muted brown-gold (s≈0.5) and its specular sheen washes
+        // toward WHITE (s drops further) — saturation separates what luminance and
+        // plain chroma could not. The white "Chaos/Order Points" label (s≈0) is out
+        // by construction.
+        pred = function (r, g, b) {
+          var c = L.hsv(r, g, b);
+          return c.h >= 42 && c.h <= 64 && c.s > 0.72 && c.v > 0.7;
+        };
+        if (out._debug) {
+          var mT = L.chromaMask(L.crop(raster, box), pred), onN = 0;
+          for (var mi = 0; mi < mT.data.length; mi += 4) if (mT.data[mi] < 128) onN++;
+          out._debug.sMask = { onFrac: Math.round(onN / (mT.width * mT.height) * 1000) / 1000, boxW: mT.width, boxH: mT.height };
+        }
+      }
+      var line = L.findMaskedTextLine(raster, box, pred, {
         rejectFill: 0.22, maxRowFill: 0.6,
         minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.22), minRowPx: 3,
         accept: function (r) { var c = r.x + r.w / 2; return Math.abs(c - p.x) <= gap * 0.28 && r.w >= gap * 0.03 && r.w <= gap * 0.85; }
       });
+      if (out._debug && isGoldFace) out._debug.sLine = line ? { x: Math.round(line.x), y: Math.round(line.y), w: Math.round(line.w), h: Math.round(line.h) } : null;
       if (!line) return { value: null, conf: 0, vec: null };
       var grow = Math.round(line.h * 0.5);
       var lineX = { x: line.x, y: line.y - grow, w: line.w, h: line.h + grow * 2 };
 
       // template pass: rightmost digit-classified box → value + score vector
-      var vec = null, tmVal = null, tmMargin = 0;
+      var vec = null, tmVal = null, tmConf = 0;
       if (GLYPHS) {
-        var mask = L.chromaMask(L.crop(raster, lineX), L.isGoldText);
+        var mask = L.chromaMask(L.crop(raster, lineX), pred);
         var boxes = L.segmentGlyphs(mask, { minColPx: 1, gapCols: 1 });
         var hs = boxes.map(function (b) { return b.h; }).sort(function (a, b) { return a - b; });
         var medH = hs.length ? hs[hs.length >> 1] : 0;
         boxes = boxes.filter(function (b) { return b.h >= medH * 0.55 && b.h <= medH * 1.7 && b.w >= 2; });
-        var db = null;
-        for (var i = 0; i < boxes.length; i++) { var sv = digitScoreVec(mask, boxes[i]); if (sv.isDigit) db = sv; }
+        var db = null, dbBox = null;
+        for (var i = 0; i < boxes.length; i++) { var sv = digitScoreVec(mask, boxes[i]); if (sv.isDigit) { db = sv; dbBox = boxes[i]; } }
         if (db) {
           vec = db.vec;
           var b1 = -1, b1v = null, b2 = -1;
           for (var v = 1; v <= 5; v++) { var s = db.vec[v]; if (s > b1) { b2 = b1; b1 = s; b1v = v; } else if (s > b2) b2 = s; }
-          if (b1 >= 0.78 && (b1 - b2) >= 0.05) { tmVal = b1v; tmMargin = b1 - b2; }
+          if (b1 >= 0.78 && (b1 - b2) >= 0.05) {
+            // proven bitmapSim commit — but ink-IoU gets a VETO: sim's background-
+            // dominated score let a live "Lv. 5" read as a confident 3 (which the
+            // checksum then propagated into the unreadable S digit). If IoU clearly
+            // prefers a DIFFERENT digit, do not commit — fall to OCR / the solve.
+            var vetoed = false;
+            if (DIGIT_ATLAS && dbBox.w / Math.max(1, dbBox.h) >= 0.45) {
+              var im = iouDigit(mask, dbBox, ["1", "2", "3", "4", "5"]);
+              if (im && im.ch !== String(b1v) && im.margin >= 0.08) vetoed = true;
+            }
+            if (!vetoed) { tmVal = b1v; tmConf = Math.min(0.95, 0.75 + (b1 - b2) * 2); }
+          }
         }
       }
       if (tmVal != null) {
-        var tconf = Math.min(0.95, 0.75 + tmMargin * 2);
-        return { value: tmVal, conf: isGoldFace ? Math.min(tconf, 0.45) : tconf, vec: vec };
+        // the luminance-read S digit is real evidence, but the face is hostile ground
+        // — cap it so the checksum solve still arbitrates (and flags) disagreements
+        return { value: tmVal, conf: isGoldFace ? Math.min(tmConf, 0.6) : tmConf, vec: vec };
       }
       // OCR ladder (proven on "Lv. N"): plain → single-char → dilate
-      var read = await maskedOcr(lineX, L.isGoldText, { whitelist: "Lv.12345 ", psm: 7 });
+      var read = await maskedOcr(lineX, pred, { whitelist: "Lv.12345 ", psm: 7 });
       var m = read.text.match(/([1-5])\s*$/) || read.text.match(/([1-5])/);
-      if (!m) { read = await maskedOcr(lineX, L.isGoldText, { whitelist: "12345", psm: 10 }); m = read.text.match(/([1-5])/); }
+      if (!m) { read = await maskedOcr(lineX, pred, { whitelist: "12345", psm: 10 }); m = read.text.match(/([1-5])/); }
       if (!m) {
-        var sub2 = L.crop(raster, lineX), masked2 = dilateDark(L.chromaMask(sub2, L.isGoldText));
+        var sub2 = L.crop(raster, lineX), masked2 = dilateDark(L.chromaMask(sub2, pred));
         read = await ocrText(upscale(masked2, Math.max(2, Math.min(5, Math.round(160 / Math.max(1, sub2.height))))), { whitelist: "Lv.12345 ", psm: 7 });
         m = read.text.match(/([1-5])\s*$/) || read.text.match(/([1-5])/);
       }
@@ -567,8 +603,14 @@
       await readLevelFull(nodes.nodeE, false),   // effect2
       await readLevelFull(nodes.nodeS, true)     // order (gold-on-gold)
     ];
+    // The S (order) luminance read is a HINT, never a pinned value: at low res the
+    // gold-on-gold digit is marginal and a wrong pin corrupts the checksum's
+    // arithmetic. The hint breaks enumeration ties (this is what un-swaps a live
+    // "Atk Power 5 / Chaos Points 3" board) and corroborates-or-flags the solved S.
+    var sHint = lvFull[3].value;
+    lvFull[3] = { value: null, conf: 0, vec: lvFull[3].vec };
     var scoreVecs = lvFull.map(function (r) { return r.vec; });
-    if (out._debug) out._debug.levelReads = lvFull.map(function (r) { return r.value + "@" + r.conf.toFixed(2); });
+    if (out._debug) out._debug.levelReads = lvFull.map(function (r) { return r.value + "@" + r.conf.toFixed(2); }).concat("sHint=" + sHint);
 
     // ---- the points checksum ("N Astrogem Points" = level sum) ----
     // Only a digit sitting directly before "As(trogem)" counts — masked reads on dim
@@ -765,6 +807,12 @@
             for (var sb = 0; sb < 4; sb++) if (sb !== fi) conf4[sb] = Math.max(conf4[sb], Math.min(0.88, indep[sb].conf + 0.25));
             conf4[fi] = Math.min(0.85, 0.5 + minSib * 0.5);
           } else conf4[fi] = Math.min(0.65, 0.55 + minSib * 0.4);
+          // S-hint arbitration (after the base assignment so it can't be clobbered):
+          // the luminance read agreeing with the arithmetic solve is independent
+          // corroboration; disagreement drops S into hard-flag territory
+          if (fi === 3 && sHint != null) {
+            conf4[3] = sHint === remaining ? Math.max(conf4[3], 0.85) : Math.min(conf4[3], 0.5);
+          }
         } else { levels[fi] = indep[fi].v != null ? indep[fi].v : 1; conf4[fi] = 0.3; }
       } else {
         // ≥2 unknowns: enumerate their assignments summing to `remaining`, pick the
@@ -775,7 +823,16 @@
           for (var vi = 0; vi < 5; vi++) rec(k + 1, acc.concat(vals[vi]), sum + vals[vi]);
         })(0, [], 0);
         if (combos.length) {
-          combos.forEach(function (cm) { cm._s = 0; for (var q = 0; q < freeIdx.length; q++) cm._s += nodeScore(freeIdx[q], cm[q]); });
+          combos.forEach(function (cm) {
+            cm._s = 0;
+            for (var q = 0; q < freeIdx.length; q++) {
+              cm._s += nodeScore(freeIdx[q], cm[q]);
+              // the S luminance hint breaks otherwise-blind ties: without it, a
+              // free {effect, order} pair got split by generation order (the live
+              // "Atk Power 5 / Chaos Points 3" board came out swapped)
+              if (freeIdx[q] === 3 && sHint != null && cm[q] === sHint) cm._s += 0.3;
+            }
+          });
           combos.sort(function (x, y) { return y._s - x._s; });
           var best = combos[0];
           for (var q2 = 0; q2 < freeIdx.length; q2++) {
