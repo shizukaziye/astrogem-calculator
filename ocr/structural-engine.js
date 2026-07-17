@@ -264,27 +264,46 @@
     // distance below the gold node wobbles ~2.2-2.5·gap with crop padding — locate,
     // don't fix), B = the whole footer down to the panel bottom (position-free
     // rescue). Agree → high conf; disagree → A wins but flagged.
+    // The FIND mask is looser than the read mask: upscaled glyphs keep only a sparse
+    // bright skeleton (5-17 px/row at ×2), so v>0.6 + a low row threshold or no band
+    // ever forms (this was every "turn read at 0.70" flag).
+    var dimBtnWhite = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.3 && c.v > 0.6; };
     var btnZone = { x: cx + gap * 0.2, y: goldY + gap * 1.95, w: gap * 2.15, h: gap * 0.75 };
-    var btnRect = locateLine(btnZone, L.isWhiteText, {
+    var btnRect = locateLine(btnZone, dimBtnWhite, {
       maxRowFill: 0.75, minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.24),
-      minRowPx: Math.max(4, Math.round(gap * 0.08)),
+      minRowPx: Math.max(4, Math.round(gap * 0.04)),
       accept: function (r) { return r.w >= gap * 0.5; }
     });
     var procRead = await maskedOcr(
       btnRect || { x: cx + gap * 0.2, y: goldY + gap * 2.13, w: gap * 2.15, h: gap * 0.3 },
-      L.isWhiteText, { psm: 7 });
+      dimBtnWhite, { psm: 7 });
     var pairA = parseProcPair(procRead.text);
+    // vote T: template-match the located line — the last two confident digits are
+    // (x, N); "Process" letters are distractor classes and can't leak in
+    var pairT = null;
+    if (btnRect) {
+      var tg = templateGlyphs(btnRect, dimBtnWhite);
+      if (tg) {
+        var ds = tg.filter(function (t) { return t.ch && /^\d$/.test(t.ch) && t.score >= 0.8 && t.margin >= 0.02; });
+        if (ds.length >= 2) {
+          var a3 = parseInt(ds[ds.length - 2].ch, 10), b3 = parseInt(ds[ds.length - 1].ch, 10);
+          if ((b3 === 5 || b3 === 7 || b3 === 9) && a3 >= 1 && a3 <= b3) pairT = { a: a3, b: b3 };
+        }
+      }
+    }
     var footTop = goldY + gap * 1.13;
     var footRead = await maskedOcr(
       { x: cx - gap * 2.35, y: footTop, w: gap * 4.7, h: Math.max(gap * 0.6, panel.y + panel.h - footTop - 2) },
       L.isWhiteText, { psm: 6 });
     var footText = normText(footRead.text);
     var pairB = parseProcPair(footText);
+    function pairEq(p, q) { return p && q && p.a === q.a && p.b === q.b; }
     var pair = null, pairConf = 0;
-    if (pairA && pairB) {
-      var same = pairA.a === pairB.a && pairA.b === pairB.b;
-      pair = pairA; pairConf = same ? 0.95 : 0.6;
-    } else if (pairA) { pair = pairA; pairConf = 0.85; }
+    if (pairT && (pairEq(pairT, pairA) || pairEq(pairT, pairB))) { pair = pairT; pairConf = 0.96; }
+    else if (pairEq(pairA, pairB)) { pair = pairA; pairConf = 0.95; }
+    else if (pairT) { pair = pairT; pairConf = 0.88; }
+    else if (pairA && pairB) { pair = pairA; pairConf = 0.6; }
+    else if (pairA) { pair = pairA; pairConf = 0.85; }
     else if (pairB) { pair = pairB; pairConf = 0.7; }
     var turnsRemaining = pair ? pair.a : null, maxT = pair ? pair.b : null;
     out.rarity = maxT === 5 ? "uncommon" : maxT === 7 ? "rare" : maxT === 9 ? "epic" : null;
@@ -334,6 +353,21 @@
       if (goldBtn.frac > 0.35) {
         out.state.rerollsChargeSeen = true;
         confidence.state.rerollsRemaining = 0.85;
+      }
+    }
+    if (out.state.rerollsShownFree == null && !out.state.rerollsChargeSeen) {
+      // template rescue: the pill is "n / m" in the footer font
+      var tgR = templateGlyphs(pillRect, dimBtnWhite);
+      if (tgR) {
+        var digsR = tgR.filter(function (t) { return t.ch && /^[\d\/]$/.test(t.ch) && t.score >= 0.8; });
+        if (digsR.length === 3 && digsR[1].ch === "/" && /^\d$/.test(digsR[0].ch) && /^\d$/.test(digsR[2].ch)) {
+          var rn = parseInt(digsR[0].ch, 10), rd = parseInt(digsR[2].ch, 10);
+          if (rn <= 4 && rd >= 1 && rd <= 4 && rn <= rd) {
+            out.state.rerollsShownFree = rn;
+            out.state.rerollsShownDenom = rd;
+            confidence.state.rerollsRemaining = 0.85;
+          }
+        }
       }
     }
     if (out.state.rerollsShownFree == null && !out.state.rerollsChargeSeen) confidence.state.rerollsRemaining = 0.25;
@@ -446,6 +480,22 @@
     }
     var ptsRect = bandRect(redY - gap * 1.10, 0.13, 1.55);
     var ptsSub = L.crop(raster, ptsRect);
+    // template rung first: leading digit run before the first letter-matched box
+    // ("Astrogem" letters are distractor classes)
+    var ptsT = null;
+    var tgP = templateGlyphs(ptsRect, dimBtnWhite);
+    if (tgP) {
+      var lead = "";
+      for (var pi = 0; pi < tgP.length; pi++) {
+        var tpg = tgP[pi];
+        if (tpg.ch && /^\d$/.test(tpg.ch) && tpg.score >= 0.8) lead += tpg.ch;
+        else break;
+      }
+      if (lead.length >= 1 && lead.length <= 2) {
+        var pv = parseInt(lead, 10);
+        if (pv >= 4 && pv <= 20) ptsT = pv;
+      }
+    }
     function logPtsRead(tag, r) {
       if (out._debug) (out._debug.reads = out._debug.reads || []).push({
         rect: { x: Math.round(ptsRect.x), y: Math.round(ptsRect.y), w: Math.round(ptsRect.w), h: Math.round(ptsRect.h) },
@@ -453,11 +503,11 @@
         conf: Math.round(r.conf * 100) / 100
       });
     }
-    // retry ladder, strict extraction at every rung: (a) white mask, (b) white mask +
-    // dilate (downscaled captures thin the strokes), (c) unmasked (dim captures defeat
-    // the mask entirely; busier, but the digit-before-"As" regex filters the junk)
+    // retry ladder, strict extraction at every rung: (t) template digits, (a) white
+    // mask OCR, (b) + dilate (downscaled captures thin the strokes), (c) unmasked (dim
+    // captures defeat the mask entirely; the digit-before-"As" regex filters the junk)
     var ptsRead = await maskedOcr(ptsRect, L.isWhiteText, { psm: 7 });
-    var pts = extractPts(ptsRead.text);
+    var pts = ptsT != null ? ptsT : extractPts(ptsRead.text);
     if (pts == null) {
       var dRead = await ocrText(
         upscale(dilateDark(L.chromaMask(ptsSub, L.isWhiteText)), Math.max(2, Math.min(4, Math.round(160 / Math.max(1, ptsSub.height))))),

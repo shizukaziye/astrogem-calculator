@@ -25,7 +25,9 @@ var SAMPLES = path.join(__dirname, "..", "samples");
 var OUT = path.join(__dirname, "..", "ocr", "glyphs.js");
 var CANON_GAP = 246;
 
-function isWhite(r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.25 && c.v > 0.72; }
+// the DIM white mask, matching the engine's find/read mask for footer text (strict
+// v>0.72 keeps only a sparse skeleton on 2x-upscaled captures)
+function isWhite(r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.3 && c.v > 0.6; }
 function isGold(r, g, b) { return L.isGoldText(r, g, b); }
 
 // accumulators: char -> { sum: Float64Array, n }
@@ -75,7 +77,7 @@ function segRect(raster, rect, pred) {
     // ---- Process (x/N): "Process(x/N)" -> label digits + letter distractors ----
     var btn = L.findMaskedTextLine(raster,
       { x: cx + gap * 0.2, y: goldY + gap * 1.95, w: gap * 2.15, h: gap * 0.75 }, isWhite,
-      { maxRowFill: 0.75, minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.24), minRowPx: Math.max(4, Math.round(gap * 0.08)), accept: function (r) { return r.w >= gap * 0.5; } });
+      { maxRowFill: 0.75, minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.24), minRowPx: Math.max(4, Math.round(gap * 0.04)), accept: function (r) { return r.w >= gap * 0.5; } });
     if (btn && truth.state && truth.state.currentTurn != null && truth.state.maxTurns != null) {
       var grow = Math.round(btn.h * 0.45);
       var seg = segRect(raster, { x: btn.x - grow, y: btn.y - grow, w: btn.w + grow * 2, h: btn.h + grow * 2 }, isWhite);

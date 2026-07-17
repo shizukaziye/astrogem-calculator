@@ -17,7 +17,15 @@ This folder holds the A/B test set for the Advisor's screenshot-reading engines
 >
 > | engine | headline (per-field avg) | scalar fields | outcomes | whole-parse | flag-coverage | silent errors |
 > |--------|-------------------------|---------------|----------|-------------|---------------|---------------|
-> | **structural** (free tier) | **88.4%** | 88.7% | 85.0% | 19/50 | **100%** (83/83) | **0** |
+> | **structural** (free tier) | **91.6%** | 92.2% | 85.0% | 27/50 | **100%** (62/62) | **0** |
+>
+> The 88→92 jump came from **glyph template matching** (`ocr/glyphs.js`, built by
+> `tools/build-glyphs.js`): the closed-vocabulary reads (wheel levels, outcome
+> amounts, Process (x/N), points header, reroll pill) compare pixels against
+> harvested pictures of the game's own fixed-font digits instead of OCR, with
+> letters as distractor classes and match-margin as an honestly calibrated
+> confidence. Per-field movers: currentTurn 76→90, maxTurns 92→96, orderLevel
+> 74→88; false alarms 5.8→4.0 per shot.
 >
 > Arc, for honesty: the engine scored **100% on the 3-shot dev corpus it was tuned on,
 > then 65.3% cold** on this unseen corpus; targeted calibration (resolution
