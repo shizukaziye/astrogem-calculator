@@ -19,14 +19,14 @@ This folder holds the A/B test set for the Advisor's screenshot-reading engines
 > |--------|-------------------------|---------------|----------|-------------|---------------|---------------|
 > | **structural** (free tier) | **94.3%** | 94.4% | 93.8% | 20/52 | **100%** (47/47) | **0** |
 >
-> **Resolution is the ceiling, not the method.** The corpus is 50 heavily-compressed
-> ~713px crops (artificially hard — ~10px digits) plus **2 native 4K full-screen
-> captures** (`Screenshot 2026-07-17 030847/031102`, the first ORDER gems + first
-> cost-8 order). On the 4K shots **every scalar field reads perfectly (12/12 both)** —
-> gem type, base cost, all four levels, turn, rarity, rerolls, cost. The headline is
-> dragged down almost entirely by the low-res crops (orderLevel 71%, effect1Level 87%,
-> currentTurn 90% there). So on the resolution real players actually screenshot at,
-> the parser is effectively perfect on config/state.
+> **The corpus spans real monitor sizes** — 50 native captures from a smaller monitor
+> (~713px panel width; the digits really are ~10px on screen) plus **2 native 4K
+> full-screen captures** (`Screenshot 2026-07-17 030847/031102`, the first ORDER gems
+> + first cost-8 order). Both are production inputs: players cut gems on small
+> monitors too, so the low-res misses are real misses, not benchmark artifacts. On
+> the 4K shots **every scalar field reads perfectly (12/12 both)**; the small-monitor
+> shots are the accuracy frontier (orderLevel 71%, effect1Level 87%, currentTurn 90%
+> there) and the target is the same 100% at that resolution.
 >
 > Behind it: a **joint level constraint solver** (the 4 levels sum to the header
 > points; committed reads are pinned, the constraint fills the unreadable gold-on-gold

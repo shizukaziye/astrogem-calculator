@@ -212,10 +212,39 @@
       var hs = boxes.map(function (b) { return b.h; }).sort(function (a, b) { return a - b; });
       var medH = hs.length ? hs[hs.length >> 1] : 0;
       boxes = boxes.filter(function (b) { return b.h >= medH * 0.55 && b.h <= medH * 1.7 && b.w >= 2; });
-      return boxes.map(function (b) {
+      var items = boxes.map(function (b) {
         var m = L.matchGlyph(mask, b, GLYPHS);
         return { box: b, ch: m ? m.ch : null, score: m ? m.score : 0, margin: m ? m.margin : 0 };
       });
+      items.mask = mask;   // for closed-world rematches against a restricted atlas
+      return items;
+    }
+    // digit-only subset of the atlas (closed-world rematch when a box is known to be
+    // a digit by POSITION — e.g. the boxes before "Astrogem" in the points header)
+    var DIGIT_ATLAS = null;
+    if (GLYPHS) {
+      DIGIT_ATLAS = {};
+      Object.keys(GLYPHS).forEach(function (k) { if (/^[0-9]$/.test(k)) DIGIT_ATLAS[k] = GLYPHS[k]; });
+    }
+    // Closed-world digit match scored by INK IoU (intersection/union of on-pixels).
+    // bitmapSim's mean-abs-diff is dominated by the empty background, so every sparse
+    // glyph scores ~0.7 and a narrow '1' ties a wide '7'; IoU only counts ink, so a
+    // width mismatch collapses the score. Used where a box is a digit BY POSITION.
+    function iouDigit(mask, box) {
+      var bm = L.glyphBitmap(mask, box), scored = [];
+      Object.keys(DIGIT_ATLAS).forEach(function (k) {
+        var t = DIGIT_ATLAS[k], inter = 0, uni = 0;
+        for (var i = 0; i < bm.length; i++) {
+          var a = bm[i] >= 0.5, b = t[i] >= 0.4;
+          if (a && b) inter++;
+          if (a || b) uni++;
+        }
+        scored.push({ ch: k, score: uni ? inter / uni : 0 });
+      });
+      scored.sort(function (p, q) { return q.score - p.score; });
+      var best = scored[0];
+      if (best) { best.margin = best.score - (scored[1] ? scored[1].score : 0); best.top3 = scored.slice(0, 3).map(function (s) { return s.ch + ":" + s.score.toFixed(2); }).join(","); }
+      return best;
     }
     // Best confidently-matched GOLD digit (g1..g5) in a line. BEST-of, not last-of:
     // a gold frame sliver trailing the line segments as its own box and matches "4"
@@ -538,21 +567,68 @@
     // ("Astrogem" letters are distractor classes)
     var ptsT = null;
     var tgP = templateGlyphs(ptsRect, dimBtnWhite);
+    if (out._debug) out._debug.ptsTG = tgP ? tgP.map(function (g) {
+      return (g.ch || "?") + ":" + (g.score != null ? g.score.toFixed(2) : "-") + "/" + (g.margin != null ? g.margin.toFixed(2) : "-");
+    }).join(" ") : "null";
+    var ptsTSoft = false;
     if (tgP) {
+      // (a) strict leading-digit run (the original rung — high bar, open world)
       var lead = "", pi = 0;
       for (; pi < tgP.length; pi++) {
         var tpg = tgP[pi];
         if (tpg.ch && /^\d$/.test(tpg.ch) && tpg.score >= 0.86 && tpg.margin >= 0.05) lead += tpg.ch;
         else break;
       }
-      // the number must END cleanly: if the NEXT box also reads as a digit, the
-      // digit/letter boundary is ambiguous ("Astrogem" letters matching digits) —
-      // a wrong pts poisons the level checksum, so bail to the OCR ladder instead
       var nxt = tgP[pi];
       var nxtDigitish = nxt && nxt.ch && /^\d$/.test(nxt.ch) && nxt.score >= 0.8;
       if (!nxtDigitish && lead.length >= 1 && lead.length <= 2) {
         var pv = parseInt(lead, 10);
         if (pv >= 4 && pv <= 20) ptsT = pv;
+      }
+      // (b) ANCHORED positional read: if "Astrogem" is recognized (its 'A' + letter
+      // tail), the 1-2 boxes BEFORE the 'A' are digits BY CONSTRUCTION — re-match
+      // them against DIGITS ONLY (closed world: '+'/'g' lookalikes aren't candidates,
+      // so the threshold can drop to what dim strokes actually score).
+      if (ptsT == null && DIGIT_ATLAS && tgP.mask) {
+        var aIdx = -1;
+        for (var ai = 1; ai <= 3 && ai < tgP.length; ai++) {
+          if (tgP[ai].ch === "A" && tgP[ai].score >= 0.8) { aIdx = ai; break; }
+        }
+        if (aIdx >= 1) {
+          // verify the letter tail so a random 'A'-ish blob can't anchor: ≥2 of the
+          // next 3 boxes must match a letter class decently
+          var letterHits = 0;
+          for (var li = aIdx + 1; li < Math.min(aIdx + 4, tgP.length); li++) {
+            if (tgP[li].ch && /^[a-z]$/i.test(tgP[li].ch) && tgP[li].score >= 0.7) letterHits++;
+          }
+          if (letterHits >= 2) {
+            var digs = "", minSc = 1;
+            for (var di = 0; di < aIdx; di++) {
+              var dbox = tgP[di].box, dch = null, dsc = 0;
+              if (dbox.w / Math.max(1, dbox.h) < 0.45) {
+                // the ONLY narrow digit is '1' — aspect alone identifies it (dim thin
+                // strokes score weak IoU against the thick averaged templates)
+                dch = "1"; dsc = 0.6;
+              } else {
+                var dm = iouDigit(tgP.mask, dbox);
+                if (out._debug) (out._debug.ptsDig = out._debug.ptsDig || []).push(
+                  dm ? dm.top3 + " w" + dbox.w + "h" + dbox.h : "nomatch");
+                if (dm && dm.score >= 0.3) { dch = dm.ch; dsc = dm.score; }
+              }
+              if (!dch) { digs = null; break; }
+              digs += dch; minSc = Math.min(minSc, dsc);
+            }
+            if (digs && digs.length >= 1 && digs.length <= 2) {
+              var pv2 = parseInt(digs, 10);
+              if (pv2 >= 4 && pv2 <= 20) {
+                ptsT = pv2;
+                // dim reads (IoU <0.5) keep checksum authority CAPPED: solved
+                // levels stay in "confirm me" territory, preserving 0-silent
+                ptsTSoft = minSc < 0.5;
+              }
+            }
+          }
+        }
       }
     }
     function logPtsRead(tag, r) {
@@ -580,7 +656,7 @@
       logPtsRead("(unmasked pts)", rawRead);
       pts = extractPts(rawRead.text);
     }
-    var ptsSoft = false;
+    var ptsSoft = ptsT != null && ptsTSoft;   // dim anchored template read → capped authority
     if (pts == null) {
       // last resort on the (cleanest) masked text: digit + one word + "Points". This
       // accepted turn3's WRONG '5 re Points' once — hence it runs only after every

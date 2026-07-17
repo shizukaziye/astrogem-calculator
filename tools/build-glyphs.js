@@ -95,6 +95,43 @@ function segRect(raster, rect, pred) {
       }
     }
 
+    // ---- footer cost row: "Processing Cost   900" — THE source of '0' glyphs ----
+    // (nothing else in the closed vocabulary contains a zero; without it "10"/"12"
+    // Astrogem Points can never template-read). The number is right-aligned and far
+    // from the label, so: take the line's TRAILING box run after the last wide gap;
+    // accept only when it has exactly the cost's digit count (900/450 — skip 1,800,
+    // its comma merges unpredictably) and digit-ish aspects. The Balance row below
+    // fails the count guard (7 digits + commas), "…1 time" fails the wide-gap guard.
+    var costVal = truth.state && truth.state.processCost;
+    if (costVal === 900 || costVal === 450) {
+      var costDigits = String(costVal).split("");
+      var bandTop = goldY + gap * 1.13;
+      for (var rowI = 0; rowI < 2; rowI++) {
+        var costLn = L.findMaskedTextLine(raster,
+          { x: cx - gap * 2.3, y: bandTop, w: gap * 4.6, h: gap * 0.5 }, isWhite,
+          { maxRowFill: 0.75, minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.2), minRowPx: Math.max(3, Math.round(gap * 0.03)), accept: function (r) { return r.w >= gap * 0.8; } });
+        if (!costLn) break;
+        bandTop = costLn.y + costLn.h + 2;   // next iteration scans below this row
+        var cgrow = Math.round(costLn.h * 0.45);
+        var segC = segRect(raster, { x: costLn.x - cgrow, y: costLn.y - cgrow, w: costLn.w + cgrow * 2, h: costLn.h + cgrow * 2 }, isWhite);
+        var bx = segC.boxes;
+        if (bx.length < costDigits.length + 2) continue;
+        var chs = bx.map(function (b) { return b.h; }).sort(function (a, b) { return a - b; });
+        var cmedH = chs.length ? chs[chs.length >> 1] : 0;
+        // trailing run = boxes after the last gap wider than 1.5×medH
+        var runStart = bx.length - 1;
+        while (runStart > 0 && (bx[runStart].x - (bx[runStart - 1].x + bx[runStart - 1].w)) < cmedH * 1.5) runStart--;
+        var run = bx.slice(runStart);
+        var wideGapBefore = runStart > 0 &&
+          (bx[runStart].x - (bx[runStart - 1].x + bx[runStart - 1].w)) >= cmedH * 1.5;
+        var aspectsOk = run.every(function (b) { var a = b.w / Math.max(1, b.h); return a >= 0.25 && a <= 1.0; });
+        if (wideGapBefore && run.length === costDigits.length && aspectsOk) {
+          for (var cdi = 0; cdi < costDigits.length; cdi++) addInstance(costDigits[cdi], segC.mask, run[cdi]);
+          break;   // harvested the cost row; don't scan further rows
+        }
+      }
+    }
+
     // ---- points header: "N Astrogem Points" ----
     var cfg = truth.config || {};
     var pts = (cfg.willpowerLevel | 0) + (cfg.orderLevel | 0) + (cfg.effect1Level | 0) + (cfg.effect2Level | 0);
