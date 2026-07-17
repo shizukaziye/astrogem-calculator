@@ -134,11 +134,16 @@
     // resample exists to bound compute on 4K+), so the no-resample zone is wide.
     var scaleF = fRaw <= 0.65 ? 0.5 : fRaw <= 1.25 ? 1 : Math.min(3, Math.round(fRaw));
     {
-      // crop with a margin so edge regions (reroll pill, footer buttons) survive
-      var mg = 0.06;
+      // crop with a margin so edge regions (reroll pill, footer buttons) survive.
+      // The BOTTOM margin is deliberately larger: on several live shots the panel
+      // rect detected short and the symmetric 6% cropped the Process button half
+      // out of the raster — every footer vote then failed and the turn defaulted
+      // to 1. Nothing below the button matters except chat, which the pair regex
+      // and the {5,7,9} gate ignore.
+      var mg = 0.06, mgBot = 0.16;
       var cr = {
         x: found.rect.x - found.rect.w * mg, y: found.rect.y - found.rect.h * mg,
-        w: found.rect.w * (1 + 2 * mg), h: found.rect.h * (1 + 2 * mg)
+        w: found.rect.w * (1 + 2 * mg), h: found.rect.h * (1 + mg + mgBot)
       };
       // L.crop rounds+clamps the origin — mirror it so coordinate shifts stay exact
       var ox = Math.max(0, Math.round(cr.x)), oy = Math.max(0, Math.round(cr.y));
@@ -314,6 +319,10 @@
     // bright skeleton (5-17 px/row at ×2), so v>0.6 + a low row threshold or no band
     // ever forms (this was every "turn read at 0.70" flag).
     var dimBtnWhite = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.3 && c.v > 0.6; };
+    // DESCENDING locate: the zone's topmost white band is sometimes NOT the button —
+    // on shots where the wheel gap measures a few % small, the Balance row slips into
+    // the zone top, gets located, OCRs to garbage, and the turn silently defaulted
+    // to 1. If a located band yields no valid (x/N) pair, descend below it and retry.
     var btnZone = { x: cx + gap * 0.2, y: goldY + gap * 1.95, w: gap * 2.15, h: gap * 0.75 };
     var btnRect = locateLine(btnZone, dimBtnWhite, {
       maxRowFill: 0.75, minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.24),
@@ -351,6 +360,23 @@
     else if (pairA && pairB) { pair = pairA; pairConf = 0.6; }
     else if (pairA) { pair = pairA; pairConf = 0.85; }
     else if (pairB) { pair = pairB; pairConf = 0.7; }
+    if (!pair) {
+      // LAST-RESORT rescue: on several live shots the located band was the Balance
+      // row (the wheel gap measured a few % small) AND the psm6 footer block was
+      // cut short by a short-detected panel bottom — every vote failed and the turn
+      // silently defaulted to 1. Read a button-focused band that ignores the panel
+      // bottom entirely; take the FIRST valid pair (the band starts at the button
+      // row, so chat lines below cannot override) at capped confidence.
+      var rescueTop = goldY + gap * 2.2;
+      var rescueRead = await maskedOcr(
+        { x: cx + gap * 0.2, y: rescueTop, w: gap * 2.15, h: Math.max(gap * 0.55, raster.height - rescueTop - 2) },
+        dimBtnWhite, { psm: 6 });
+      var rm2 = /(\d)\s*[:\/l|.]\s*(\d)\s*[\)\]]?/.exec(normText(rescueRead.text));
+      if (rm2) {
+        var ra = parseInt(rm2[1], 10), rb = parseInt(rm2[2], 10);
+        if ((rb === 5 || rb === 7 || rb === 9) && ra >= 1 && ra <= rb) { pair = { a: ra, b: rb }; pairConf = 0.75; }
+      }
+    }
     var turnsRemaining = pair ? pair.a : null, maxT = pair ? pair.b : null;
     out.rarity = maxT === 5 ? "uncommon" : maxT === 7 ? "rare" : maxT === 9 ? "epic" : null;
     out.state.maxTurns = maxT;
