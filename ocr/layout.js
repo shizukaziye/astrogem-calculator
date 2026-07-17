@@ -530,6 +530,86 @@
     };
   }
 
+  // ---- glyph template matching ----
+  // The game renders its digits from ONE fixed font at (post-normalization) one
+  // fixed size — so the closed-vocabulary reads (levels 1-5, Process x/N, points,
+  // reroll pill, cost) don't need OCR at all: segment the masked line into glyph
+  // boxes and compare pixels against stored templates of the game's own digits.
+
+  // Segment a chroma mask (dark-text-on-white, as produced by chromaMask) into
+  // per-glyph boxes via column projection. Returns [{x,y,w,h}] in mask coords,
+  // left to right, tight on both axes.
+  function segmentGlyphs(mask, opts) {
+    opts = opts || {};
+    var w = mask.width, h = mask.height, d = mask.data;
+    var minColPx = opts.minColPx || 1;
+    var gapCols = opts.gapCols != null ? opts.gapCols : 1;
+    var cols = new Array(w);
+    for (var x = 0; x < w; x++) {
+      var c = 0;
+      for (var y = 0; y < h; y++) if (d[(y * w + x) * 4] < 128) c++;
+      cols[x] = c;
+    }
+    var boxes = [], run = null, gap = 0;
+    for (var x2 = 0; x2 <= w; x2++) {
+      var on = x2 < w && cols[x2] >= minColPx;
+      if (on) { if (run == null) run = x2; gap = 0; }
+      else if (run != null) {
+        gap++;
+        if (gap > gapCols || x2 === w) {
+          var x0 = run, x1 = x2 - gap;
+          run = null; gap = 0;
+          var y0 = h, y1 = -1;
+          for (var yy = 0; yy < h; yy++) {
+            for (var xx = x0; xx <= x1; xx++) {
+              if (d[(yy * w + xx) * 4] < 128) { if (yy < y0) y0 = yy; if (yy > y1) y1 = yy; break; }
+            }
+          }
+          if (y1 >= y0) boxes.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
+        }
+      }
+    }
+    return boxes;
+  }
+
+  // Resample a glyph box out of a mask into a normalized W×H binary bitmap
+  // (Float64Array of 0/1) for comparison.
+  var GLYPH_W = 12, GLYPH_H = 16;
+  function glyphBitmap(mask, box) {
+    var out = new Float64Array(GLYPH_W * GLYPH_H);
+    for (var gy = 0; gy < GLYPH_H; gy++) {
+      var sy = box.y + (gy + 0.5) / GLYPH_H * box.h;
+      for (var gx = 0; gx < GLYPH_W; gx++) {
+        var sx = box.x + (gx + 0.5) / GLYPH_W * box.w;
+        var i = ((sy | 0) * mask.width + (sx | 0)) * 4;
+        out[gy * GLYPH_W + gx] = mask.data[i] < 128 ? 1 : 0;
+      }
+    }
+    return out;
+  }
+
+  // Similarity of two normalized bitmaps: 1 − mean absolute difference.
+  function bitmapSim(a, b) {
+    var n = Math.min(a.length, b.length), diff = 0;
+    for (var i = 0; i < n; i++) diff += Math.abs(a[i] - b[i]);
+    return 1 - diff / n;
+  }
+
+  // Match one glyph box against a template atlas {char: bitmapArray}. Returns
+  // {ch, score, margin} — margin = best minus runner-up (the honest confidence).
+  function matchGlyph(mask, box, atlas) {
+    var bm = glyphBitmap(mask, box);
+    var best = null, second = 0;
+    for (var ch in atlas) {
+      if (!atlas.hasOwnProperty(ch)) continue;
+      var s = bitmapSim(bm, atlas[ch]);
+      if (!best || s > best.score) { if (best) second = Math.max(second, best.score); best = { ch: ch, score: s }; }
+      else if (s > second) second = s;
+    }
+    if (!best) return null;
+    return { ch: best.ch, score: best.score, margin: best.score - second };
+  }
+
   // ---- exports ----
   var API = {
     downsample: downsample,
@@ -556,7 +636,13 @@
     isGreenUp: isGreenUp,
     isRedDown: isRedDown,
     colorClusterStats: colorClusterStats,
-    findMaskedTextLine: findMaskedTextLine
+    findMaskedTextLine: findMaskedTextLine,
+    segmentGlyphs: segmentGlyphs,
+    glyphBitmap: glyphBitmap,
+    bitmapSim: bitmapSim,
+    matchGlyph: matchGlyph,
+    GLYPH_W: GLYPH_W,
+    GLYPH_H: GLYPH_H
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = API;

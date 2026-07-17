@@ -35,6 +35,8 @@
   var L = IS_NODE ? require("./layout.js") : root.OcrLayout;
   var ENGINE_API = IS_NODE ? require("./engine.js") : (root.OcrEngineAPI || root);
   var TESS = IS_NODE ? require("./tesseract-engine.js") : (root.OcrTesseractEngine || root);
+  var GLYPHS = null;
+  try { GLYPHS = IS_NODE ? require("./glyphs.js").GLYPH_ATLAS : (root.OcrGlyphs && root.OcrGlyphs.GLYPH_ATLAS); } catch (e) {}
 
   var GEM_NAME_COST = (TESS && TESS.GEM_NAME_COST) || {
     stability: 8, corrosion: 8, solidity: 9, distortion: 9, immutability: 10, destruction: 10
@@ -189,6 +191,39 @@
     function bandRect(cy, halfHGap, halfWGap) {
       return { x: cx - halfWGap * gap, y: cy - halfHGap * gap, w: halfWGap * 2 * gap, h: halfHGap * 2 * gap };
     }
+    // Template read: segment a rect through `pred` and match every glyph box against
+    // the harvested atlas (ocr/glyphs.js — pictures of the game's own font). No OCR:
+    // pixel comparison with an honest margin-based confidence. Returns labeled boxes
+    // left-to-right, or null when no atlas is loaded.
+    function templateGlyphs(rect, pred) {
+      if (!GLYPHS) return null;
+      var sub = L.crop(raster, rect);
+      var mask = L.chromaMask(sub, pred);
+      var boxes = L.segmentGlyphs(mask, { minColPx: 1, gapCols: 1 });
+      var hs = boxes.map(function (b) { return b.h; }).sort(function (a, b) { return a - b; });
+      var medH = hs.length ? hs[hs.length >> 1] : 0;
+      boxes = boxes.filter(function (b) { return b.h >= medH * 0.55 && b.h <= medH * 1.7 && b.w >= 2; });
+      return boxes.map(function (b) {
+        var m = L.matchGlyph(mask, b, GLYPHS);
+        return { box: b, ch: m ? m.ch : null, score: m ? m.score : 0, margin: m ? m.margin : 0 };
+      });
+    }
+    // Last confidently-matched GOLD digit (g1..g5) in a line — levels and amounts
+    // both end with their digit.
+    function lastGoldDigit(rect, pred, maxVal) {
+      var tl = templateGlyphs(rect, pred);
+      if (!tl) return null;
+      for (var i = tl.length - 1; i >= 0; i--) {
+        var t = tl[i];
+        if (t.ch && /^g[1-5]$/.test(t.ch) && t.score >= 0.78 && t.margin >= 0.03) {
+          var v = parseInt(t.ch.slice(1), 10);
+          if (maxVal && v > maxVal) continue;
+          return { value: v, conf: (t.score >= 0.86 && t.margin >= 0.06) ? 0.95 : 0.85 };
+        }
+      }
+      return null;
+    }
+
     // Self-locate a text line in a zone, then return a padded OCR rect. Fixed offsets
     // from the (noisy) anchors proved brittle across capture variants — line-locating
     // inside a generous zone is the pattern that made the wheel levels robust.
@@ -367,6 +402,12 @@
       // expand: band fragmentation (a broken "2") must not clip glyph edges
       var grow = Math.round(line.h * 0.5);
       var lineX = { x: line.x - grow, y: line.y - grow, w: line.w + grow * 2, h: line.h + grow * 2 };
+      // template match FIRST: pixel comparison against the game's own digit art —
+      // no OCR call, honest margin-based confidence. OCR chain only as fallback.
+      var tm = lastGoldDigit(lineX, L.isGoldText);
+      if (tm) {
+        return { level: tm.value, conf: isGoldFace ? Math.min(tm.conf, 0.45) : tm.conf };
+      }
       var read = await maskedOcr(lineX, L.isGoldText, { whitelist: "Lv.12345 ", psm: 7 });
       var m = read.text.match(/([1-5])\s*$/) || read.text.match(/([1-5])/);
       if (!m) {
@@ -589,13 +630,17 @@
         });
         if (amtLine) {
           var agrow = Math.round(amtLine.h * 0.5);
-          var amtRead = await maskedOcr(
-            { x: amtLine.x - agrow, y: amtLine.y - agrow, w: amtLine.w + agrow * 2, h: amtLine.h + agrow * 2 },
-            L.isAmountText, { whitelist: "Lv.+12345 ", psm: 7 });
-          // prefix-anchored FIRST — the ▲ hue can bleed into the chartreuse window and
-          // OCR the triangle as a trailing digit ("Lv. 2 ▲" → "Lv. 24")
-          var am = amtRead.text.match(/(?:lv\.?|\+)\s*([1-4])/i) || amtRead.text.match(/([1-4])/);
-          if (am) amt = parseInt(am[1], 10);
+          var amtRectX = { x: amtLine.x - agrow, y: amtLine.y - agrow, w: amtLine.w + agrow * 2, h: amtLine.h + agrow * 2 };
+          // template match first (amounts use the same glyph art as the wheel digits)
+          var amTm = lastGoldDigit(amtRectX, L.isAmountText, 4);
+          if (amTm) amt = amTm.value;
+          if (amt == null) {
+            var amtRead = await maskedOcr(amtRectX, L.isAmountText, { whitelist: "Lv.+12345 ", psm: 7 });
+            // prefix-anchored FIRST — the ▲ hue can bleed into the chartreuse window
+            // and OCR the triangle as a trailing digit ("Lv. 2 ▲" → "Lv. 24")
+            var am = amtRead.text.match(/(?:lv\.?|\+)\s*([1-4])/i) || amtRead.text.match(/([1-4])/);
+            if (am) amt = parseInt(am[1], 10);
+          }
           // ▲/▼ sits at the line's right end; classify green-vs-red in that box only.
           // (Whole-cell clustering is hopeless: the outcome ICON — red willpower, green
           // attack — sits BEHIND the caption and swamps the counts.) The arrow is a

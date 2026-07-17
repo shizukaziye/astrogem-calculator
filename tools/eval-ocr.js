@@ -403,6 +403,9 @@ async function main() {
       if (ARGS.dump) {
         console.log("      got : " + sc.gotOutcomeKeys.join("  |  "));
         console.log("      want: " + sc.wantOutcomeKeys.join("  |  "));
+        var flagged = sc.fields.filter(function (f) { return f.score == null && (f.conf == null ? 1 : f.conf) < 0.8; })
+          .map(function (f) { return f.label + "@" + (f.conf == null ? 1 : f.conf).toFixed(2) + (f.ok ? "✓" : "✗(" + f.got + "≠" + f.want + ")"); });
+        if (flagged.length) console.log("      flags: " + flagged.join("  "));
       }
     }
     if (n > 0) {
