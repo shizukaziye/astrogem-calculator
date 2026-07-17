@@ -316,7 +316,7 @@ Damage 5:
 - `gemValue = 1.50214 × 1 = 1.50214` → the maximum → **grade 100, rank S+**
 
 Drop willpower to 1 (effective cost 9): `M(9) = 0.607`, so
-`gemValue = 1.50214 × 0.607 ≈ 0.912` → grade ≈ 54 → **B−**. Same damage lines, much
+`gemValue = 1.50214 × 0.607 ≈ 0.911` → grade ≈ 58 → **B−**. Same damage lines, much
 worse gem, because the cost is far higher.
 
 ---

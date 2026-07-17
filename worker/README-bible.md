@@ -1,10 +1,12 @@
 # Astrogem Bible Worker (Grader "pull from lostark.bible")
 
 A Cloudflare Worker that powers the **Grader** tab's *"Pull from lostark.bible"*
-mode. It fetches a character page from [lostark.bible](https://lostark.bible)
-**server-side with a browser User-Agent** (the site returns `403` to default
-fetchers but `200` for a browser UA), extracts the embedded `arkGridCores`
-hydration data, and returns every equipped astrogem as JSON:
+mode and the **Leaderboard**. It fetches a character page **server-side with a
+browser User-Agent** (the sites return `403` to default fetchers but `200` for a
+browser UA) — from [lostark.bible](https://lostark.bible) for NA/EU regions, or
+from [lopec.kr](https://lopec.kr) for KR — extracts the embedded gem data
+(`arkGridCores` hydration on lostark.bible; the spec-point payload on lopec.kr),
+and returns every equipped astrogem as JSON:
 
 ```json
 {
@@ -23,11 +25,25 @@ hydration data, and returns every equipped astrogem as JSON:
 }
 ```
 
-No Anthropic / external paid API — it's a plain HTML fetch + parse. No bindings,
-no secrets.
+No Anthropic / external paid API and no secrets (the admin token is a soft gate in
+the source) — but it is **not** a plain stateless fetcher anymore. It carries:
+
+- a **KV namespace binding `CHARS`** — every fetched character is cached ~7 days,
+  an `__index__` list + gzipped snapshot feed the Leaderboard, and the lookup
+  **queue** (premium/free lanes) lives here too;
+- a **cron trigger** (`* * * * *`) that drains the queue every minute (with a
+  monthly-budget guard, a fail-streak circuit breaker, and run/off/probe modes)
+  and rebuilds the leaderboard snapshot at most every ~30 min;
+- **five rate-limit bindings** (`HARD_CAP`, `LOOKUP_THROTTLE`, `LB_THROTTLE`,
+  `GLOBAL_GATE`, `ENQUEUE_GATE`) on the public endpoints.
+
+The full plumbing — queue lanes, drain modes, kick fetch, breaker, every KV key
+and constant — is documented in
+[`../docs/how-the-queue-and-drain-work.md`](../docs/how-the-queue-and-drain-work.md).
 
 - Files: [`astrogem-bible.js`](./astrogem-bible.js),
-  [`wrangler.bible.toml`](./wrangler.bible.toml).
+  [`wrangler.bible.toml`](./wrangler.bible.toml) (the KV + ratelimit + cron
+  config lives here).
 - This is **separate** from the Workers-AI vision Worker
   (`astrogem-vision.js` / `wrangler.toml`); they deploy independently.
 
@@ -57,12 +73,16 @@ works with no setup at all.
 
 | Method | Path | Query | Response |
 |--------|------|-------|----------|
-| `GET`  | `/`  | `?region=NA&name=Paroxysmal` | `{ region, name, gems:[...], warnings:[...] }` |
+| `GET`  | `/`  | `?region=NA&name=Paroxysmal` | `{ region, name, gems:[...], warnings:[...] }` (KV-cached ~7 days; add `&refresh=1` to bypass the cache, `&queue=1` to enqueue on a miss, `&wait=1` to hold the request through a kick-drain, `&pos=1` for queue position) |
+| `GET`  | `/`  | `?list=1` (`&fmt=2` compact) | `{ characters:[...] }` — the leaderboard snapshot |
+| `GET`  | `/`  | `?status=1` | drain/queue status |
+| `GET`  | `/`  | `?metrics=1&k=<token>` / `?control...&k=<token>` | owner dashboard + controls (`queue-admin.html`; gated) |
 | `GET`  | `/`  | (none) | `{ ok, service, usage }` (health check) |
 | `OPTIONS` | `/` | — | CORS preflight (204) |
 
 Error responses: `{ error, ... }` with `400` (missing params), `404` (character not
-found), `422` (no Ark Grid data on the page), or `502` (upstream fetch error).
+found), `422` (no Ark Grid data on the page), or `502` (upstream fetch error). The
+endpoint / KV-key / constant reference lives in the queue doc (§9–§11).
 
 ## How the gem data is decoded
 

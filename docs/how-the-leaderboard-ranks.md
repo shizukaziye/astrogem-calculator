@@ -21,8 +21,10 @@ multiplicative total from *how-a-gem-is-graded.md §9*:
   adds over no grid (effects accumulate into diminishing stat buckets; order is
   per-core with the 17-point floor, 6 cores multiplying). Typically ~10%, up to ~14%
   for the best grids.
-- **Support board:** `partyDmg = gridDamage(gems, "support") / 3` — the same shape on
-  the support axis, divided by 3 to show **per-ally** party damage.
+- **Support board:** `partyDmg = gridDamage(gems, "support")` — the same shape on
+  the support axis. It is already the **per-ally** party damage: the support
+  coefficients in the model are stored per-DPS (÷3), so no extra division happens
+  here (the ×3 party benefit exists only at the pipeline's gold step).
 
 ### Avg grade — *the quality column*
 
@@ -51,10 +53,10 @@ from the total damage** — total damage is "how much does the grid do," avg gra
 | | **DPS board** (default) | **Support board** |
 |---|---|---|
 | Who's listed | every character… (minus "support mains", §4) | **only** the 4 support classes: Bard, Paladin, Artist, Valkyrie |
-| Sorted by | `gridDamage(dps)` | `gridDamage(support) / 3` |
+| Sorted by | `gridDamage(dps)` | `gridDamage(support)` (already per-ally) |
 | Damage column | Total dmg % | Party dmg % |
 | Avg-grade axis | DPS `gemValue` | support `supportValue` |
-| Theme | gold/red accent | green accent |
+| Theme | pink/magenta accent | cyan/blue accent |
 
 The support board keeps **every** support-class character (even a DPS-built one) and
 ranks them by their support build.
@@ -65,11 +67,9 @@ ranks them by their support build.
 
 Both boards are **floorless**: a character appears at *any* grade (F-tier included),
 not just B− and above. The full board is paginated (100/row pages); the name search
-finds **any** character by name at any grade, showing its true overall rank.
-
-The only always-on exception is the small set of "troll target" characters (names
-starting with "Buff") — they're shown no matter how bad they get, with deliberately
-terrible gems, for laughs.
+finds **any** character by name at any grade, showing its true overall rank. The only
+rows dropped are characters with no gradeable gems and, on the DPS board, the
+"support mains" of §4.
 
 ---
 

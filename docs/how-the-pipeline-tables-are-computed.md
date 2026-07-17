@@ -6,9 +6,9 @@ those cut/fuse/throw verdicts and the weekly-throughput columns.
 
 > The exhaustive bake reference (the keyed JSON schema, the regenerate commands, the
 > superseded-models history, and the uniform-vs-sampled distribution decision) lives
-> in **`../METHODOLOGY.md`** — this doc is the conceptual walkthrough. The DPS and
-> support tables are being **re-baked** as of this writing; the structure below is
-> stable, the exact numbers come from `data/pipeline.json` (+ `…-support.json`).
+> in **`../METHODOLOGY.md`** — this doc is the conceptual walkthrough. Both axes are
+> baked on the multiplicative `gemValue`/`supportValue` model (2026-06-27); the
+> exact numbers come from `data/pipeline.json` (+ `…-support.json`).
 
 ---
 
@@ -36,24 +36,26 @@ axis — it only classifies the *fodder* a failed cut becomes, for fusion (§5).
 A gem's worth is its **% damage above your weakest equipped gem**, priced in gold:
 
 ```
-directValue = max(0, (gemScore − baseline) × goldPerDamage)
+directValue = max(0, (gemValue − baseline) × goldPerDamage)
 ```
 
-- **`gemScore`** ≈ the gem's % damage (the log-space `D` sum from
-  *how-a-gem-is-graded.md*).
-- **`baseline`** = the % damage of the weakest gem you'd replace (your bar, ~0.5–2.5).
-- **`goldPerDamage`** = how much a 1%-damage upgrade is worth to you in gold.
+- **`gemValue`** = the gem's grading value (damage `D` × the willpower multiplier,
+  from *how-a-gem-is-graded.md*), in ≈%-damage units.
+- **`baseline`** = the bar set by the weakest gem you'd replace — entered as a
+  **0–100 grade** and converted to this scale by `gradeToScore` (the inverse of the
+  global value grade). The bake evaluates exactly the twelve grade rows the tab
+  shows (C-…S+, grades 40–95).
+- **`goldPerDamage`** = how much a 1%-damage upgrade is worth to you in gold (for
+  support gems the ×3 party benefit is applied here).
 
 A gem **below baseline isn't a keeper** — it becomes **fodder**, valued only through
 fusion (§5).
 
-> **Scoring caveat (the rebake).** The grader now scores a single gem with the
-> *multiplicative* `gemValue` model (perfect gems of every cost tie at grade 100 — see
-> the grading doc). The pipeline's EV layer still uses the older *additive* `score`
-> (willpower + effects + order, ≈ % damage) and its `gradeToScore` inverse. They agree
-> to first order for these small values; the **in-progress re-bake unifies the
-> pipeline onto the same multiplicative model**. Per-gem grading and pipeline EV will
-> then share one scale.
+> **One scale everywhere (since the 2026-06-27 rebake).** Per-gem grading and the
+> pipeline's whole EV layer use the same *multiplicative* `gemValue` model (perfect
+> gems of every cost tie at grade 100 — see the grading doc); the support bake uses
+> `supportValue` the same way. The older *additive* `score` survives only as the
+> grader's raw %-damage readout, not as a value metric.
 
 ---
 
@@ -99,17 +101,23 @@ The output tier depends on the inputs (`fusionOutputDist`, additive-per-input th
 normalized): e.g. 3 Legendaries → 99/1/0% Leg/Relic/Anc, 3 Relics → 19/75/6%, 3
 Ancients → 0/25/75%.
 
-Because a fused output can itself be kept or re-fused, the per-tier expected values
-are **coupled** and solved as a 3×3 linear fixed point (`tierExpectedValue`):
+Because a fused output can itself be kept or re-fused, the expected values are
+**coupled** — and the real recipes (`3L`, `1R+2L`, `1A+2L`) couple the **base
+costs** too: the two legendaries in a relic/ancient fuse are free surplus that can
+be steered to whichever cost has the most valuable output. So the core solves one
+**joint 9-variable fixed point** (3 tiers × 3 costs, `tierExpectedValue` /
+`_solveJointEV`) by iteration:
 
 ```
-E[T] = directExp[T] + P(below baseline in T) · ( mix(T)·E − 500 ) / 3
+E[T_c] = directExp[T_c] + P(below baseline in T_c) · max(0, fodder[T_c])
 ```
 
-`directExp[T]` is the expected direct value of a random tier-`T` gem that clears
-baseline; the `mix(T)·E` term is the expected value of fusing 3 of them. Solved by
-elimination, components clamped ≥ 0. The per-gem **fusion value** of a fodder tier is
-`max(0, (mix(tier)·E − 500) / 3)`.
+`directExp[T_c]` is the expected direct value of a random tier-`T` gem at cost `c`
+that clears baseline; `fodder[T_c]` is the per-input value of that tier's fusion
+recipe — e.g. relic fodder is `(1/3)·G(c) + (2/3)·max_c G(c) − 500` where `G(c)`
+is the `1R+2L` output EV at cost `c` and the `max_c` term is the steered surplus
+(METHODOLOGY §4 has the full formulas). The per-gem **fusion value** of a fodder
+tier is that `fodder[T_c]`, clamped ≥ 0 (`fusionValueForTier`).
 
 ---
 
@@ -132,40 +140,58 @@ a reset floor:
 
 | Color | Rule | Meaning |
 |---|---|---|
-| 🟩 **Green** | cut ≥ 18k | **Worth resetting** if it lands below baseline (reroll once). Marked `↻`. |
-| 🟨 **Yellow** (4-shade ramp) | cut > 0 | **Cut, don't reset.** Dimmer = lower value (10–18k / 5–10k / 1–5k / <1k). |
+| 🟩 **Green** | cut ≥ the reset threshold (20k) | **Worth resetting** if it lands below baseline (pay the 20k reset, one more try). Marked `↻`. |
+| 🟨 **Yellow** (4-shade ramp) | cut > 0 | **Cut, don't reset.** Dimmer = lower value (10k–reset / 5–10k / 1–5k / <1k). |
 | 🟥 **Red** | cut ≤ 0 | **Don't cut** — worthless at this baseline. |
-| 🟪 **Purple** | fodder-fusion value > the weak cut value | **Fuse before cutting** — 3-into-1 nets more than completing one. Marked `⚜`. |
+| 🟪 **Purple** | **block-level:** pre-cut *rarity-upgrade* fusion beats opening the gems | **Fuse before cutting** — upgrading 3-into-1 nets more than opening them individually. Marked `⚜`. |
 
 **Roster-bound (RB)** gems are free to cut, so their section shows the cut value + odds
-only (no pipeline lane, no purple — you always cut a free gem). Thresholds live in
-`meta.verdict`.
+only (no pipeline lane, no purple — you always cut a free gem). The green/reset
+threshold and reset cost are `RESET_THRESHOLD` / `RESET_COST` (both 20k) in
+`pipeline.js`'s editable `CONST` block; the yellow bands match the baked
+`meta.verdict` (whose legacy `green: 18000` the `CONST` value overrides).
 
 ---
 
-## 7. The weekly-throughput columns
+## 7. The weekly-economy group ("Time to Complete 24")
 
-A "time to fill 24 slots" model layered on the DP cut values. Per `(rarity, cost,
-baseline, gpd)` it computes: **Box EV** (value/week of the fixed weekly box gems),
-**Direct/wk** (above-baseline keepers from cutting), **Fuse/wk** (keepers recycled
-from fodder), **Total/wk = Direct + Fuse**, **Weeks = 24 / Total/wk** (green ≤8 / amber
-8–26 / red >26), **Gold/wk**, and **Avg Score**. The scale constants
-(`CUTS_PER_WEEK`, `FRESH_BUCKET_MIX`, `BOX_SCHEDULE`) are named and retunable in the
-collector and **do not affect the per-bucket DP verdicts** — only the throughput
-columns (METHODOLOGY §6).
+A full economic loop layered on the baked DP cut values, computed client-side by
+`pipeline.js` from the editable **`CONST` block** at the top of that file — no
+re-bake needed to retune it:
+
+- **Income**: daily NRB gem drops (UC 4.4 / Rare 0.9 / Epic 0.4 per day, ×7) plus
+  **box buy decisions** — a box type is bought (up to its weekly cap) iff its
+  box-gem EV beats its cost (vendor 1,185 g ≤10/wk; mat ≈1,636 g ≤20/wk; epic
+  43,000 g ≤1/wk; boxes roll 80/15/5 UC/Rare/Epic and 60/30/10 cost 8/9/10).
+- **Processing**: every gem is cut at its bucket's DP policy. A *finished*
+  below-baseline gem is **reset** (pay 20k, one more try) when its cut-EV ≥ the
+  20k reset threshold; a weak block can be **fused pre-cut** into a rarity
+  upgrade when that beats opening it (the purple verdict).
+- **Fodder**: post-cut below-baseline gems fuse in priority `A+2L → R+2L → 3L`.
+- **Outputs**: **Weeks = 24 / (Direct/wk + Fuse/wk)** (green ≤8 / amber 8–26 /
+  red >26), net **Gold/wk** for the whole loop, and **cp%** — the combat-power
+  gain once all 24 slots clear the baseline: `1.3·(1 + Total%dmg/100) − 1` with
+  `Total%dmg = 24 × (avgScore − baseline)`. `avgScore` weights each kept
+  archetype's conditional score-when-above (a gpd-stable offline exact-DP solve,
+  `COND_SCORE`) by the per-gpd `P(above)` read live from the baked cells.
+
+The collector still bakes the *original, simpler* throughput reconstruction
+(`CUTS_PER_WEEK`, `FRESH_BUCKET_MIX`, `BOX_SCHEDULE` → the JSON's `thru` block,
+METHODOLOGY §6), but the tab renders the `CONST` model above. Neither affects the
+per-bucket DP verdicts.
 
 ---
 
-## 8. Baked vs live mode
+## 8. Everything rendered is baked (no live mode, no interpolation)
 
 A single epic DP cell is ~3 s, far too slow to recompute on input changes. So the
-collector **bakes** a dense grid of exact DP values (rarities × costs × buckets ×
-gold-per-damage anchors × baselines × roster modes) into `data/pipeline.json`.
-
-- **Baked mode** renders fixed gold/baseline tiers straight from that grid (exact DP).
-- **Live mode** takes any `(goldPerDamage, baseline)` and **bilinearly interpolates**
-  the per-bucket cut values, `P(above)`, fodder split, and throughput from the baked
-  anchors — instant, and faithful to the exact DP it interpolates.
+collector **bakes** the full grid of exact DP values — 3 rarities × 3 costs × 4
+buckets × **8 gold-per-damage tiers** × **12 grade baselines** × NRB/RB — into
+`data/pipeline.json` (and `…-support.json` for the support axis), and the tab
+renders those values by **direct key lookup**: one clickable gpd tier at a time,
+one row per baked grade. Exact and instant. The old arbitrary-baseline "live"
+mode (a bilinear interpolation of baked anchors) is gone — every number shown is
+an exact DP solve.
 
 ---
 

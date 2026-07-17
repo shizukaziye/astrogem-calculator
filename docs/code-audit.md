@@ -8,6 +8,24 @@ important) reducing **Cloudflare KV** and **lostark.bible** usage.
 > `data/pipeline*.json`) are being **re-baked in a separate fork**, so anything in them
 > below is *flagged for that fork*, not changed here.
 
+> **Status update (2026-07-16).** This audit is a 2026-06-26 snapshot; much has since
+> landed:
+> - The **rebake fork merged** (2026-06-27): the pipeline EV layer + `gradeToScore`
+>   run on the multiplicative `gemValue`/`supportValue`, both axes are baked.
+> - **#1, #2, #3 are implemented** in `worker/astrogem-bible.js` (`q:order` ordered
+>   queue snapshot, `lb:dirty:` incremental leaderboard rebuild, `nf:` not-found
+>   markers — the code comments cite these audit items).
+> - **#10 is superseded**: `advisor.js` no longer carries a Workers-AI/`WORKER_URL`
+>   branch — engines live behind the `ocr/engine.js` registry
+>   (`ocr/workersai-engine.js` keeps its own `WORKER_URL`).
+> - The **legacy `score()` layer** now has one fewer consumer: `tools/verify-dp.js`
+>   was still measuring the MC gate on `A.score` (the last value-metric use) and was
+>   fixed 2026-07-16. `score()` remains for the grader's raw %-damage readout
+>   (`relDamage`) and the JS↔Python reference battery; `gradeBounds()` no longer has
+>   any caller.
+> - Still open: **#7** (brute-force `valueBounds()`/`gradeBounds()`), the rest of
+>   **#9** (`OLD_SCORING_MODE`/`OLD_W`), the `ALLOW_ORIGIN` CORS TODO, and #6.
+
 ---
 
 ## Dead / legacy code

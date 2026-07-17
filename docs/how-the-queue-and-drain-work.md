@@ -246,8 +246,10 @@ A private dashboard that polls `?metrics=1&k=<token>` every **2 seconds**. Panel
   reflected immediately. The current mode and rate are shown at all times.
 - **Errors** — recent failed/dropped fetches with their reason and upstream status.
 - **Drain history (last hour)** — one row per drain run: time, ✓ cached / ✗ failed / ⊝ dropped
-  counts, the **stop reason** (`ok`, `time`, `budget`, `blocked`, `resumed`, or **`kick`**), the
-  duration, and the cached names. Kicks (sub-2s single-character drains) show here labeled `kick`.
+  counts, the **stop reason** (`full` — completed batch, the common case; `time`, `budget`,
+  `blocked`, `probe` — probe still down, `paused` — fail-streak breaker tripped, `resumed`, or
+  **`kick`**; `ok` shows when no stop reason was recorded), the duration, and the cached names.
+  Kicks (sub-2s single-character drains) show here labeled `kick`.
 - **Queue** — the live backlog in drain order (premium first), with each entry's wait time.
 - **Import bookmarklet** — the (deliberately non-public) one-click importer install, kept here rather
   than on the public grader.
@@ -355,5 +357,5 @@ All are `GET`. "Owner" = requires `?k=<gate token>`.
 
 ---
 
-*Last updated 2026-06-27. Source of truth is always `worker/astrogem-bible.js`,
+*Last updated 2026-07-16. Source of truth is always `worker/astrogem-bible.js`,
 `queue-admin.html`, and `grader.js` — if this doc and the code disagree, the code wins.*
