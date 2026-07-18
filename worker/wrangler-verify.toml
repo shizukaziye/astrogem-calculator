@@ -1,0 +1,16 @@
+# wrangler config for the flagged-field AI verifier (WS4).
+# Deploy:  npx wrangler deploy -c wrangler-verify.toml
+# Budget: the worker hard-caps itself at 90% of the free Workers-AI daily
+# allocation via the BUDGET KV counter (see astrogem-verify.js header) — it
+# refuses requests rather than ever incurring paid usage.
+name = "astrogem-verify"
+main = "astrogem-verify.js"
+compatibility_date = "2026-06-01"
+
+[ai]
+binding = "AI"
+
+# Shares the astrogem-data namespace (distinct vb:/vc: key prefixes).
+[[kv_namespaces]]
+binding = "BUDGET"
+id = "4e2fd2e025f24b0c872c2dfe8d911dd4"
