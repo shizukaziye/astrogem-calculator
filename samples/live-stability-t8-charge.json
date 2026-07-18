@@ -1,0 +1,42 @@
+{
+  "_note": "Live 2026-07-17. Shizu reported: grey (all-spent) Charge misread - truth model rerolls 0.",
+  "config": {
+    "baseCost": 8,
+    "gemType": "order",
+    "willpowerLevel": 5,
+    "orderLevel": 3,
+    "effect1": "Attack Power",
+    "effect1Level": 5,
+    "effect2": "Additional Damage",
+    "effect2Level": 5
+  },
+  "state": {
+    "currentTurn": 8,
+    "maxTurns": 9,
+    "rerollsRemaining": 0,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    {
+      "type": "change_gold_cost",
+      "change": -100
+    },
+    {
+      "type": "change_side_option",
+      "target": "effect1"
+    },
+    {
+      "type": "lower_effect",
+      "target": "effect2",
+      "amount": 1
+    },
+    {
+      "type": "raise_effect",
+      "target": "order",
+      "amount": 1
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "_note": "Live 2026-07-17, pet overlapping wheel/outcome row. Shizu reported: Atk Power read 4 and Additional Damage read 5 - truth is 5 and 4.",
+  "config": {
+    "baseCost": 8,
+    "gemType": "order",
+    "willpowerLevel": 5,
+    "orderLevel": 3,
+    "effect1": "Attack Power",
+    "effect1Level": 5,
+    "effect2": "Additional Damage",
+    "effect2Level": 4
+  },
+  "state": {
+    "currentTurn": 9,
+    "maxTurns": 9,
+    "rerollsRemaining": 0,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    {
+      "type": "lower_effect",
+      "target": "willpower",
+      "amount": 1
+    },
+    {
+      "type": "lower_effect",
+      "target": "effect2",
+      "amount": 1
+    },
+    {
+      "type": "raise_effect",
+      "target": "order",
+      "amount": 1
+    },
+    {
+      "type": "raise_effect",
+      "target": "effect2",
+      "amount": 1
+    }
+  ]
+}

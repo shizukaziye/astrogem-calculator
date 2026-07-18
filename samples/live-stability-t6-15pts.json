@@ -1,0 +1,43 @@
+{
+  "_note": "Live 2026-07-17 (chat-saved 2000px render of 4K). Shizu reported: Atk Power level misread as 1 (truth 5). Reset button shows (0/1) used.",
+  "config": {
+    "baseCost": 8,
+    "gemType": "order",
+    "willpowerLevel": 5,
+    "orderLevel": 1,
+    "effect1": "Attack Power",
+    "effect1Level": 5,
+    "effect2": "Additional Damage",
+    "effect2Level": 4
+  },
+  "state": {
+    "currentTurn": 6,
+    "maxTurns": 9,
+    "rerollsRemaining": 2,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    {
+      "type": "raise_effect",
+      "target": "effect2",
+      "amount": 1
+    },
+    {
+      "type": "change_side_option",
+      "target": "effect1"
+    },
+    {
+      "type": "lower_effect",
+      "target": "effect1",
+      "amount": 1
+    },
+    {
+      "type": "raise_effect",
+      "target": "order",
+      "amount": 1
+    }
+  ]
+}

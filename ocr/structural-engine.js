@@ -853,6 +853,20 @@
     // you'd sacrifice to change JUST it (constraint-forced => near-certain; two
     // near-tied assignments => flagged). One solver, no special cases.
     function nodeScore(i, v) { return scoreVecs[i] ? (scoreVecs[i][v] || 0) : 0; }
+    // FEASIBILITY GATE on the finished pts read (all rungs, not just the template
+    // path): committed levels + the S-hint bound the possible total. Applied only
+    // with ≥2 unknown nodes — there a wrong pts FORCES garbage assignments with no
+    // way back (live: a blurred '15' OCR'd as '18' excluded the true levels
+    // entirely); with 0-1 unknowns the existing mismatch machinery arbitrates.
+    if (pts != null) {
+      var kSumF = 0, nUnkF = 0;
+      for (var kf = 0; kf < 4; kf++) { if (lvFull[kf].value != null) kSumF += lvFull[kf].value; else nUnkF++; }
+      var hintF = (sHint != null && nUnkF > 0) ? 1 : 0;
+      if (nUnkF - hintF >= 2) {
+        var kAdj = kSumF + (hintF ? sHint : 0), uAdj = nUnkF - hintF;
+        if (pts < Math.max(4, kAdj + uAdj) || pts > Math.min(20, kAdj + 5 * uAdj)) { pts = null; ptsSoft = false; }
+      }
+    }
     var indep = lvFull.map(function (r) { return { v: r.value, conf: r.conf }; });
     // PIN every committed read (template OR OCR, any confidence): the constraint must
     // NEVER override a value we actually read — it only FILLS truly-null nodes and
