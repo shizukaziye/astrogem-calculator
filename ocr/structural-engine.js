@@ -357,11 +357,24 @@
     var pairT = null;
     if (btnRect) {
       var tg = templateGlyphs(btnRect, dimBtnWhite);
+      if (out._debug) out._debug.pairTG = tg ? tg.map(function (t) {
+        return (t.ch || "?") + ":" + t.score.toFixed(2) + "/" + t.margin.toFixed(2) + "(" + t.box.w + "x" + t.box.h + ")";
+      }).join(" ") : "null";
       if (tg) {
-        var ds = tg.filter(function (t) { return t.ch && /^\d$/.test(t.ch) && t.score >= 0.8 && t.margin >= 0.02; });
-        if (ds.length >= 2) {
-          var a3 = parseInt(ds[ds.length - 2].ch, 10), b3 = parseInt(ds[ds.length - 1].ch, 10);
-          if ((b3 === 5 || b3 === 7 || b3 === 9) && a3 >= 1 && a3 <= b3) pairT = { a: a3, b: b3 };
+        // Anchor on the '/' and take its IMMEDIATE NEIGHBOURS (the proven pill
+        // pattern): the old last-two-confident-digits rule was fooled twice over
+        // on one live frame — the true '1' is narrow and matches the '+' template
+        // (so it never entered the run) while a word-height "Process" letter faked
+        // a '5' at exactly the 0.80 floor. The slash can't be faked by either, and
+        // the narrow-box-is-'1' aspect rule recovers the digit the atlas can't.
+        var si2 = -1;
+        for (var sk2 = 0; sk2 < tg.length; sk2++) { if (tg[sk2].ch === "/" && tg[sk2].score >= 0.8) si2 = sk2; }
+        if (si2 >= 1 && si2 + 1 < tg.length) {
+          var aB = tg[si2 - 1], bB = tg[si2 + 1];
+          var a3 = aB.box.w / Math.max(1, aB.box.h) < 0.45 ? 1
+            : (aB.ch && /^\d$/.test(aB.ch) && aB.score >= 0.8 ? parseInt(aB.ch, 10) : null);
+          var b3 = (bB.ch && /^\d$/.test(bB.ch) && bB.score >= 0.8) ? parseInt(bB.ch, 10) : null;
+          if (a3 != null && b3 != null && (b3 === 5 || b3 === 7 || b3 === 9) && a3 >= 1 && a3 <= b3) pairT = { a: a3, b: b3 };
         }
       }
     }

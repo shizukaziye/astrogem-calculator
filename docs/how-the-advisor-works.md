@@ -174,11 +174,12 @@ The process that worked, distilled — future sessions should start here:
   OCR floor for gold level text; they stay in the corpus as flagged hard cases.
 - **Uncommon rarity and Destruction (cost-10) gems** have little/no corpus
   coverage; the vocabulary and pools support them, but they're untested inputs.
-- The **glyph atlas** carries a known pollution: the wheel-level harvest let
-  diamond-tip missegmentations flood the '1'/'2'/'3' classes (the harvester now
-  gates on shape/fill — `addDigitInstance`), but the ENGINE'S template gates are
-  calibrated against the polluted atlas; regenerating it shifts reads corpus-wide
-  and must be done together with a gate recalibration (attempted 2026-07-18,
-  parked: clean templates + old gates = one new silent).
+- ~~The glyph atlas pollution~~ **RESOLVED (2026-07-18 pass 2):** the atlas was
+  regenerated with the tip-gated harvester (clean '1'/'2'/'3', the harvest/read
+  segmentation bounds unified at 1.7) and landed at full parity — the one
+  regression the swap exposed was the Process-pair template vote trusting
+  "last two confident digits" (a narrow '1' matches '+', a word letter faked a
+  '5'); it now slash-anchors like the pill read. Net: same headline, zero
+  silents, ~10% fewer false alarms (cleaner templates flag less noise).
 - The **Workers-AI vision tier** (`worker/astrogem-vision.js`) is wired but not
   deployed; at 99%+ free-tier accuracy its value case is an open decision.

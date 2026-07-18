@@ -61,7 +61,9 @@ function segRect(raster, rect, pred) {
   var boxes = L.segmentGlyphs(mask, { minColPx: 1, gapCols: 1 });
   var hs = boxes.map(function (b) { return b.h; }).sort(function (a, b) { return a - b; });
   var medH = hs.length ? hs[hs.length >> 1] : 0;
-  return { mask: mask, boxes: boxes.filter(function (b) { return b.h >= medH * 0.55 && b.h <= medH * 1.6 && b.w >= 2; }) };
+  // 1.7 upper bound matches the engine's segmentDigitBoxes (unified 2026-07-18;
+  // was 1.6 here — a silent divergence between harvest and read segmentation)
+  return { mask: mask, boxes: boxes.filter(function (b) { return b.h >= medH * 0.55 && b.h <= medH * 1.7 && b.w >= 2; }) };
 }
 
 (async function () {
