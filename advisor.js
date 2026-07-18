@@ -459,6 +459,8 @@
       return;
     }
     clearResult();   // new screenshot ⇒ any previous recommendation is stale
+    pendingCollect = null;   // and so is any unshipped record — a FAILED parse must
+                             // not leave gem A's image to pair with gem B's state
     setStatus("Reading " + (sourceNoun || "screenshot") + " with " + (eng.label || eng.name) + "…", "working");
     eng.parseScreenshot(input).then(function (parsed) {
       window.AdvisorWindow.setParsed(parsed);
