@@ -12,7 +12,7 @@
  *      (worker/astrogem-bible.js) fetches the page, extracts arkGridCores, and
  *      returns every equipped gem. We grade the WHOLE loadout: a per-gem list
  *      grouped by core, plus an overall summary. The Worker URL is a configurable
- *      placeholder (WORKER_URL below), exactly like the Workers-AI vision engine.
+ *      placeholder (WORKER_URL below).
  *
  * Grading API (model/astrogem.js, attached to window — we CALL it, never modify it):
  *   window.Astrogem.grade(config)         -> 0-100

@@ -7,10 +7,10 @@ There are **swappable engines** behind one interface, plus a shared repair pass
 | file | what it is |
 |------|------------|
 | `engine.js` | the common interface + `constraintSnap` + a small engine registry. No backend. |
-| `tesseract-engine.js` | client-side Tesseract.js OCR. Offline, no accounts. |
+| `tesseract-engine.js` | the legacy text-parsing LIBRARY (lexicon + parsers); no longer an engine. |
 | `layout.js` | the structural parser's pure image-analysis core — environment-agnostic raster functions (browser canvas + Node sharp) shared by the structural engine; calibrated via `tools/dump-structural.js`. |
-| `structural-engine.js` | the "structural" parser: reads the screenshot's rigid layout + color coding first (panel/wheel anchors, self-calibrated icon hues from `layout.js`) and uses OCR only where it is strong. |
-| `workersai-engine.js` | optional engine: POSTs the image to a Cloudflare Worker (`../worker/`) running a Workers AI vision model. Disabled until you set `WORKER_URL`. |
+| `structural-engine.js` | THE parser: reads the screenshot's rigid layout + color coding first (panel/wheel anchors, self-calibrated icon hues from `layout.js`) and uses OCR only where it is strong. |
+| `glyphs.js` | GENERATED template atlas (rebuild via `tools/build-glyphs.js`). |
 
 ## The interface
 
@@ -96,21 +96,14 @@ consumes `GEM_NAME_COST` + `normalizeOcrText`, and `tools/eval-ocr.js` still
 scores `parseConfig`/`parseCuttingState`/`parseOutcomes` as the legacy baseline
 row (~58% — the measured reason it was replaced).
 
-## Engine 2 — Workers AI (optional, NOT currently deployed)
+## The Workers-AI tier (removed 2026-07-18; verifier planned)
 
-`workersai-engine.js` POSTs the screenshot to the Cloudflare Worker in `../worker/`
-(`astrogem-vision.js`), which runs `@cf/meta/llama-3.2-11b-vision-instruct` (LLaVA
-fallback) and returns the same JSON shape. The client then runs `constraintSnap`.
-
-It is **disabled until you deploy and set the URL**:
-
-1. `cd ../worker && wrangler deploy` (see `../worker/README.md`).
-2. Paste the printed URL into the `WORKER_URL` constant at the top of
-   `workersai-engine.js`.
-3. Reload — the **Workers AI** button in the engine picker becomes selectable.
-
-While `WORKER_URL` is empty, `isAvailable()` returns `false` and the Advisor shows
-the option disabled with a tooltip explaining the one setup step.
+The original full-parse vision engine (`workersai-engine.js` +
+`worker/astrogem-vision.js`) was deleted — it re-read the whole screenshot and
+never deployed. Its WS4 replacement is a **flagged-field verifier**: the
+structural parser is the reader; the AI is asked ONLY about the specific fields
+the parser flagged (a small crop + a closed-vocabulary question), with a hard
+daily budget. Design notes: `../docs/how-the-advisor-works.md` §6.
 
 ## A/B testing
 

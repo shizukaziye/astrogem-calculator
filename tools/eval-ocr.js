@@ -18,8 +18,8 @@
  *                 parseOutcomes) + constraintSnap. NOTE: the browser engine also
  *                 does regional <canvas> cropping which Node can't do, so Node
  *                 scores are a conservative lower bound on the in-browser engine.
- *   - workersai : only if a deployed Worker URL is given via --worker-url=<url> or
- *                 the WORKER_URL env var (it can't run without a deploy). Skipped
+ *   - (the Workers-AI full-parse row was removed 2026-07-18; the WS4 verifier
+ *      replacement will get its own row). Historic usage — skipped
  *                 otherwise.
  *
  * Usage:
@@ -155,9 +155,11 @@ function scoreOne(parsed, truthRaw) {
   var silent = wrongAll.filter(function (f) { return (f.conf == null ? 1 : f.conf) >= CONF_T; })
     .map(function (f) { return f.label + (f.got !== undefined ? "(" + f.got + "≠" + f.want + ")" : "") + " conf=" + (f.conf == null ? 1 : f.conf).toFixed(2); });
   // false alarms: flagged yet CORRECT (the cost of the safety net — each one is a
-  // needless "confirm me" tap for the user)
-  var falseAlarms = scalarFields.filter(function (f) { return f.ok && (f.conf == null ? 1 : f.conf) < CONF_T; }).length;
-  if (matched === wantKeys.length && outcomeConf < CONF_T) falseAlarms++;
+  // needless "confirm me" tap for the user, and a wasted pull for the AI verifier)
+  var faFields = scalarFields.filter(function (f) { return f.ok && (f.conf == null ? 1 : f.conf) < CONF_T; });
+  var falseAlarms = faFields.length;
+  var faDetail = faFields.map(function (f) { return { field: f.label, conf: f.conf == null ? 1 : f.conf }; });
+  if (matched === wantKeys.length && outcomeConf < CONF_T) { falseAlarms++; faDetail.push({ field: "outcomes", conf: outcomeConf }); }
   return {
     fields: fields,
     scalarCorrect: correct,
@@ -169,6 +171,7 @@ function scoreOne(parsed, truthRaw) {
     wrongFlagged: wrongFlagged,
     silent: silent,
     falseAlarms: falseAlarms,
+    faDetail: faDetail,
     gotOutcomeKeys: gotKeys,
     wantOutcomeKeys: wantKeys
   };
@@ -260,26 +263,9 @@ function makeNodeStructuralParser() {
   };
 }
 
-function makeWorkersAiParser(workerUrl) {
-  if (!workerUrl) return null;
-  if (typeof fetch === "undefined") return null; // Node < 18
-  return {
-    name: "workersai",
-    label: "Workers AI (" + workerUrl + ")",
-    async parse(imagePath) {
-      var buf = fs.readFileSync(imagePath);
-      var ext = path.extname(imagePath).slice(1).toLowerCase();
-      var type = ext === "jpg" ? "image/jpeg" : "image/" + ext;
-      var resp = await fetch(workerUrl, { method: "POST", headers: { "Content-Type": type }, body: buf });
-      var data = await resp.json();
-      if (data && data.error && !data.config) throw new Error(data.error);
-      return engineApi.constraintSnap({
-        config: data.config || {}, state: data.state || {}, outcomes: data.outcomes || [], rarity: data.rarity
-      });
-    },
-    async dispose() {}
-  };
-}
+// (The Workers-AI full-parse row was removed 2026-07-18 with the dormant vision
+// worker; the WS4 replacement is a flagged-field VERIFIER with a different
+// contract and will get its own eval row when it exists.)
 
 // ---- output helpers ----
 function pct(n) { return (n * 100).toFixed(1) + "%"; }
@@ -312,7 +298,6 @@ function printFormatHelp() {
   }, null, 2));
   console.log("");
   console.log("Then re-run:  node tools/eval-ocr.js");
-  console.log("(Workers AI is only scored with --worker-url=<deployed url> or WORKER_URL=...)");
   console.log("");
 }
 
@@ -335,7 +320,7 @@ async function main() {
   }
 
   // which engines?
-  var want = ARGS.engines || ["structural", "tesseract", "workersai"];
+  var want = ARGS.engines || ["structural", "tesseract"];
   var engines = [];
   if (want.indexOf("structural") !== -1) {
     var st = makeNodeStructuralParser();
@@ -345,11 +330,6 @@ async function main() {
     var t = makeNodeTesseractParser();
     if (t) engines.push(t);
     else console.log("Skipping tesseract: tesseract.js not installed (npm i -D tesseract.js).");
-  }
-  if (want.indexOf("workersai") !== -1) {
-    var wk = makeWorkersAiParser(ARGS.workerUrl);
-    if (wk) engines.push(wk);
-    else console.log("Skipping workersai: no --worker-url / WORKER_URL (engine needs a deployed Worker).");
   }
   if (engines.length === 0) {
     console.log("No runnable engines selected. Nothing to do.");
@@ -369,6 +349,7 @@ async function main() {
     var totSilent = 0, totFalseAlarms = 0, silentList = [];
     var fieldAgg = {}; // label -> {ok,total}
     var perSample = [];
+    var faAll = [];   // {field, conf} of every false alarm (for the --dump histogram)
     for (var si = 0; si < scored.length; si++) {
       var s = scored[si];
       var truthRaw;
@@ -384,6 +365,7 @@ async function main() {
       if (sc.wholeParse) whole++;
       wrongTotal += sc.wrongTotal; wrongFlagged += sc.wrongFlagged;
       totSilent += sc.silent.length; totFalseAlarms += sc.falseAlarms;
+      if (sc.faDetail) faAll = faAll.concat(sc.faDetail);
       if (sc.silent.length) silentList.push(s.name + ": " + sc.silent.join(", "));
       sc.fields.forEach(function (f) {
         if (f.score != null) return;
@@ -424,6 +406,20 @@ async function main() {
         .sort(function (a, b) { return fieldAgg[b].fa - fieldAgg[a].fa; })
         .map(function (l) { return l + " " + fieldAgg[l].fa; }).join("  ·  ");
       if (faLine) console.log("  false alarms by field: " + faLine);
+      if (ARGS.dump) {
+        // per-field confidence histogram of the false alarms — the tuning target:
+        // a cluster just under the 0.8 threshold is a candidate for a calibrated lift
+        var faHist = {};
+        faAll.forEach(function (d) {
+          var bucket = d.conf >= 0.75 ? "0.75-0.80" : d.conf >= 0.7 ? "0.70-0.75" : d.conf >= 0.6 ? "0.60-0.70" : d.conf >= 0.5 ? "0.50-0.60" : "<0.50";
+          faHist[d.field] = faHist[d.field] || {};
+          faHist[d.field][bucket] = (faHist[d.field][bucket] || 0) + 1;
+        });
+        Object.keys(faHist).sort().forEach(function (fld) {
+          var bs = faHist[fld];
+          console.log("  FA-hist " + fld + ": " + Object.keys(bs).sort().map(function (b) { return b + "×" + bs[b]; }).join("  "));
+        });
+      }
       var labels = Object.keys(fieldAgg);
       var line = labels.map(function (l) { return l + " " + pct(fieldAgg[l].ok / fieldAgg[l].total); }).join("  ·  ");
       console.log("  per-field: " + line);

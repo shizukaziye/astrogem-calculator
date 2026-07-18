@@ -55,8 +55,9 @@ So the design is **cache-once, serve-many, fetch-politely**:
   Admin (queue-admin):  ?metrics / ?control                         (leaderboard snapshot)
 ```
 
-There is a second, unrelated Worker (`astrogem-vision`, `wrangler.toml`) that does screenshot OCR
-for the Advisor tab — it has nothing to do with the queue and isn't covered here.
+There is a second, unrelated Worker (`astrogem-data`, `wrangler-data.toml`) that stores the
+Advisor's parse-collection records in KV — it has nothing to do with the queue and isn't covered
+here. (A third, the old `astrogem-vision` OCR worker, was removed 2026-07-18.)
 
 ---
 

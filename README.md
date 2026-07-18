@@ -49,9 +49,8 @@ ocr/                The screenshot parser: structural engine (the live one, 99%+
 samples/            Real Processing-screen captures + linted ground truth
                     (tools/eval-ocr.js scores; tools/lint-labels.js validates labels).
 worker/             Cloudflare workers, each DEPLOYED SEPARATELY from the site:
-                    astrogem-bible.js (fetch/cache/queue/leaderboard),
-                    astrogem-data.js (Advisor parse collection, KV),
-                    astrogem-vision.js (optional vision OCR — not deployed). See READMEs.
+                    astrogem-bible.js (fetch/cache/queue/leaderboard) and
+                    astrogem-data.js (Advisor parse collection, KV). See README-bible.md.
 queue-admin.html    Owner dashboard for the lookup queue.
 docs/               Deep-dive docs: grading, pipeline math, leaderboard, queue/drain,
                     and the Advisor read/decide strategy.

@@ -430,7 +430,53 @@
       var tokM = footText.match(/(^|\D)(450|900|1[.,\s]?800)(\D|$)/);
       if (tokM) cval = parseInt(tokM[2].replace(/[.,\s]/g, ""), 10);
     }
-    if (cval != null) { out.state.processCost = cval; confidence.state.processCostMultiplier = 0.9; }
+    var costConf = 0.9;
+    if (cval == null) {
+      // TEMPLATE rescue: the footer psm6 block reads garbage on many low-res shots
+      // (measured: the cost went unread on 40/56 — the single biggest false-alarm
+      // class, every one a wasted "confirm me"). The cost ROW is structurally easy:
+      // locate the "Processing Cost   <number>" line, take the TRAILING box run
+      // after the last wide gap (right-aligned number; the coin icon is saturated
+      // and masked out), template-read the digits, accept only {450, 900, 1800}.
+      // NOTE: the "Processing Cost" LABEL is blue-grey and fails the white mask —
+      // on many shots the masked row is JUST the right-aligned number (~3 glyphs),
+      // so the accept is narrow and the {450,900,1800} whitelist is the real guard.
+      var costLn = locateLine(
+        { x: cx - gap * 2.3, y: goldY + gap * 1.13, w: gap * 4.6, h: gap * 0.5 },
+        dimBtnWhite,
+        { maxRowFill: 0.75, minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.2),
+          minRowPx: Math.max(3, Math.round(gap * 0.03)), accept: function (r) { return r.w >= gap * 0.22; } });
+      if (out._debug) out._debug.costLn = costLn ? { y: Math.round(costLn.y), w: Math.round(costLn.w) } : null;
+      if (costLn) {
+        var tgC2 = templateGlyphs(costLn, dimBtnWhite);
+        if (out._debug) out._debug.costTG = tgC2 ? tgC2.map(function (t) { return (t.ch || "?") + ":" + t.score.toFixed(2) + "@" + t.box.x; }).join(" ") : "null";
+        if (tgC2 && tgC2.length >= 3) {
+          var chs2 = tgC2.map(function (t) { return t.box.h; }).sort(function (a, b) { return a - b; });
+          var cmedH2 = chs2[chs2.length >> 1];
+          var runStart2 = tgC2.length - 1;
+          while (runStart2 > 0 && (tgC2[runStart2].box.x - (tgC2[runStart2 - 1].box.x + tgC2[runStart2 - 1].box.w)) < cmedH2 * 1.5) runStart2--;
+          var run2 = tgC2.slice(runStart2);
+          // the number is right-aligned: either a trailing run after a wide gap
+          // (label survived the mask) or the whole masked line sits right of center
+          var wholeLineIsRun = runStart2 === 0 && tgC2.length <= 5 && costLn.x > cx;
+          if ((runStart2 > 0 || wholeLineIsRun) && run2.length >= 3 && run2.length <= 5) {
+            var digs2 = "";
+            for (var ri2 = 0; ri2 < run2.length; ri2++) {
+              var rb2 = run2[ri2];
+              if (rb2.box.w <= 4 && rb2.box.h <= cmedH2 * 0.4) continue;   // the thousands comma
+              var dm2 = iouDigit(tgC2.mask, rb2.box);
+              if (!dm2 || dm2.score < 0.3) { digs2 = null; break; }
+              digs2 += dm2.ch;
+            }
+            if (digs2) {
+              var cv2 = parseInt(digs2, 10);
+              if (cv2 === 450 || cv2 === 900 || cv2 === 1800) { cval = cv2; costConf = 0.85; }
+            }
+          }
+        }
+      }
+    }
+    if (cval != null) { out.state.processCost = cval; confidence.state.processCostMultiplier = costConf; }
     if (out.state.processCost == null) confidence.state.processCostMultiplier = 0.3;
     if (out._debug) out._debug.costRead = { footText: footText.slice(0, 90), cval: cval };
 
@@ -684,7 +730,7 @@
       if (tmVal != null) {
         // the luminance-read S digit is real evidence, but the face is hostile ground
         // — cap it so the checksum solve still arbitrates (and flags) disagreements
-        return { value: tmVal, conf: isGoldFace ? Math.min(tmConf, 0.6) : tmConf, vec: vec };
+        return { value: tmVal, conf: isGoldFace ? Math.min(tmConf, 0.6) : tmConf, vec: vec, src: "tm" };
       }
       // OCR ladder (proven on "Lv. N"): plain → single-char → dilate
       var read = await maskedOcr(lineX, pred, { whitelist: "Lv.12345 ", psm: 7 });
@@ -696,7 +742,7 @@
       }
       var conf = m ? Math.min(0.9, read.conf + 0.2) : 0;
       if (isGoldFace) conf = Math.min(conf, 0.45);
-      return { value: m ? parseInt(m[1], 10) : null, conf: conf, vec: vec };
+      return { value: m ? parseInt(m[1], 10) : null, conf: conf, vec: vec, src: "ocr" };
     }
     var lvFull = [
       await readLevelFull(nodes.nodeN, false),   // willpower
@@ -901,6 +947,7 @@
     // confirms it. Free nodes (gold-on-gold S, unreadable blur) are the null ones.
     var pinned = indep.map(function (x) { return x.v != null; });
     var levels = [null, null, null, null], conf4 = [0, 0, 0, 0];
+    var enumAssigned = [false, false, false, false];
     var freeIdx = [];
     for (var i = 0; i < 4; i++) { if (pinned[i]) { levels[i] = indep[i].v; conf4[i] = indep[i].conf; } else freeIdx.push(i); }
 
@@ -973,6 +1020,7 @@
             var alt = -Infinity;
             for (var r = 1; r < combos.length; r++) { if (combos[r][q2] !== best[q2]) { alt = combos[r]._s; break; } }
             levels[fidx] = best[q2];
+            enumAssigned[fidx] = true;   // chosen BY the template vector — no self-corroboration
             if (alt === -Infinity) conf4[fidx] = 0.9;
             else conf4[fidx] = Math.max(0.15, Math.min(0.9, 0.5 + (best._s - alt) * 3.0));
           }
@@ -988,6 +1036,26 @@
       conf4[f] = indep[f].v == null ? 0 : Math.min(0.85, indep[f].conf);
     }
     if (ptsSoft) conf4 = conf4.map(function (cv) { return Math.min(cv, 0.7); });
+
+    // TWO-CHANNEL corroborator (false-alarm reduction — every flagged-but-correct
+    // field is a wasted "confirm me" tap AND a wasted AI-verifier pull): lift a
+    // mid-confidence level to 0.82 when the node's own template score vector
+    // INDEPENDENTLY agrees with the final value. Independence rules: enumeration
+    // picks are excluded (the enumeration chose BY the vector), template-committed
+    // reads are excluded (their conf already IS the vector), and the S node is
+    // excluded (its hint/vector are one channel, and hint agreement already boosts
+    // to 0.85). What remains — OCR-committed reads and arithmetic solves — gets a
+    // genuine second witness. A real margin is required so flat noise can't vote.
+    for (var vc = 0; vc < 3; vc++) {
+      if (conf4[vc] < 0.5 || conf4[vc] >= 0.8) continue;
+      if (enumAssigned[vc]) continue;
+      if (lvFull[vc].value != null && lvFull[vc].src === "tm") continue;
+      var vv = scoreVecs[vc];
+      if (!vv) continue;
+      var vb1 = -1, vb1v = null, vb2 = -1;
+      for (var vd = 1; vd <= 5; vd++) { var vs = vv[vd]; if (vs > vb1) { vb2 = vb1; vb1 = vs; vb1v = vd; } else if (vs > vb2) vb2 = vs; }
+      if (vb1v === levels[vc] && (vb1 - vb2) >= 0.03) conf4[vc] = 0.82;
+    }
 
     out.config.willpowerLevel = levels[0]; confidence.config.willpowerLevel = conf4[0];
     out.config.effect1Level = levels[1]; confidence.config.effect1Level = conf4[1];

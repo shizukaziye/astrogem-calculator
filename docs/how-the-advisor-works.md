@@ -181,5 +181,10 @@ The process that worked, distilled — future sessions should start here:
   "last two confident digits" (a narrow '1' matches '+', a word letter faked a
   '5'); it now slash-anchors like the pill read. Net: same headline, zero
   silents, ~10% fewer false alarms (cleaner templates flag less noise).
-- The **Workers-AI vision tier** (`worker/astrogem-vision.js`) is wired but not
-  deployed; at 99%+ free-tier accuracy its value case is an open decision.
+- The original **Workers-AI full-parse tier was deleted** (2026-07-18) — it
+  re-read whole screenshots and never shipped. The WS4 replacement in design: a
+  **flagged-field verifier** — the structural parser stays the reader; the AI is
+  asked only about the fields the parser flagged, as a small crop + a
+  closed-vocabulary question, behind a site-token gate and a hard KV daily
+  budget. Flag PRECISION is therefore the token budget: every flagged-but-correct
+  field is a wasted pull, which is why false-alarm reduction precedes the build.
