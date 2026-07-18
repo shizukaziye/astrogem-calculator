@@ -153,6 +153,14 @@
       // to 1. Nothing below the button matters except chat, which the pair regex
       // and the {5,7,9} gate ignore.
       var mg = 0.06, mgBot = 0.16;
+      // the panel's rect in ORIGINAL-image coordinates, exposed for the AI
+      // verifier's crop (the raster below is cropped+rescaled and useless for it)
+      out._srcPanel = {
+        x: Math.max(0, Math.round(found.rect.x - found.rect.w * mg)),
+        y: Math.max(0, Math.round(found.rect.y - found.rect.h * mg)),
+        w: Math.round(found.rect.w * (1 + 2 * mg)),
+        h: Math.round(found.rect.h * (1 + mg + mgBot))
+      };
       var cr = {
         x: found.rect.x - found.rect.w * mg, y: found.rect.y - found.rect.h * mg,
         w: found.rect.w * (1 + 2 * mg), h: found.rect.h * (1 + mg + mgBot)
@@ -530,10 +538,39 @@
       confidence.state.rerollsRemaining = 0.85;
     }
     if (out.state.rerollsShownFree == null) {
+      // CHARGE DETECTION runs BEFORE the dim digit rescue (ORDER MATTERS — live
+      // bug 2026-07-18): the rescue OCRs with a digits-only whitelist, which forces
+      // Tesseract to TRANSLITERATE a crisp grey "Charge" into digits; at native
+      // resolution that hallucinated a two-digit pill and this branch never ran.
+      // Confirm the WORD (any brightness), then the BUTTON COLOR decides —
+      // gold = paid reroll purchasable (1), grey = paid spent (0).
+      var pillCrop = L.crop(raster, pillRect);
+      var goldBtn = L.colorClusterStats(pillCrop, function (r, g, b) {
+        var c = L.hsv(r, g, b); return c.h >= 30 && c.h < 55 && c.s > 0.45 && c.v > 0.5;
+      });
+      var chRead = await maskedOcr(pillRect, dimBtnWhite, { psm: 7 });
+      var chWord = /charg|harge|chorge/i.test(normText(chRead.text));
+      if (!chWord && goldBtn.frac <= 0.35) {
+        // the DISABLED (all-spent) Charge renders dimmer than the standard mask
+        // floor — retry the word at a low floor with dilation
+        var chDimPred = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.4 && c.v > 0.32; };
+        var chRead2 = await dilatedOcr(pillCrop, chDimPred, { scale: 3, psm: 7 });
+        chWord = /charg|harge|chorge/i.test(normText(chRead2.text));
+      }
+      if (goldBtn.frac > 0.35) {
+        out.state.rerollsChargeSeen = true;                       // gold face is decisive
+        confidence.state.rerollsRemaining = 0.85;
+      } else if (chWord) {
+        out.state.rerollsChargeSpent = true;                      // grey Charge
+        confidence.state.rerollsRemaining = 0.8;
+      }
+    }
+    if (out.state.rerollsShownFree == null && !out.state.rerollsChargeSeen && !out.state.rerollsChargeSpent) {
       // dim-pill rescue: on dark captures BOTH the plain OCR and the template view
       // come up empty and the snap then DEFAULTS by rarity (three live "1/2" pills
       // became 2/2 → one phantom reroll). Same medicine as the grey captions:
       // dilate + ×3 upscale before OCR. Capped conf — a rescue read stays checkable.
+      // (Runs strictly AFTER Charge detection; see the ordering note above.)
       var pillSub = L.crop(raster, pillRect);
       // the pill text can render DIMMER than the standard mask floor (v≈0.55 grey on
       // a dark pill — verified by eye on a live "1 / 2"): use a lower threshold here
@@ -552,31 +589,6 @@
           out.state.rerollsShownDenom = pb2;
           confidence.state.rerollsRemaining = 0.75;
         }
-      }
-    }
-    if (out.state.rerollsShownFree == null) {
-      // Charge states: confirm the WORD (any brightness), then the BUTTON COLOR
-      // decides — gold = paid reroll purchasable (1), grey = paid spent (0).
-      var pillCrop = L.crop(raster, pillRect);
-      var goldBtn = L.colorClusterStats(pillCrop, function (r, g, b) {
-        var c = L.hsv(r, g, b); return c.h >= 30 && c.h < 55 && c.s > 0.45 && c.v > 0.5;
-      });
-      var chRead = await maskedOcr(pillRect, dimBtnWhite, { psm: 7 });
-      var chWord = /charg|harge|chorge/i.test(normText(chRead.text));
-      if (!chWord && goldBtn.frac <= 0.35) {
-        // the DISABLED (all-spent) Charge renders dimmer than the standard mask
-        // floor (live miss: grey Charge fell through to the rarity default, showing
-        // phantom rerolls) — retry the word at a low floor with dilation
-        var chDimPred = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.4 && c.v > 0.32; };
-        var chRead2 = await dilatedOcr(pillCrop, chDimPred, { scale: 3, psm: 7 });
-        chWord = /charg|harge|chorge/i.test(normText(chRead2.text));
-      }
-      if (goldBtn.frac > 0.35) {
-        out.state.rerollsChargeSeen = true;                       // gold face is decisive
-        confidence.state.rerollsRemaining = 0.85;
-      } else if (chWord) {
-        out.state.rerollsChargeSpent = true;                      // grey Charge
-        confidence.state.rerollsRemaining = 0.8;
       }
     }
     if (out.state.rerollsShownFree == null && !out.state.rerollsChargeSeen && !out.state.rerollsChargeSpent) {
@@ -1471,6 +1483,7 @@
       var snapped = self.constraintSnap(raw);
       snapped.confidence = raw.confidence ? snapped.confidence : undefined;
       if (raw.ocrDegraded) snapped.ocrDegraded = true;
+      if (raw._srcPanel) snapped._srcPanel = raw._srcPanel;   // for the AI verifier's crop
       return snapped;
     });
   };
