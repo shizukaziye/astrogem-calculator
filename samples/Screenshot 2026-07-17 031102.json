@@ -19,8 +19,9 @@
     "totalGoldSpent": 0,
     "rosterBound": false
   },
+  "_labelfix": "outcomes[0] was mislabeled raise (2026-07-17): the cell is 'Order Points -1' with a red DOWN arrow (zoom-verified). The parser out-read the human labeler. The 'order raise arrows render red' theory came from this mislabel - retracted.",
   "outcomes": [
-    { "type": "raise_effect", "target": "order", "amount": 1 },
+    { "type": "lower_effect", "target": "order", "amount": 1 },
     { "type": "do_nothing" },
     { "type": "raise_effect", "target": "effect1", "amount": 1 },
     { "type": "change_side_option", "target": "effect2" }
