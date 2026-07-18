@@ -1,9 +1,10 @@
 {
-  "_note": "PROMOTED from the collection flywheel (record mromx8qy, Shizu upload 2026-07-17). Parser SILENTLY misread willpowerLevel 1@conf0.84 (truth 3, user-corrected) - coordinated pts+wp misread the checksum could not catch.",
+  "_note": "PROMOTED from the collection flywheel (record mromx8qy, Shizu upload 2026-07-17).",
+  "_labelfix": "willpowerLevel was 3 from the USER's live correction - but the screenshot clearly shows Willpower Efficiency 1, and the header (6 pts = 1+1+2+2) checksum-confirms it. The user correction was the error; the parser's original wp=1@0.84 was RIGHT. Lesson: flywheel corrections are strong evidence, not automatic truth - cross-check against the stored image before promoting.",
   "config": {
     "baseCost": 9,
     "gemType": "chaos",
-    "willpowerLevel": 3,
+    "willpowerLevel": 1,
     "orderLevel": 2,
     "effect1": "Attack Power",
     "effect1Level": 1,
