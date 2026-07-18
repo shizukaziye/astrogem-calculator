@@ -313,9 +313,14 @@
         // text reads are guesses, every field is flagged; tell the user why
         setStatus("Text-reading engine failed to load (network/CDN?) — values below are rough guesses from colour only. Check them all, or retry the screenshot.", "err");
       } else {
+        // AUTO-ADVICE (Shizu 2026-07-17): a fresh parse runs the solver immediately —
+        // no click needed. The auto run does NOT ship the collection record; only a
+        // MANUAL Get advice does (the user's corrections are the valuable labels,
+        // and auto-stored uncorrected parses would flood the DB with unreviewed data).
         setStatus(n
           ? "Parsed — " + n + " field" + (n > 1 ? "s" : "") + " highlighted below need a look."
           : "Parsed. Double-check the window, then Get advice.", "");
+        runAdvice({ auto: true });
       }
     }).catch(function (err) {
       console.error(err);
@@ -407,7 +412,12 @@
   }
 
   // ---------------- run advice ----------------
-  function runAdvice() {
+  function runAdvice(opts) {
+    // opts.auto === true → triggered by a fresh parse, not a click. Auto runs skip
+    // the collection ship; the staged record stays pending so a later MANUAL click
+    // (after the user's corrections) still stores it. (A click handler passes the
+    // DOM event here — no .auto on it, so clicks are always "manual".)
+    var isAuto = !!(opts && opts.auto === true);
     var hasDP = typeof window.evaluateActionsDP === "function";
     var hasMC = typeof window.evaluateActions === "function";
     if (!hasDP && !hasMC) { setStatus("Model not loaded.", "err"); return; }
@@ -416,7 +426,7 @@
     var state = window.AdvisorWindow.getState();
     state.rosterBound = $("av-bound").dataset.on === "1";
     // ship the staged collection record: parse + the state the user actually ran
-    sendCollect(state);
+    if (!isAuto) sendCollect(state);
     if (typeof window.validateConfig === "function") {
       var v = window.validateConfig(state.config);
       if (!v.valid) { setStatus("Invalid gem: " + v.error, "err"); return; }
@@ -467,7 +477,14 @@
         }
         barI.style.width = "100%";
         renderResult(result, state, m, includeSim2, engineUsed);
-        setStatus("Done.", "");
+        if (isAuto) {
+          var nA = window.AdvisorWindow.unconfirmedCount();
+          setStatus(nA
+            ? "Auto-advice shown — " + nA + " highlighted field" + (nA > 1 ? "s" : "") + " to double-check. Correct them and press Get advice to recompute & save."
+            : "Auto-advice shown. Press Get advice after any corrections to save the reading.", "");
+        } else {
+          setStatus("Done.", "");
+        }
       } catch (err) {
         console.error(err);
         setStatus("Solver error: " + (err && err.message || err), "err");

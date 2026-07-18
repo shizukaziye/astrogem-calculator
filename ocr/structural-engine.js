@@ -485,6 +485,14 @@
       });
       var chRead = await maskedOcr(pillRect, dimBtnWhite, { psm: 7 });
       var chWord = /charg|harge|chorge/i.test(normText(chRead.text));
+      if (!chWord && goldBtn.frac <= 0.35) {
+        // the DISABLED (all-spent) Charge renders dimmer than the standard mask
+        // floor (live miss: grey Charge fell through to the rarity default, showing
+        // phantom rerolls) — retry the word at a low floor with dilation
+        var chDimPred = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.4 && c.v > 0.32; };
+        var chRead2 = await ocrText(upscale(dilateDark(L.chromaMask(pillCrop, chDimPred)), 3), { psm: 7 });
+        chWord = /charg|harge|chorge/i.test(normText(chRead2.text));
+      }
       if (goldBtn.frac > 0.35) {
         out.state.rerollsChargeSeen = true;                       // gold face is decisive
         confidence.state.rerollsRemaining = 0.85;
