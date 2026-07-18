@@ -12,6 +12,7 @@ has its own doc — see *Operations* below.
 | **[how-a-gem-is-graded.md](how-a-gem-is-graded.md)** | The whole scoring model: multiplicative damage in log space, the stat baselines and per-line `D` values, the willpower multiplier that makes perfect gems tie, the 0–100 grade + letter ranks, the support axis, and the lvl-0 whole-grid "% total damage". **Start here** — the other docs build on it. |
 | **[how-the-pipeline-tables-are-computed.md](how-the-pipeline-tables-are-computed.md)** | The cut / fuse / throw decision per effect-pair archetype: the exact Bellman DP cut value, the fusion fixed-point EV, the verdict colors, and the weekly-throughput model. (Full bake reference: [`../METHODOLOGY.md`](../METHODOLOGY.md).) |
 | **[how-the-leaderboard-ranks.md](how-the-leaderboard-ranks.md)** | How a whole character is ranked: total damage % (the sort key), the pairing-invariant avg-grade, the DPS/Support toggle, the floorless boards, and the "support main" exclusion. |
+| **[how-the-advisor-works.md](how-the-advisor-works.md)** | The Advisor end to end: the structural screenshot parser (anchor geometry → normalization → graded evidence → constraint arbitration → honest confidence), the exact-DP action ranking incl. Reset, the collection flywheel, and the debugging methodology that got the parser to 99%+. |
 
 ## Operations / infrastructure
 
@@ -26,9 +27,12 @@ has its own doc — see *Operations* below.
   *how-a-gem-is-graded.md*.
 - **Pipeline** — the cut/fuse/throw strategy tables, color-coded by gold value, for any
   gold-per-damage and baseline. Math: *how-the-pipeline-tables-are-computed.md*.
-- **Advisor** — drop a screenshot of the in-game processing screen; it reads the gem
-  state and tells you the single best action right now (process / reroll / complete)
-  with the expected value, using the same Bellman DP as the pipeline.
+- **Advisor** — share your game screen or drop a screenshot; the structural parser
+  reads the gem state (99%+ per-field, every uncertain field flagged for one-tap
+  confirmation), advice runs automatically, and the exact Bellman DP ranks
+  Process / Reroll / Complete / Reset — including the per-pair reset-value table
+  when reset is live. Corrected readings feed a collection flywheel that grows the
+  training corpus. Math + parsing: *how-the-advisor-works.md*.
 - **Leaderboard** — every cached character ranked by total damage, with a DPS/Support
   toggle. Math: *how-the-leaderboard-ranks.md*.
 

@@ -25,6 +25,25 @@ important) reducing **Cloudflare KV** and **lostark.bible** usage.
 >   any caller.
 > - Still open: **#7** (brute-force `valueBounds()`/`gradeBounds()`), the rest of
 >   **#9** (`OLD_SCORING_MODE`/`OLD_W`), the `ALLOW_ORIGIN` CORS TODO, and #6.
+>
+> **Status update (2026-07-18 — the whole-repo audit pass).** Four parallel area
+> audits re-verified everything; landed in the "audit pass 1" commit:
+> - `gradeBounds`/`grade_bounds` (JS+PY), `_solve3x3` (JS+PY), `Solver.branchStats`,
+>   `layout.refineWheelAnchors`, `layout.isGreenUp/isRedDown/isWheelLevelText`,
+>   dead `ocr/engine.js` window globals + snap-substep exports, the ENTIRE
+>   unreachable browser half of `tesseract-engine.js`, and
+>   `Favorites.count/isFull/MAX` — all REMOVED (grep-verified zero references).
+> - `pipeline.js` now reads `RESET_COST` from the model's `COSTS.reset` (was a
+>   duplicated constant); `dp.js` derives fresh-gem rerolls from `RARITY`;
+>   `validateConfig` validates `gemType`; editing an Advisor field clears a stale
+>   verdict (the onChange no-op gap).
+> - NEW: `tools/lint-labels.js` gates the sample corpus ahead of `eval-gate`.
+> - "Tesseract is the live/default engine" is stale EVERYWHERE it appears — the
+>   structural engine has been the sole live engine since 2026-07-16; the docs
+>   were rewritten accordingly (ocr/README, worker/README, this file's §opt-10).
+> - Still open from the 06-26 list: #7 remainder (`valueBounds` brute force — the
+>   live one), #9 (`OLD_SCORING_MODE`/`OLD_W`, self-documented analysis toggle),
+>   the `ALLOW_ORIGIN` CORS TODO, #6.
 
 ---
 

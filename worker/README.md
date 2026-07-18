@@ -42,9 +42,14 @@ Open [`../ocr/workersai-engine.js`](../ocr/workersai-engine.js) and set the
 const WORKER_URL = "https://astrogem-vision.<your-subdomain>.workers.dev";
 ```
 
-Reload the Advisor tab. The **Workers AI** engine option becomes selectable (it is
-shown but disabled while `WORKER_URL` is empty). The Tesseract engine remains the
-default and needs nothing.
+Reload the Advisor tab. The **Workers AI** engine option becomes selectable (the
+engine picker row itself only appears once ≥2 engines are available). The
+**structural engine remains the default** and needs nothing.
+
+> **Status (2026-07-18): the vision worker is NOT deployed.** `WORKER_URL` ships
+> empty, so the live site runs the structural engine alone (99%+ on the corpus —
+> the vision tier's value case shrank accordingly). This file documents the deploy
+> path for whenever that decision changes.
 
 ## Local development
 

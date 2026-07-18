@@ -1,15 +1,17 @@
 /**
  * worker/astrogem-data.js — the Advisor's parse-collection endpoint.
  *
- * Every "Read screen now" / screenshot upload in the Advisor produces a record:
- * the image, the parser's reading (with per-field confidences), and — when the
- * user presses Get advice — the state they actually used (their corrections are
- * free ground-truth labels). Records land in KV so the corpus grows itself;
- * tools/pull-collected.js downloads new records for labeling review.
+ * A record ships only when the user presses Get advice MANUALLY (auto-advice runs
+ * after every parse but does not store — 2026-07-17): the image, the parser's
+ * reading (with per-field confidences), and the state the user actually ran —
+ * their corrections are ground-truth labels, though fallible ones: cross-check
+ * against the stored image before promoting (a live correction once contradicted
+ * its own screenshot's points checksum). tools/pull-collected.js downloads new
+ * records for labeling review.
  *
  * Storage: ONE KV value per record, image embedded as a webp data-URL (KV values
- * cap at 25MB; a bounded webp capture is ~150-700KB). R2 is the future home once
- * it's dashboard-enabled (code 10042) — the API here won't need to change.
+ * cap at 25MB; a bounded webp capture is ~150-700KB). R2 was abandoned for KV
+ * (dashboard-enable friction, code 10042); revisit only if volume demands it.
  *
  * Routes (all gated with the site token ?k=):
  *   POST /collect      body: JSON { image, parse, final, changed, meta } -> { ok, id }

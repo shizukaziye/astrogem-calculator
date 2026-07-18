@@ -15,16 +15,22 @@ This folder holds the A/B test set for the Advisor's screenshot-reading engines
 > a persistent 1,800 footer), reroll pill states 2/2·1/2·1/1 and the gold **Charge**
 > button (free rerolls spent), View Other Items +1/+2, and chat-line noise.
 >
-> | engine | headline (per-field avg) | scalar fields | outcomes | whole-parse | flag-coverage | silent errors |
-> |--------|-------------------------|---------------|----------|-------------|---------------|---------------|
-> | **structural** (free tier) | **99.3%** | 99.4% | 99.1% | 48/53 (91%) | **100%** (6/6) | **0** |
+> | engine | headline (per-field avg) | outcomes | whole-parse | flag-coverage | silent errors |
+> |--------|-------------------------|----------|-------------|---------------|---------------|
+> | **structural** (free tier), 56-shot corpus | **97.3%** | 98.7% | 50/56 (89%) | **100%** (22/22) | **0** |
+> | — same engine on the 53-shot core (excl. 3 degraded stand-ins) | **99.5%** | 99%+ | 50/53 (94%) | 100% | 0 |
 >
-> **2026-07-17 accuracy loop (53 shots):** ten of twelve fields read at 100%
-> (baseCost, gemType, orderLevel, effect1Level, effect2, effect2Level, currentTurn,
-> maxTurns, processCostMultiplier + effect1 at 98). The remaining misses: one
-> pet-occluded effect name (station), one webp-recompressed willpower digit
-> (live-upload), two dim reroll pills — all flagged. The ship gate
-> (`npm run eval-gate`, ≥95/≥95) passes.
+> **State (2026-07-18):** eleven of twelve fields read at 100% on the core corpus.
+> The three `live-stability-*` shots are CHAT-RERENDER copies of 4K captures
+> (double-resampled + double-webp'd — the gold level text OCRs to static); they
+> stand in until the native frames arrive and are honest hard cases: everything
+> wrong on them flags. Remaining core misses: one pet-occluded effect name
+> (station), two dim reroll pills — all flagged. The ship gate
+> (`npm run eval-gate`, ≥95/≥95, label-linted first) passes.
+> Two corpus labels were themselves wrong and got fixed 2026-07-17/18 (a raise/
+> lower transcribed backwards; a live correction contradicting its own screenshot's
+> checksum) — at this accuracy level LABEL error rivals parser error, so labels are
+> linted (`tools/lint-labels.js`) and pixel-checked on any parser/label dispute.
 >
 > **The corpus spans real monitor sizes** — 50 native captures from a smaller monitor
 > (~713px panel width; the digits really are ~10px on screen) plus **2 native 4K

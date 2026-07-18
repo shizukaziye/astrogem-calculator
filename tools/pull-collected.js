@@ -2,7 +2,7 @@
 /**
  * tools/pull-collected.js — download the Advisor's collected parse records.
  *
- * Pulls every record from the astrogem-data worker (R2) into samples/collected/:
+ * Pulls every record from the astrogem-data worker (Cloudflare KV) into samples/collected/:
  *   <id>.json   the record: { ts, image, parse, final, changed, meta }
  *   <id>.webp   the capture
  * Records whose `changed` list is non-empty are the interesting ones — the user

@@ -10,11 +10,16 @@
  *       effect1, effect1Level, effect2, effect2Level
  *   }, ... ] }
  *
- * No Anthropic / external paid API — this is a plain HTML fetch + parse. No secrets
- * or bindings required. The owner deploys it and pastes the URL into grader.js
- * (WORKER_URL), exactly like the Workers-AI vision Worker.
+ * No Anthropic / external paid API and no secrets (the admin token is a soft gate
+ * in-source) — but it is NOT a plain stateless fetcher anymore. It carries the KV
+ * lookup QUEUE (premium/free lanes) + every-minute cron drain (budget guard,
+ * fail-streak circuit breaker, run/off/probe modes), the dirty-gated leaderboard
+ * snapshot rebuild, five edge rate-limit bindings, and the KR source (lopec.kr)
+ * alongside lostark.bible. Full plumbing: ../docs/how-the-queue-and-drain-work.md;
+ * ops summary: README-bible.md. The owner deploys and pastes the URL into
+ * grader.js/leaderboard.js/loadout-econ.js (WORKER_URL).
  *
- * Endpoints:
+ * Primary endpoints (full list incl. queue/admin in the queue doc):
  *   GET /?region=NA&name=Paroxysmal  -> { region, name, gems:[...], pulledAt, cached }
  *                                       (KV-cached 7d; add &refresh=1 to force fresh)
  *   GET /?list=1                     -> { characters:[{region,name,gems,pulledAt}, ...] }

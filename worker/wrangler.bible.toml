@@ -25,8 +25,10 @@ compatibility_date = "2026-06-01"
 binding = "CHARS"
 id = "0f51c3b5ac6d45a59186375d62879ad7"
 
-# Rebuild the leaderboard snapshot server-side every 10 minutes (the worker only does the
-# expensive full re-read when a character actually changed since the last build).
+# Cron fires EVERY MINUTE to drain the lookup queue (budget guard + circuit
+# breaker inside). The leaderboard snapshot rebuild rides the same tick but is
+# dirty-gated and throttled in code (~30 min cadence at most) — see
+# README-bible.md and docs/how-the-queue-and-drain-work.md.
 [triggers]
 crons = ["* * * * *"]
 

@@ -29,7 +29,7 @@
 
   // Parse-collection endpoint (worker/astrogem-data.js): every parse + the state the
   // user actually ran advice with (their corrections = ground-truth labels) goes to
-  // R2 so the corpus grows itself. Gated with the site token; fire-and-forget.
+  // Cloudflare KV so the corpus grows itself. Gated with the site token; fire-and-forget.
   var DATA_URL = "https://astrogem-data.shizukaziye.workers.dev";
 
   var lastObjectUrl = null;

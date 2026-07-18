@@ -95,6 +95,18 @@
   // hue distance on the circle
   function hueDist(a, b) { var d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; }
 
+  // Glyph-box hygiene: segmentGlyphs output minus dust and off-height fragments
+  // (0.55–1.7 × the median height). One definition — the same recipe used to be
+  // hand-rolled at every template site. (tools/build-glyphs.js keeps a 1.6 upper
+  // bound; unifying it changes the harvested atlas, parked with the atlas
+  // recalibration — see docs/how-the-advisor-works.md §6.)
+  function segmentDigitBoxes(mask) {
+    var boxes = L.segmentGlyphs(mask, { minColPx: 1, gapCols: 1 });
+    var hs = boxes.map(function (b) { return b.h; }).sort(function (a, b) { return a - b; });
+    var medH = hs.length ? hs[hs.length >> 1] : 0;
+    return boxes.filter(function (b) { return b.h >= medH * 0.55 && b.h <= medH * 1.7 && b.w >= 2; });
+  }
+
   async function parseStructural(raster, ocrFn) {
     var confidence = { config: {}, state: {}, outcomes: [0, 0, 0, 0] };
     var out = { config: {}, state: {}, outcomes: [], rarity: null, confidence: confidence };
@@ -189,6 +201,16 @@
       }
       return r;
     }
+    // Dilated micro-OCR: (pre-cropped) sub → chroma mask → 1px dilate (reconnects
+    // strokes that antialiasing broke) → nearest upscale → OCR. THE standard
+    // dim-text rescue recipe — one definition, six call sites. `scale` is a fixed
+    // factor or "auto" (targets ~160px height, capped by `maxAuto`).
+    async function dilatedOcr(sub, pred, opts) {
+      var sc = opts.scale === "auto"
+        ? Math.max(2, Math.min(opts.maxAuto || 4, Math.round(160 / Math.max(1, sub.height))))
+        : opts.scale;
+      return ocrText(upscale(dilateDark(L.chromaMask(sub, pred)), sc), { whitelist: opts.whitelist, psm: opts.psm });
+    }
     function whiteOrGold(r, g, b) { return L.isWhiteText(r, g, b) || L.isGoldText(r, g, b); }
     // caption cells mix white names, chartreuse amounts, and gold ("Points +1") text
     function captionText(r, g, b) { return L.isWhiteText(r, g, b) || L.isGoldText(r, g, b) || L.isAmountText(r, g, b); }
@@ -217,10 +239,7 @@
       if (!GLYPHS) return null;
       var sub = L.crop(raster, rect);
       var mask = L.chromaMask(sub, pred);
-      var boxes = L.segmentGlyphs(mask, { minColPx: 1, gapCols: 1 });
-      var hs = boxes.map(function (b) { return b.h; }).sort(function (a, b) { return a - b; });
-      var medH = hs.length ? hs[hs.length >> 1] : 0;
-      boxes = boxes.filter(function (b) { return b.h >= medH * 0.55 && b.h <= medH * 1.7 && b.w >= 2; });
+      var boxes = segmentDigitBoxes(mask);
       var items = boxes.map(function (b) {
         var m = L.matchGlyph(mask, b, GLYPHS);
         return { box: b, ch: m ? m.ch : null, score: m ? m.score : 0, margin: m ? m.margin : 0 };
@@ -460,7 +479,7 @@
       // the pill text can render DIMMER than the standard mask floor (v≈0.55 grey on
       // a dark pill — verified by eye on a live "1 / 2"): use a lower threshold here
       var pillDim = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.35 && c.v > 0.45; };
-      var pillR2 = await ocrText(upscale(dilateDark(L.chromaMask(pillSub, pillDim)), 3), { whitelist: "0123456789/", psm: 7 });
+      var pillR2 = await dilatedOcr(pillSub, pillDim, { scale: 3, whitelist: "0123456789/", psm: 7 });
       var pillM2 = pillR2.text.match(/(\d)\s*\/\s*(\d)/);
       if (!pillM2) {
         // the thin '/' vanishes before the digits do: exactly two digits ⇒ n,d
@@ -490,7 +509,7 @@
         // floor (live miss: grey Charge fell through to the rarity default, showing
         // phantom rerolls) — retry the word at a low floor with dilation
         var chDimPred = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.4 && c.v > 0.32; };
-        var chRead2 = await ocrText(upscale(dilateDark(L.chromaMask(pillCrop, chDimPred)), 3), { psm: 7 });
+        var chRead2 = await dilatedOcr(pillCrop, chDimPred, { scale: 3, psm: 7 });
         chWord = /charg|harge|chorge/i.test(normText(chRead2.text));
       }
       if (goldBtn.frac > 0.35) {
@@ -628,10 +647,7 @@
       var vec = null, tmVal = null, tmConf = 0;
       if (GLYPHS) {
         var mask = L.chromaMask(L.crop(raster, lineX), pred);
-        var boxes = L.segmentGlyphs(mask, { minColPx: 1, gapCols: 1 });
-        var hs = boxes.map(function (b) { return b.h; }).sort(function (a, b) { return a - b; });
-        var medH = hs.length ? hs[hs.length >> 1] : 0;
-        boxes = boxes.filter(function (b) { return b.h >= medH * 0.55 && b.h <= medH * 1.7 && b.w >= 2; });
+        var boxes = segmentDigitBoxes(mask);
         var db = null, dbBox = null;
         for (var i = 0; i < boxes.length; i++) { var sv = digitScoreVec(mask, boxes[i]); if (sv.isDigit) { db = sv; dbBox = boxes[i]; } }
         if (db) {
@@ -662,8 +678,7 @@
       var m = read.text.match(/([1-5])\s*$/) || read.text.match(/([1-5])/);
       if (!m) { read = await maskedOcr(lineX, pred, { whitelist: "12345", psm: 10 }); m = read.text.match(/([1-5])/); }
       if (!m) {
-        var sub2 = L.crop(raster, lineX), masked2 = dilateDark(L.chromaMask(sub2, pred));
-        read = await ocrText(upscale(masked2, Math.max(2, Math.min(5, Math.round(160 / Math.max(1, sub2.height))))), { whitelist: "Lv.12345 ", psm: 7 });
+        read = await dilatedOcr(L.crop(raster, lineX), pred, { scale: "auto", maxAuto: 5, whitelist: "Lv.12345 ", psm: 7 });
         m = read.text.match(/([1-5])\s*$/) || read.text.match(/([1-5])/);
       }
       var conf = m ? Math.min(0.9, read.conf + 0.2) : 0;
@@ -797,7 +812,7 @@
               var runX0 = tgP[0].box.x, runX1 = tgP[aIdx - 1].box.x + tgP[aIdx - 1].box.w;
               var runBox = { x: ptsRect.x + Math.max(0, runX0 - 3), y: ptsRect.y, w: (runX1 - runX0) + 6, h: ptsRect.h };
               var runSub = L.crop(raster, runBox);
-              var runRead = await ocrText(upscale(dilateDark(L.chromaMask(runSub, dimBtnWhite)), 4), { whitelist: "0123456789", psm: 7 });
+              var runRead = await dilatedOcr(runSub, dimBtnWhite, { scale: 4, whitelist: "0123456789", psm: 7 });
               var runM = (runRead.text || "").match(/(\d{1,2})/);
               if (runM) {
                 var rv2 = parseInt(runM[1], 10);
@@ -821,9 +836,7 @@
     var ptsRead = await maskedOcr(ptsRect, L.isWhiteText, { psm: 7 });
     var pts = ptsT != null ? ptsT : extractPts(ptsRead.text);
     if (pts == null) {
-      var dRead = await ocrText(
-        upscale(dilateDark(L.chromaMask(ptsSub, L.isWhiteText)), Math.max(2, Math.min(4, Math.round(160 / Math.max(1, ptsSub.height))))),
-        { psm: 7 });
+      var dRead = await dilatedOcr(ptsSub, L.isWhiteText, { scale: "auto", psm: 7 });
       logPtsRead("(dilated pts)", dRead);
       pts = extractPts(dRead.text);
     }
@@ -1085,7 +1098,7 @@
         // dedicated dim-grey OCR: dilate + ×4 (the standard caption pass only gets ×2
         // and misses most of the grey text — 4 live −100% cells parsed as do_nothing)
         var gSub = L.crop(raster, capRect);
-        var gRead2 = await ocrText(upscale(dilateDark(L.chromaMask(gSub, greyPred)), 3), { psm: 6 });
+        var gRead2 = await dilatedOcr(gSub, greyPred, { scale: 3, psm: 6 });
         var gTxt = normText(gRead2.text).toLowerCase();
         // cost evidence: "100"-ish in either OCR, or a '0','0' template pair (round
         // dim glyphs match '0' well even when '1'/'−' merge away)

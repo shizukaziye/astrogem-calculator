@@ -43,13 +43,15 @@ Outcome objects (the shape `model/nested.js#applyOutcome` consumes):
 ```
 
 Engines self-register on load. The Advisor lists them via `ocrListEngines()` and
-picks one with `ocrGetEngine(name)`.
+picks one with `ocrGetEngine(name)`; the picker row auto-hides when only one
+engine is available (the production state: **structural** is the sole live engine).
 
 ## `constraintSnap` — the accuracy lever
 
-`constraintSnap(parsed)` is shared by both engines (on the `BaseEngine` prototype and
-exported as `ocrConstraintSnap`). It takes a noisy/partial/impossible parse and
-returns a fully **legal** `{ config, state, outcomes:[4] }`:
+`constraintSnap(parsed)` is shared by every engine (on the `BaseEngine` prototype;
+in Node via `require("./engine.js").constraintSnap`). It takes a
+noisy/partial/impossible parse and returns a fully **legal**
+`{ config, state, outcomes:[4] }`:
 
 - **baseCost** snapped to `{8,9,10}` (nearest; defaults to 10).
 - **effects** canonicalized (case/space/punct + common OCR misreads) and snapped into
@@ -70,23 +72,31 @@ so it stays in sync if the model changes. Each engine runs its raw parse through
 `this.constraintSnap(...)` before returning, so downstream `window.evaluateActions`
 always gets a legal state.
 
-## Engine 1 — Tesseract.js (default, offline)
+## Engine 1 — structural (the DEFAULT and only live engine)
 
-`tesseract-engine.js` is a tidied port of the reference pipeline
-(`ark-grid-solver/astrogem-regions.js` + `scan-screen.js`):
+`structural-engine.js` reads the screen's STRUCTURE and COLOR first and uses OCR
+only where it is strong — anchored to the wheel's diamond geometry, normalized to
+one canonical scale, template-matching the game's own fixed font, and arbitrated
+by game-rule constraints (the points checksum, effect pools, legal state ranges).
+It emits a full per-field confidence map; anything below 0.8 pulses "confirm me"
+in the Advisor window. The complete strategy, with the measured constants and the
+debugging methodology behind them, is documented in
+[`../docs/how-the-advisor-works.md`](../docs/how-the-advisor-works.md).
 
-1. Crop the modal into normalized regions (title / stat diamonds / outcome list /
-   footer) on a `<canvas>`, upscaled + contrast-boosted.
-2. OCR each region with a reused Tesseract worker (PSM 6), stitch the text.
-3. Parse with a lexicon tuned to the common misreads (`parseConfig`,
-   `parseCuttingState`, `parseOutcomes`).
-4. `constraintSnap` the result.
+It uses the global `Tesseract` (CDN) for its masked micro-OCR calls, with a
+self-healing worker queue: a failed/blocked worker degrades the parse honestly
+(every confidence capped at 0.5 + an explicit status message) instead of failing
+or silently guessing.
 
-It uses the global `Tesseract` already loaded by `index.html` from the CDN. In Node
-it registers but reports `isAvailable() === false` (no DOM/canvas); the eval harness
-drives the exported parser functions directly on full-frame OCR instead.
+## The legacy Tesseract lexicon (`tesseract-engine.js`)
 
-## Engine 2 — Workers AI (optional, needs deploy)
+The original full-frame Tesseract engine — superseded 2026-07-16 and no longer
+registered. What remains is its text-parsing LIBRARY: the structural engine
+consumes `GEM_NAME_COST` + `normalizeOcrText`, and `tools/eval-ocr.js` still
+scores `parseConfig`/`parseCuttingState`/`parseOutcomes` as the legacy baseline
+row (~58% — the measured reason it was replaced).
+
+## Engine 2 — Workers AI (optional, NOT currently deployed)
 
 `workersai-engine.js` POSTs the screenshot to the Cloudflare Worker in `../worker/`
 (`astrogem-vision.js`), which runs `@cf/meta/llama-3.2-11b-vision-instruct` (LLaVA

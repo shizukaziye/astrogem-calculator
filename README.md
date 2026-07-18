@@ -33,16 +33,28 @@ grader.js           Grader tab: pull a character (lostark.bible / lopec.kr via t
                     worker) or enter gems by hand; 0-100 grades + ranks + grid totals.
 pipeline.js         Pipeline tab: cut/fuse/throw verdict tables + the weekly-economy
                     group (editable CONST block).
-advisor.js          Advisor tab: Processing-screen OCR -> live per-turn advice (exact DP).
+advisor.js          Advisor tab controller: screenshot/screen-share intake, auto-advice
+                    on parse, verdict cards (Process/Reroll/Complete/Reset + the reset
+                    pair table), parse-collection shipping.
+advisor-setup.js    Advisor "who/market" panel (roster search, axis, gpd, baseline).
+advisor-window.js   The in-game Processing-window lookalike input form (tap-to-edit,
+                    amber "confirm me" flags, Process ▸ turn-advance).
 leaderboard.js      Leaderboard tab: every cached character ranked by total damage.
+loadout-econ.js     Shared baseline/gpd economics + character-fetch glue.
 favorites.js / gate.js / bible-import.js
                     Roster favorites, shared gating, character-import glue.
-ocr/                OCR engines (Tesseract + structural layout parser) + engine contract.
-samples/            Real Processing-screen captures + ground truth (tools/eval-ocr.js).
-worker/             Cloudflare workers: astrogem-bible.js (fetch/cache/queue/leaderboard;
-                    DEPLOYED SEPARATELY from the site) + astrogem-vision.js. See READMEs.
+ocr/                The screenshot parser: structural engine (the live one, 99%+ on the
+                    corpus), engine contract/constraintSnap, glyph atlas, legacy lexicon.
+                    Strategy doc: docs/how-the-advisor-works.md.
+samples/            Real Processing-screen captures + linted ground truth
+                    (tools/eval-ocr.js scores; tools/lint-labels.js validates labels).
+worker/             Cloudflare workers, each DEPLOYED SEPARATELY from the site:
+                    astrogem-bible.js (fetch/cache/queue/leaderboard),
+                    astrogem-data.js (Advisor parse collection, KV),
+                    astrogem-vision.js (optional vision OCR — not deployed). See READMEs.
 queue-admin.html    Owner dashboard for the lookup queue.
-docs/               Deep-dive docs: grading, pipeline math, leaderboard, queue/drain.
+docs/               Deep-dive docs: grading, pipeline math, leaderboard, queue/drain,
+                    and the Advisor read/decide strategy.
 METHODOLOGY.md      The Pipeline bake reference (scoring, fusion fixed point, schema).
 ```
 
@@ -64,8 +76,10 @@ else its **fusion-fodder** value; `goldPerDamage` is gold per 1% damage. Fusion
 base costs) couples every tier AND base cost — resolved as a **joint 9-variable
 fixed point** over E[tier, cost] per `(baseline, goldPerDamage)`. The value
 distribution per tier is computed in **closed form** (enumerating level-sum
-partitions × effect pairs), not by sampling. The **Advisor** ranks Process /
-Reroll / Complete with an **exact Bellman dynamic program** (`model/dp.js`):
+partitions × effect pairs), not by sampling. The **Advisor** reads the live
+Processing screen (structural parser, `ocr/` — 99%+ per-field on the corpus with
+zero unflagged errors) and ranks Process / Reroll / Complete / **Reset** with an
+**exact Bellman dynamic program** (`model/dp.js`):
 `W(config, t, r, costMult)` = the optimal expected NET gold value of an
 in-progress cut, computed on demand with memoization. A nested-Monte-Carlo
 evaluator (`model/nested.js`) is retained as the **independent cross-check**
@@ -146,8 +160,9 @@ and a Node `require()` (CommonJS). Key functions:
   `{bestAction, allActions:[{name,value,aboveBaselineOdds,expectedScore,
   expectedCost,description}], currentValue, expectedValues, expectedScores}`.
 - `Solver(baseline, goldPerDamage, rosterBound, {drawModel, axis, maxTurns})` with
-  `.W(config,t,r,cm)` (optimal NET value) and `.branchStats(config,t,r,cm)`
-  (expected final score / P(above baseline) / expected future spend along the
-  optimal policy). `maxTurns` gates Complete on a 0-process gem.
+  `.W(config,t,r,cm)` (optimal NET value); per-node diagnostics (expected final
+  score / P(above baseline) / expected future spend along the optimal policy)
+  ride on the memoized `_node` records. `maxTurns` gates Complete on a
+  0-process gem.
 - `chooseAction(solver, config, t, r, cm, outcomes, allowComplete)` — the optimal
   action given the actual 4 drawn outcomes (used by the MC cross-check).
