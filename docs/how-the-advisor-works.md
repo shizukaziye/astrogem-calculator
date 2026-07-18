@@ -182,9 +182,24 @@ The process that worked, distilled — future sessions should start here:
   '5'); it now slash-anchors like the pill read. Net: same headline, zero
   silents, ~10% fewer false alarms (cleaner templates flag less noise).
 - The original **Workers-AI full-parse tier was deleted** (2026-07-18) — it
-  re-read whole screenshots and never shipped. The WS4 replacement in design: a
-  **flagged-field verifier** — the structural parser stays the reader; the AI is
-  asked only about the fields the parser flagged, as a small crop + a
-  closed-vocabulary question, behind a site-token gate and a hard KV daily
-  budget. Flag PRECISION is therefore the token budget: every flagged-but-correct
-  field is a wasted pull, which is why false-alarm reduction precedes the build.
+  re-read whole screenshots and never shipped. The WS4 replacement **SHIPPED
+  2026-07-18**: the **flagged-field verifier** (`worker/astrogem-verify.js`,
+  deployed at `astrogem-verify.shizukaziye.workers.dev`) — the structural parser
+  stays the reader; the AI (llama-3.2-11b-vision, LLaVA fallback) is asked only
+  about the fields the parser flagged, as one ≤768px panel crop + closed-vocab
+  questions, behind the LockedIn site-token gate and a hard KV daily budget
+  (9,000 est. Neurons = 90% of the free tier; the worker 429s past it — it can
+  never incur paid usage). Client side (`advisor.js verifyFlagged`): runs after
+  parse, before auto-advice; arbitration is mechanical — AI agrees → conf lifts
+  to 0.85 (unflagged); AI disagrees while parser conf < 0.5 → adopt the AI value
+  but KEEP it flagged (0.7). A wrong AI answer therefore can never unflag a
+  field — only agreement can. Flag PRECISION is the token budget: every
+  flagged-but-correct field is a wasted pull, which is why false-alarm reduction
+  preceded the build. Deploy gotchas learned the hard way: Meta's model needs a
+  one-time `{prompt:"agree"}` license handshake (the worker self-heals on error
+  5016); the model returns its JSON sometimes as an OBJECT, sometimes as text
+  with bare fractions (`"currentTurn": 5/9`) — both repaired server-side; and
+  empty answers are never cached (a transient failure must not poison the 7-day
+  cache). Measured answer quality on first probes: ~5-6 of 8 fields correct on a
+  degraded rerender, 3/4 on a crisp 4K panel — good enough for tie-breaking
+  under the adopt-but-keep-flagged rule, not for standalone reading.

@@ -32,6 +32,13 @@
   // Cloudflare KV so the corpus grows itself. Gated with the site token; fire-and-forget.
   var DATA_URL = "https://astrogem-data.shizukaziye.workers.dev";
 
+  // The flagged-field AI verifier (worker/astrogem-verify.js, WS4): after a parse,
+  // the fields the parser flagged (<0.8 confidence) are double-checked by a vision
+  // model — one small panel crop + closed-vocabulary questions per call. Gated
+  // behind the LockedIn password (astrogemGate); the worker hard-caps its own
+  // daily spend at 90% of the free Workers-AI allocation.
+  var VERIFY_URL = "https://astrogem-verify.shizukaziye.workers.dev";
+
   var lastObjectUrl = null;
   var pendingCollect = null;   // { blob, parsed, source } — one record per parse
 
@@ -285,6 +292,146 @@
     });
   }
 
+  // ---------------- the AI verifier (WS4) ----------------
+  // Ask strings are CLOSED-VOCABULARY: the model answers from a fixed menu, which
+  // keeps outputs tiny and arbitration mechanical. Outcomes are deliberately NOT
+  // verified in v1 (free-text arbitration is where silent errors would sneak in).
+  var VERIFY_ASKS = {
+    baseCost: 'the gem name suffix — answer "8" for Stability/Corrosion, "9" for Solidity/Distortion, "10" for Immutability/Destruction',
+    gemType: 'answer "order" or "chaos" from the gem name line',
+    willpowerLevel: 'the gold number inside the TOP (red) diamond, under "Willpower Efficiency" — answer 1-5',
+    orderLevel: 'the gold number inside the BOTTOM (gold) diamond, under "Order Points" or "Chaos Points" — answer 1-5',
+    effect1: 'the effect name inside the LEFT (green) diamond — answer one of: Attack Power, Additional Damage, Boss Damage, Brand Power, Ally Damage Enh., Ally Attack Enh.',
+    effect1Level: 'the "Lv. N" number inside the LEFT (green) diamond — answer 1-5',
+    effect2: 'the effect name inside the RIGHT (blue) diamond — same menu as the left',
+    effect2Level: 'the "Lv. N" number inside the RIGHT (blue) diamond — answer 1-5',
+    currentTurn: 'the "Process (x/N)" button at the bottom — answer exactly "x/N"',
+    maxTurns: 'the "Process (x/N)" button at the bottom — answer exactly "x/N"',
+    rerollsRemaining: 'the counter at the right end of the outcome row — answer "N/M" if it shows numbers, "charge-gold" if it is a bright gold Charge button, "charge-grey" if it is a greyed-out Charge button',
+    processCostMultiplier: 'the "Processing Cost" gold number near the bottom — answer "450", "900" or "1800"'
+  };
+  var VERIFY_EFFECTS = ["Attack Power", "Additional Damage", "Boss Damage", "Brand Power", "Ally Damage Enh.", "Ally Attack Enh."];
+
+  function collectFlaggedFields(parsed) {
+    var conf = parsed.confidence || {};
+    var keys = [];
+    Object.keys(VERIFY_ASKS).forEach(function (k) {
+      var c = (conf.config && conf.config[k] != null) ? conf.config[k]
+        : (conf.state && conf.state[k] != null) ? conf.state[k] : null;
+      if (c != null && c < 0.8) keys.push(k);
+    });
+    return keys;
+  }
+
+  // Crop the ORIGINAL input to the parser-reported panel rect, bounded to 768px
+  // wide webp — the whole reason a verify call is cheap.
+  function cropPanelWebp(input, rect, cb) {
+    function fromDrawable(img, iw, ih) {
+      try {
+        var r = rect && rect.w > 40 ? rect : { x: 0, y: 0, w: iw, h: ih };
+        var sc = Math.min(1, 768 / r.w);
+        var c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(r.w * sc));
+        c.height = Math.max(1, Math.round(r.h * sc));
+        c.getContext("2d").drawImage(img, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+        cb(c.toDataURL("image/webp", 0.8));
+      } catch (e) { cb(null); }
+    }
+    if (typeof HTMLCanvasElement !== "undefined" && input instanceof HTMLCanvasElement) {
+      fromDrawable(input, input.width, input.height); return;
+    }
+    if (input instanceof Blob) {
+      var url = URL.createObjectURL(input);
+      var img = new Image();
+      img.onload = function () { var w = img.naturalWidth, h = img.naturalHeight; URL.revokeObjectURL(url); fromDrawable(img, w, h); };
+      img.onerror = function () { URL.revokeObjectURL(url); cb(null); };
+      img.src = url;
+      return;
+    }
+    cb(null);
+  }
+
+  // Normalize an AI answer for a field into the model's units; null = unusable.
+  function normalizeVerifyValue(key, rawIn) {
+    var raw = String(rawIn == null ? "" : rawIn).trim().toLowerCase();
+    if (!raw) return null;
+    if (key === "gemType") return /order/.test(raw) ? "order" : /chaos/.test(raw) ? "chaos" : null;
+    if (key === "effect1" || key === "effect2") {
+      for (var i = 0; i < VERIFY_EFFECTS.length; i++) {
+        var n = VERIFY_EFFECTS[i].toLowerCase().replace(/[^a-z]/g, "");
+        if (raw.replace(/[^a-z]/g, "").indexOf(n.slice(0, 8)) !== -1) return VERIFY_EFFECTS[i];
+      }
+      return null;
+    }
+    if (key === "currentTurn" || key === "maxTurns") {
+      var pm = raw.match(/(\d)\s*\/\s*(\d)/);
+      if (!pm) return null;
+      var xr = parseInt(pm[1], 10), NN = parseInt(pm[2], 10);
+      if ([5, 7, 9].indexOf(NN) === -1 || xr < 1 || xr > NN) return null;
+      return key === "maxTurns" ? NN : NN - xr + 1;   // x = attempts remaining
+    }
+    if (key === "rerollsRemaining") {
+      if (/charge-?grey|grey|disabled/.test(raw)) return 0;
+      if (/charge-?gold|gold/.test(raw)) return 1;
+      var rm = raw.match(/(\d)\s*\/\s*(\d)/);
+      if (rm) return Math.min(9, parseInt(rm[1], 10) + 1);   // shown free + unspent paid
+      return null;
+    }
+    if (key === "processCostMultiplier") {
+      var cm = raw.replace(/[^\d]/g, "");
+      return cm === "450" ? -100 : cm === "900" ? 0 : cm === "1800" ? 100 : null;
+    }
+    var nv = parseInt(raw.replace(/[^\d]/g, ""), 10);
+    if (key === "baseCost") return [8, 9, 10].indexOf(nv) !== -1 ? nv : null;
+    return nv >= 1 && nv <= 5 ? nv : null;   // the level fields
+  }
+
+  // Verify the flagged fields; mutates parsed (values + confidences) and resolves
+  // { checked, confirmed, corrected } (or null when the verifier didn't run).
+  function verifyFlagged(parsed, input) {
+    return new Promise(function (resolve) {
+      if (!window.astrogemGate || !window.astrogemGate.isUnlocked()) return resolve(null);
+      if (parsed.ocrDegraded) return resolve(null);
+      var keys = collectFlaggedFields(parsed);
+      if (!keys.length) return resolve(null);
+      cropPanelWebp(input, parsed._srcPanel, function (dataUrl) {
+        if (!dataUrl) return resolve(null);
+        var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+        var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 8000);
+        fetch(VERIFY_URL + "/verify?k=" + window.astrogemGate.token(), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: ctrl ? ctrl.signal : undefined,
+          body: JSON.stringify({ image: dataUrl, fields: keys.map(function (k) { return { key: k, ask: VERIFY_ASKS[k] }; }) })
+        }).then(function (r) { return r.json(); }).then(function (resp) {
+          clearTimeout(timer);
+          if (!resp || !resp.values) return resolve(null);
+          var confirmed = 0, corrected = 0;
+          keys.forEach(function (k) {
+            var ai = normalizeVerifyValue(k, resp.values[k]);
+            if (ai == null) return;
+            var inConfig = parsed.config && parsed.config[k] !== undefined;
+            var cur = inConfig ? parsed.config[k] : parsed.state[k];
+            var confMap = inConfig ? parsed.confidence.config : parsed.confidence.state;
+            if (String(ai) === String(cur)) {
+              // two independent readers agree → unflag
+              confMap[k] = Math.max(confMap[k] || 0, 0.85);
+              confirmed++;
+            } else if ((confMap[k] || 0) < 0.5) {
+              // the parser was near-guessing; the AI's answer is the better bet —
+              // adopt it but KEEP IT FLAGGED (0.7): disagreement is not certainty
+              if (inConfig) parsed.config[k] = ai; else parsed.state[k] = ai;
+              confMap[k] = 0.7;
+              corrected++;
+            }
+            // parser confident-ish + AI disagrees → keep the parser's value flagged
+          });
+          resolve({ checked: keys.length, confirmed: confirmed, corrected: corrected, budget: resp.budget });
+        }).catch(function () { clearTimeout(timer); resolve(null); });
+      });
+    });
+  }
+
   // ---------------- screenshot handling ----------------
   // Shared parse path: `input` is anything the engine's toRaster accepts
   // (File/Blob/canvas); `sourceNoun` flavors the status line; `collectBlob`
@@ -313,14 +460,22 @@
         // text reads are guesses, every field is flagged; tell the user why
         setStatus("Text-reading engine failed to load (network/CDN?) — values below are rough guesses from colour only. Check them all, or retry the screenshot.", "err");
       } else {
-        // AUTO-ADVICE (Shizu 2026-07-17): a fresh parse runs the solver immediately —
-        // no click needed. The auto run does NOT ship the collection record; only a
-        // MANUAL Get advice does (the user's corrections are the valuable labels,
-        // and auto-stored uncorrected parses would flood the DB with unreviewed data).
+        // AI VERIFY (WS4) then AUTO-ADVICE (2026-07-17): the flagged fields get a
+        // vision double-check first (LockedIn-gated; skipped when locked, clean, or
+        // the worker is slow/down), then the solver runs — no click needed. Neither
+        // step ships the collection record; only a MANUAL Get advice does.
         setStatus(n
-          ? "Parsed — " + n + " field" + (n > 1 ? "s" : "") + " highlighted below need a look."
-          : "Parsed. Double-check the window, then Get advice.", "");
-        runAdvice({ auto: true });
+          ? "Parsed — " + n + " field" + (n > 1 ? "s" : "") + " highlighted below need a look." + (window.astrogemGate && window.astrogemGate.isUnlocked() ? " Asking the AI checker…" : "")
+          : "Parsed. Double-check the window, then Get advice.", n ? "working" : "");
+        verifyFlagged(parsed, input).then(function (vr) {
+          if (vr) window.AdvisorWindow.setParsed(parsed);   // re-render with lifted/corrected fields
+          // the verify summary rides on runAdvice's own final status — runAdvice
+          // solves inside a setTimeout, so a status set here would be clobbered
+          runAdvice({ auto: true, note: vr
+            ? "AI checked " + vr.checked + " flagged field" + (vr.checked > 1 ? "s" : "") + " (" +
+              vr.confirmed + " confirmed" + (vr.corrected ? ", " + vr.corrected + " corrected" : "") + ") · "
+            : "" });
+        });
       }
     }).catch(function (err) {
       console.error(err);
@@ -418,6 +573,7 @@
     // (after the user's corrections) still stores it. (A click handler passes the
     // DOM event here — no .auto on it, so clicks are always "manual".)
     var isAuto = !!(opts && opts.auto === true);
+    var note = (opts && opts.note) || "";   // e.g. the AI-verify summary, shown ahead of the auto status
     var hasDP = typeof window.evaluateActionsDP === "function";
     var hasMC = typeof window.evaluateActions === "function";
     if (!hasDP && !hasMC) { setStatus("Model not loaded.", "err"); return; }
@@ -479,9 +635,9 @@
         renderResult(result, state, m, includeSim2, engineUsed);
         if (isAuto) {
           var nA = window.AdvisorWindow.unconfirmedCount();
-          setStatus(nA
+          setStatus(note + (nA
             ? "Auto-advice shown — " + nA + " highlighted field" + (nA > 1 ? "s" : "") + " to double-check. Correct them and press Get advice to recompute & save."
-            : "Auto-advice shown. Press Get advice after any corrections to save the reading.", "");
+            : "Auto-advice shown. Press Get advice after any corrections to save the reading."), "");
         } else {
           setStatus("Done.", "");
         }
