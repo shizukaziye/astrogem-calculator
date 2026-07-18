@@ -1,0 +1,28 @@
+{
+  "_note": "Native 4K live frame (3836x1830), 2026-07-18. THE silent coherent-wrong case: parser read order=2/effect2Level=1 (sum 7, checksum-coherent, UNFLAGGED) vs truth order=1/effect2Level=2. Shizu reported the live misread twice; pixels verified (balance 4,574,264 matches the re-report frame).",
+  "config": {
+    "baseCost": 9,
+    "gemType": "order",
+    "willpowerLevel": 3,
+    "orderLevel": 1,
+    "effect1": "Ally Damage Enh.",
+    "effect1Level": 1,
+    "effect2": "Ally Attack Enh.",
+    "effect2Level": 2
+  },
+  "state": {
+    "currentTurn": 5,
+    "maxTurns": 9,
+    "rerollsRemaining": 2,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
+    { "type": "lower_effect", "target": "willpower", "amount": 1 },
+    { "type": "raise_effect", "target": "order", "amount": 2 },
+    { "type": "raise_effect", "target": "order", "amount": 1 }
+  ]
+}

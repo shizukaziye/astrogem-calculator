@@ -674,12 +674,17 @@
       }
       var full = GLYPHS ? L.matchGlyph(mask, box, GLYPHS) : null;
       var isDigit = full && /^[1-5]$/.test(full.ch);
-      return { vec: vec, top: top, isDigit: isDigit };
+      return { vec: vec, top: top, isDigit: isDigit, full: full };
     }
     // Read one level node: return the committed digit (template if strong, else the
     // OCR ladder — "Lv. N" isolation is the hard case) AND the raw template score
     // vector (feeds the constraint enumeration for the weak/free nodes below).
-    async function readLevelFull(p, isGoldFace) {
+    // hasLvPrefix (W/E): the digit is BY CONSTRUCTION the last box of the line and
+    // sits right of the "Lv. " prefix — a live native frame (41d1b9bb) had the 'L'
+    // erode to a 5px sliver that classified as '1' @0.91 while the true '2' eroded
+    // into a '/', so the L committed at 0.95 and the checksum pushed the error into
+    // the free S node: a SILENT coherent-wrong board. Structure beats scores here.
+    async function readLevelFull(p, isGoldFace, hasLvPrefix) {
       var box = { x: p.x - gap * 0.5, y: p.y - gap * 0.35, w: gap * 1.0, h: gap * 0.72 };
       var pred = L.isGoldText;
       if (isGoldFace) {
@@ -719,13 +724,33 @@
       if (GLYPHS) {
         var mask = L.chromaMask(L.crop(raster, lineX), pred);
         var boxes = segmentDigitBoxes(mask);
-        var db = null, dbBox = null;
-        for (var i = 0; i < boxes.length; i++) { var sv = digitScoreVec(mask, boxes[i]); if (sv.isDigit) { db = sv; dbBox = boxes[i]; } }
+        var db = null, dbBox = null, lvDet = out._debug ? [] : null;
+        if (lvDet) for (var li = 0; li < boxes.length; li++) {
+          var svd = digitScoreVec(mask, boxes[li]);
+          lvDet.push(Math.round(boxes[li].x) + "+" + Math.round(boxes[li].w) + "x" + Math.round(boxes[li].h) +
+            (svd.full ? "=" + svd.full.ch + ":" + svd.full.score.toFixed(2) : "=?") + (svd.isDigit ? "*" : ""));
+        }
+        // Prefixed nodes ("Lv. N"): the digit lives RIGHT of the prefix — "Lv. "
+        // owns the left ~60% of the line, so boxes there are letters no matter how
+        // digit-like they score (the eroded-'L'→'1' silent). Commit = last
+        // digit-classified box in the right zone; when none classifies, the
+        // rightmost in-zone box still donates its score vector to the solver.
+        // Bare-digit nodes (N/S) have no prefix to fake digits, keep the plain
+        // last-digit-classified rule.
+        for (var i = 0; i < boxes.length; i++) {
+          var bx = boxes[i];
+          if (hasLvPrefix && (bx.x + bx.w / 2) <= mask.width * 0.55) continue;
+          var sv = digitScoreVec(mask, bx);
+          if (sv.isDigit) { db = sv; dbBox = bx; }
+          else if (hasLvPrefix && !db) db = { vec: sv.vec, top: sv.top, isDigit: false };   // vec-only candidate
+        }
+        if (lvDet) (out._debug.lvDetail = out._debug.lvDetail || []).push(
+          { line: { x: Math.round(lineX.x), y: Math.round(lineX.y), w: Math.round(lineX.w), h: Math.round(lineX.h) }, boxes: lvDet.join(" ") });
         if (db) {
           vec = db.vec;
           var b1 = -1, b1v = null, b2 = -1;
           for (var v = 1; v <= 5; v++) { var s = db.vec[v]; if (s > b1) { b2 = b1; b1 = s; b1v = v; } else if (s > b2) b2 = s; }
-          if (b1 >= 0.78 && (b1 - b2) >= 0.05) {
+          if (db.isDigit && dbBox && b1 >= 0.78 && (b1 - b2) >= 0.05) {
             // proven bitmapSim commit — but ink-IoU gets a VETO: sim's background-
             // dominated score let a live "Lv. 5" read as a confident 3 (which the
             // checksum then propagated into the unreadable S digit). If IoU clearly
@@ -757,10 +782,10 @@
       return { value: m ? parseInt(m[1], 10) : null, conf: conf, vec: vec, src: "ocr" };
     }
     var lvFull = [
-      await readLevelFull(nodes.nodeN, false),   // willpower
-      await readLevelFull(nodes.nodeW, false),   // effect1
-      await readLevelFull(nodes.nodeE, false),   // effect2
-      await readLevelFull(nodes.nodeS, true)     // order (gold-on-gold)
+      await readLevelFull(nodes.nodeN, false, false),   // willpower (bare digit)
+      await readLevelFull(nodes.nodeW, false, true),    // effect1 ("Lv. N")
+      await readLevelFull(nodes.nodeE, false, true),    // effect2 ("Lv. N")
+      await readLevelFull(nodes.nodeS, true, false)     // order (gold-on-gold bare digit)
     ];
     // The S (order) luminance read is a HINT, never a pinned value: at low res the
     // gold-on-gold digit is marginal and a wrong pin corrupts the checksum's
