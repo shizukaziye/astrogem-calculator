@@ -709,11 +709,20 @@
           out._debug.sMask = { onFrac: Math.round(onN / (mT.width * mT.height) * 1000) / 1000, boxW: mT.width, boxH: mT.height };
         }
       }
-      var line = L.findMaskedTextLine(raster, box, pred, {
+      var lineOptsLv = {
         rejectFill: 0.22, maxRowFill: 0.6,
         minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.22), minRowPx: 3,
         accept: function (r) { var c = r.x + r.w / 2; return Math.abs(c - p.x) <= gap * 0.28 && r.w >= gap * 0.03 && r.w <= gap * 0.85; }
-      });
+      };
+      var line = L.findMaskedTextLine(raster, box, pred, lineOptsLv);
+      // erosion rescue (windowed native scale, gap≈202): the digit mask is clean but
+      // its thinnest rows carry 1-2 pixels, under minRowPx — a live willpower '2'
+      // located as NULL, leaving {N,S} both free and the enumeration tie-breaking
+      // blind. Retry relaxed ONLY after the standard locate fails; not for the
+      // gold-face S node, where a relaxed locate latches onto specular noise.
+      if (!line && !isGoldFace) {
+        line = L.findMaskedTextLine(raster, box, pred, Object.assign({}, lineOptsLv, { minRowPx: 1 }));
+      }
       if (out._debug && isGoldFace) out._debug.sLine = line ? { x: Math.round(line.x), y: Math.round(line.y), w: Math.round(line.w), h: Math.round(line.h) } : null;
       if (!line) return { value: null, conf: 0, vec: null };
       var grow = Math.round(line.h * 0.5);

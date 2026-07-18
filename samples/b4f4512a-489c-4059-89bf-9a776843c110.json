@@ -1,0 +1,28 @@
+{
+  "_note": "Native windowed 4K frame (3836x1830), 2026-07-18 — Shizu's 'levels are all over the place' report (frame 2, balance 4,563,464). Old engine read wp=1/chaos=5/e2L=1 (sum-preserving coherent-wrong): the L-doppelganger took AAE Lv.3, and the eroded willpower '2' located NULL so {N,S} enumerated blind. Fixed by the right-zone commit rule + the minRowPx locate rescue.",
+  "config": {
+    "baseCost": 9,
+    "gemType": "chaos",
+    "willpowerLevel": 2,
+    "orderLevel": 2,
+    "effect1": "Ally Damage Enh.",
+    "effect1Level": 1,
+    "effect2": "Ally Attack Enh.",
+    "effect2Level": 3
+  },
+  "state": {
+    "currentTurn": 4,
+    "maxTurns": 9,
+    "rerollsRemaining": 2,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "do_nothing" },
+    { "type": "raise_effect", "target": "willpower", "amount": 1 },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
+    { "type": "raise_effect", "target": "order", "amount": 2 }
+  ]
+}

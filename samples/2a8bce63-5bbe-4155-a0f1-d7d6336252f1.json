@@ -1,0 +1,28 @@
+{
+  "_note": "Native windowed 4K frame (3836x1830), 2026-07-18. LAST TURN (Process 1/9) + GREY Charge (all spent) + Reset already used (0/1) + 16 points. Old engine read chaos=5/e2L=1 (sum-preserving coherent-wrong, 5+5+5+1=16); truth 5+5+3+3. Also Shizu's original 'AtkPower read as 1' and grey-Charge reports trace to this gem.",
+  "config": {
+    "baseCost": 9,
+    "gemType": "chaos",
+    "willpowerLevel": 5,
+    "orderLevel": 3,
+    "effect1": "Attack Power",
+    "effect1Level": 5,
+    "effect2": "Boss Damage",
+    "effect2Level": 3
+  },
+  "state": {
+    "currentTurn": 9,
+    "maxTurns": 9,
+    "rerollsRemaining": 0,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "lower_effect", "target": "effect1", "amount": 1 },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
+    { "type": "change_side_option", "target": "effect1" },
+    { "type": "lower_effect", "target": "effect2", "amount": 1 }
+  ]
+}
