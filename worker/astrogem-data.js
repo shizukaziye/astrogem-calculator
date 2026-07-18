@@ -62,8 +62,14 @@ export default {
       let body;
       try { body = await req.json(); } catch (e) { return json({ error: "bad json" }, 400, req); }
       if (!body || typeof body !== "object") return json({ error: "bad body" }, 400, req);
-      if (typeof body.image === "string" && !/^data:image\/(webp|png|jpeg);base64,/.test(body.image)) {
-        return json({ error: "bad image" }, 400, req);
+      // a record without a real capture or a final state is useless for training —
+      // reject it loudly so the client can tell the user (a silent 1×1-pixel test
+      // record once sat in the store masquerading as data)
+      if (typeof body.image !== "string" || !/^data:image\/(webp|png|jpeg);base64,[A-Za-z0-9+/=]{1000,}/.test(body.image)) {
+        return json({ error: "image required (real capture, not a stub)" }, 400, req);
+      }
+      if (!body.final || typeof body.final !== "object" || !body.final.config) {
+        return json({ error: "final state required" }, 400, req);
       }
 
       const now = new Date();
