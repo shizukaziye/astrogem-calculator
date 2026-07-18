@@ -217,44 +217,8 @@ def damage_percent(config):
 
 
 # -------------------- 0-100 grade + letter rank --------------------
-# grade: 0 = worst gem of its TYPE, 100 = the perfect gem of its type (so a perfect
-# cost-3/4/5 each read 100). Per-baseCost min-max, cached; "all" kept for legacy global.
-_GRADE_BOUNDS = None
-
-
-def grade_bounds():
-    global _GRADE_BOUNDS
-    if _GRADE_BOUNDS is not None:
-        return _GRADE_BOUNDS
-    per = {}
-    all_lo, all_hi = float("inf"), float("-inf")
-    for cost in (8, 9, 10):
-        pool = EFFECT_POOLS[cost]
-        lo, hi = float("inf"), float("-inf")
-        for i in range(len(pool)):
-            for j in range(i + 1, len(pool)):
-                for wp in range(1, 6):
-                    for o in range(1, 6):
-                        for a in range(1, 6):
-                            for b in range(1, 6):
-                                s = score({
-                                    "baseCost": cost, "willpowerLevel": wp, "orderLevel": o,
-                                    "effect1": pool[i], "effect1Level": a,
-                                    "effect2": pool[j], "effect2Level": b,
-                                })
-                                if s < lo:
-                                    lo = s
-                                if s > hi:
-                                    hi = s
-        per[cost] = {"min": lo, "max": hi}
-        if lo < all_lo:
-            all_lo = lo
-        if hi > all_hi:
-            all_hi = hi
-    per["all"] = {"min": all_lo, "max": all_hi}
-    _GRADE_BOUNDS = per
-    return _GRADE_BOUNDS
-
+# (grade_bounds(), the legacy additive per-type brute-forcer, was removed
+# 2026-07-18 in lockstep with the JS side — grading normalizes on value_bounds().)
 
 _VALUE_BOUNDS = None
 
@@ -889,27 +853,5 @@ def fusion_value_for_tier(input_tier, base_cost, baseline, gold_per_damage, axis
     return max(0.0, v)
 
 
-def _solve3x3(a, b):
-    m = [
-        [a[0][0], a[0][1], a[0][2], b[0]],
-        [a[1][0], a[1][1], a[1][2], b[1]],
-        [a[2][0], a[2][1], a[2][2], b[2]],
-    ]
-    for col in range(3):
-        pivot = col
-        for row in range(col + 1, 3):
-            if abs(m[row][col]) > abs(m[pivot][col]):
-                pivot = row
-        m[col], m[pivot] = m[pivot], m[col]
-        d = m[col][col]
-        if abs(d) < 1e-12:
-            return [0.0, 0.0, 0.0]
-        for j in range(4):
-            m[col][j] /= d
-        for r2 in range(3):
-            if r2 == col:
-                continue
-            f = m[r2][col]
-            for j2 in range(4):
-                m[r2][j2] -= f * m[col][j2]
-    return [m[0][3], m[1][3], m[2][3]]
+# (_solve3x3 removed 2026-07-18 in lockstep with the JS side — the joint fusion EV
+# converges by fixed-point iteration and never called it.)

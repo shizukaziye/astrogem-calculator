@@ -493,6 +493,12 @@
       shV += q[ii] * q[ii] * (2 * u[ii] * gjkP + gjkV);
     }
 
+    // DERIVATION of the /2/3: we need Σ over UNORDERED DISJOINT pairs {A,B} of
+    // 2-subsets. AllOrdered counts every ordered (A,B) including A==B (diagP) and
+    // pairs sharing exactly one element (shP); subtracting both leaves ordered
+    // disjoint pairs → /2 makes them unordered. Each 4-subset {a,b,c,d} is then
+    // counted once per way of splitting it into two disjoint 2-subsets — exactly
+    // 3 splits (ab|cd, ac|bd, ad|bc) — so /3 converts pair-sums into 4-subset sums.
     var dispP = (allP - diagP - shP) / 2 / 3;     // disjoint -> 4-subset
     var dispV = (allV - diagV - shV) / 2 / 3;
 
@@ -511,13 +517,10 @@
   function clampReroll(r) { return r < 0 ? 0 : r; }
 
   // The core memoized value. Returns the scalar optimal NET value W.
+  // (Diagnostics are read straight off _node records — a branchStats wrapper was
+  // removed 2026-07-18, nothing called it.)
   Solver.prototype.W = function (config, t, r, cm) {
     return this._node(config, t, r, cm).v;
-  };
-  // Diagnostics for the optimal policy from a node: { expScore, pAbove, expSpend }.
-  Solver.prototype.branchStats = function (config, t, r, cm) {
-    var rec = this._node(config, t, r, cm);
-    return { expScore: rec.expScore, pAbove: rec.pAbove, expSpend: rec.expSpend };
   };
 
   // Memoized node record computed in a SINGLE pass:
@@ -598,6 +601,14 @@
   // outcomes are in the applyOutcome shape (type: raise_effect / lower_effect /
   // change_side_option / change_gold_cost / reroll_increase / do_nothing, ...).
   //
+  // A fresh (reset) gem's reroll allotment, derived from the rarity table rather
+  // than a magic ternary (maxTurns uniquely identifies the rarity).
+  function freshRerollsFor(maxTurns) {
+    var R = A.RARITY;
+    for (var k in R) { if (R[k].maxTurns === maxTurns) return R[k].maxRerolls; }
+    return 3;
+  }
+
   // Returns { bestAction, allActions:[{name,value,aboveBaselineOdds,expectedScore,
   // expectedCost,description}], currentValue, expectedValues, expectedScores } —
   // the SAME shape advisor.js consumes from evaluateActions.
@@ -690,7 +701,7 @@
         effect1: config.effect1, effect1Level: 1,
         effect2: config.effect2, effect2Level: 1
       };
-      var freshRerolls = solver.maxTurns === 5 ? 1 : solver.maxTurns === 7 ? 2 : 3;
+      var freshRerolls = freshRerollsFor(solver.maxTurns);
       var freshNode = solver._node(freshCfg, solver.maxTurns, freshRerolls, 0);
       var resetGold = A.COSTS.reset;   // the reset itself is paid gold even roster-bound
       resetNet = -resetGold + freshNode.v;
@@ -717,7 +728,7 @@
     if (A.COSTS && A.COSTS.reset != null &&
         (t === 1 || (actions[0] && actions[0].name === "Complete"))) {
       var poolR = A.EFFECT_POOLS[config.baseCost] || [];
-      var freshRr = solver.maxTurns === 5 ? 1 : solver.maxTurns === 7 ? 2 : 3;
+      var freshRr = freshRerollsFor(solver.maxTurns);
       resetCombos = [];
       for (var pi = 0; pi < poolR.length; pi++) {
         for (var pj = pi + 1; pj < poolR.length; pj++) {

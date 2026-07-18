@@ -78,16 +78,17 @@
 // Heavy, rarely-used modules load on FIRST activation of their tab instead of on every visit:
 // the Advisor stack (Tesseract CDN + OCR engines + the MC/DP models) and the Leaderboard.
 // Each module self-initializes on parse (their DOMContentLoaded guards fall through after load),
-// and the leaderboard's init self-fetches when its tab is already active. Keep the ?v= numbers
-// in sync with the eager list below.
+// and the leaderboard's init self-fetches when its tab is already active.
+// Deploy note: bump a file's ?v= here whenever you edit it — browsers cache-bust on it.
+// (The eager list at the bottom of <body> is a DISJOINT set of files; nothing is shared.)
 var LAZY_TABS = {
   advisor: [
     "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
-    "model/nested.js?v=50", "model/dp.js?v=51",
-    "ocr/engine.js?v=49", "ocr/layout.js?v=52", "ocr/glyphs.js?v=53", "ocr/tesseract-engine.js?v=41",
+    "model/nested.js?v=50", "model/dp.js?v=52",
+    "ocr/engine.js?v=50", "ocr/layout.js?v=53", "ocr/glyphs.js?v=53", "ocr/tesseract-engine.js?v=42",
     "ocr/structural-engine.js?v=66", "ocr/workersai-engine.js?v=39",
-    "advisor-setup.js?v=41", "advisor-window.js?v=50",
-    "advisor.js?v=53"
+    "advisor-setup.js?v=41", "advisor-window.js?v=51",
+    "advisor.js?v=54"
   ],
   leaderboard: ["leaderboard.js?v=42"]
 };
@@ -127,11 +128,11 @@ function selectTab(name){
      grader's plan section via pipelineReady). The Advisor stack and Leaderboard are in
      LAZY_TABS above and load on first tab activation. -->
 <!-- ?v= cache-buster: bump on each deploy so browsers load fresh JS without a hard-refresh -->
-<script src="model/astrogem.js?v=50"></script>
+<script src="model/astrogem.js?v=51"></script>
 <script src="gate.js?v=37"></script>
-<script src="favorites.js?v=37"></script>
+<script src="favorites.js?v=38"></script>
 <script src="loadout-econ.js?v=1"></script>
 <script src="bible-import.js?v=2"></script>
 <script src="grader.js?v=53"></script>
-<script src="pipeline.js?v=39"></script>
+<script src="pipeline.js?v=40"></script>
 </body></html>

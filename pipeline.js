@@ -31,7 +31,9 @@
   // ===========================================================================
   var CONST = {
     SLOTS: 24,                 // gems needed to fill the loadout
-    RESET_COST: 20000,         // gold per reset (restart the cut from level 1, same side nodes, ONCE)
+    // single source of truth: model/astrogem.js COSTS.reset (the advisor's Reset
+    // action uses the same constant); fallback only if the model didn't load
+    RESET_COST: (window.Astrogem && window.Astrogem.COSTS && window.Astrogem.COSTS.reset) || 20000,
     RESET_THRESHOLD: 20000,    // a below-baseline finished gem is reset only if its cut-EV >= this
     FUSION_COST: 500,          // gold per fuse (3 gems -> 1)
 

@@ -9,7 +9,8 @@
     "verify-dp-selfcheck": "node tools/verify-dp.js --selfcheck",
     "genrefs": "node tools/gen-refs.js",
     "eval-ocr": "node tools/eval-ocr.js",
-    "eval-gate": "node tools/eval-ocr.js --engines=structural --gate=structural:0.95,0.95",
+    "lint-labels": "node tools/lint-labels.js",
+    "eval-gate": "node tools/lint-labels.js && node tools/eval-ocr.js --engines=structural --gate=structural:0.95,0.95",
     "serve": "npx http-server -p 8080 -c-1 ."
   },
   "license": "MIT",

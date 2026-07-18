@@ -420,16 +420,13 @@
 
   // -------------------- exports (dual) --------------------
 
+  // Consumed surface only (audited 2026-07-18): the snap sub-steps (snapOutcome,
+  // snapBaseCost, snapEffectToPool, canonicalEffectName, snapRarity,
+  // rarityFromMaxTurns) are internal to constraintSnap and no longer exported.
   var API = {
     constraintSnap: constraintSnap,
-    snapOutcome: snapOutcome,
-    snapBaseCost: snapBaseCost,
-    snapEffectToPool: snapEffectToPool,
-    canonicalEffectName: canonicalEffectName,
-    snapRarity: snapRarity,
-    rarityFromMaxTurns: rarityFromMaxTurns,
     BaseEngine: BaseEngine,
-    OcrEngine: OcrEngine,
+    OcrEngine: OcrEngine,   // back-compat alias; structural-engine's Node fallback references it
     registerEngine: registerEngine,
     getEngine: getEngine,
     listEngines: listEngines,
@@ -442,9 +439,7 @@
     module.exports = API;
   } else {
     root.OcrEngineAPI = API;
-    root.OcrEngine = OcrEngine;
     root.BaseEngine = BaseEngine;
-    root.ocrConstraintSnap = constraintSnap;
     root.ocrRegisterEngine = registerEngine;
     root.ocrGetEngine = getEngine;
     root.ocrListEngines = listEngines;

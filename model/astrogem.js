@@ -274,8 +274,10 @@
   }
 
   // Total score = approximate % damage of the gem (sum of per-line D, additive
-  // in log space).  [LEGACY additive-willpower score: still feeds the pipeline EV /
-  //  gradeToScore layer until the Stage-2 rebake; grading no longer uses it.]
+  // in log space).  [LEGACY additive-willpower score. Remaining consumers
+  // (2026-07-18): relDamage → the Grader's raw %-above-baseline readout, a
+  // leaderboard fallback, and the JS↔Python reference battery. The pipeline EV,
+  // grading, and gradeToScore all run on the multiplicative gemValue now.]
   function score(config) {
     var wpc = willpowerCost(config.baseCost, config.willpowerLevel);
     return willpowerScore(wpc)
@@ -317,36 +319,9 @@
   }
 
   // -------------------- 0-100 grade + letter rank --------------------
-  // grade: 0 = worst gem OF ITS TYPE, 100 = the perfect gem of its type — so a perfect
-  // cost-3, cost-4 and cost-5 each read 100, and willpower is judged relative to each
-  // type's own wp5 (dynamic). Bounds are computed per baseCost (effect pool), cached;
-  // `all` keeps the global min/max for the legacy (no-baseCost) gradeToScore.
-  var _gradeBounds = null;
-  function gradeBounds() {
-    if (_gradeBounds) return _gradeBounds;
-    var costs = [8, 9, 10], per = {}, allMin = Infinity, allMax = -Infinity;
-    for (var ci = 0; ci < costs.length; ci++) {
-      var cost = costs[ci], pool = EFFECT_POOLS[cost];
-      var min = Infinity, max = -Infinity;
-      for (var i = 0; i < pool.length; i++)
-        for (var j = i + 1; j < pool.length; j++)
-          for (var wp = 1; wp <= 5; wp++)
-            for (var o = 1; o <= 5; o++)
-              for (var a = 1; a <= 5; a++)
-                for (var b = 1; b <= 5; b++) {
-                  var s = score({ baseCost: cost, willpowerLevel: wp, orderLevel: o,
-                    effect1: pool[i], effect1Level: a, effect2: pool[j], effect2Level: b });
-                  if (s < min) min = s;
-                  if (s > max) max = s;
-                }
-      per[cost] = { min: min, max: max };
-      if (min < allMin) allMin = min;
-      if (max > allMax) allMax = max;
-    }
-    per.all = { min: allMin, max: allMax };
-    _gradeBounds = per;
-    return _gradeBounds;
-  }
+  // (A legacy additive-score `gradeBounds()` brute-forcer lived here; removed
+  // 2026-07-18 — grading normalizes on the multiplicative `valueBounds()` below,
+  // and nothing consumed the old per-cost table. See docs/code-audit.md.)
 
   // 0-100 grade for a gem (rounded to 1 decimal). GLOBAL value-normalization: with the
   // multiplicative willpower curve every baseCost's perfect gem has the SAME value, so a
@@ -379,10 +354,10 @@
     return Math.round(Math.max(0, Math.min(100, g)) * 10) / 10;
   }
 
-  // Inverse of grade(): the score (≈ % damage) at a given 0-100 grade. Used to turn
-  // a grade-based baseline into the %-damage threshold the value/verdict logic uses.
-  // Inverse of grade(): the score at grade g. Pass baseCost for the per-type scale; with
-  // no baseCost it uses the global (`all`) bounds — the legacy behavior the pipeline relies on.
+  // Inverse of grade(): the gemValue threshold at a given 0-100 grade. Used to turn
+  // a grade-based baseline into the value threshold the verdict logic compares against.
+  // Runs on the global multiplicative valueBounds() — the old per-type/`all` additive
+  // scale is gone (see the gradeBounds removal note above).
   function gradeToScore(g, baseCost) {
     // Inverts the NEW global value-grade -> the gemValue threshold for grade g, so the
     // pipeline's grade baselines compare against the gemValue distribution. baseCost is
@@ -636,8 +611,8 @@
     return _supportValueBounds;
   }
 
-  // Min-max bounds for the SUPPORT grade, over SUPPORT gems only (parallel to
-  // gradeBounds). min = worst support gem, max = the perfect support gem (10-cost
+  // Min-max bounds for the SUPPORT grade, over SUPPORT gems only (the support-axis
+  // twin of valueBounds). min = worst support gem, max = the perfect support gem (10-cost
   // Ally Attack Enh Lv5 + Brand Power Lv5, order 5, willpower 5 ≈ 0.836).
   var _supportGradeBounds = null;
   function supportGradeBounds() {
@@ -729,6 +704,9 @@
   function validateConfig(config) {
     var pool = EFFECT_POOLS[config.baseCost];
     if (!pool) return { valid: false, error: "Unknown base cost: " + config.baseCost };
+    if (config.gemType != null && config.gemType !== "order" && config.gemType !== "chaos") {
+      return { valid: false, error: 'Gem type must be "order" or "chaos" (got "' + config.gemType + '")' };
+    }
     var e1 = config.effect1, e2 = config.effect2;
     var e1ok = pool.indexOf(e1) !== -1 || e1 === "Random";
     var e2ok = pool.indexOf(e2) !== -1 || e2 === "Random";
@@ -1109,31 +1087,8 @@
     return Math.max(0, v);
   }
 
-  // Gaussian elimination with partial pivoting for a 3x3 system. Returns [0,0,0]
-  // if singular (degenerate; shouldn't happen for these well-conditioned systems).
-  function _solve3x3(A, b) {
-    var m = [
-      [A[0][0], A[0][1], A[0][2], b[0]],
-      [A[1][0], A[1][1], A[1][2], b[1]],
-      [A[2][0], A[2][1], A[2][2], b[2]]
-    ];
-    for (var col = 0; col < 3; col++) {
-      var pivot = col;
-      for (var row = col + 1; row < 3; row++) {
-        if (Math.abs(m[row][col]) > Math.abs(m[pivot][col])) pivot = row;
-      }
-      var tmp = m[col]; m[col] = m[pivot]; m[pivot] = tmp;
-      var d = m[col][col];
-      if (Math.abs(d) < 1e-12) return [0, 0, 0];
-      for (var j = 0; j <= 3; j++) m[col][j] /= d;
-      for (var r2 = 0; r2 < 3; r2++) {
-        if (r2 === col) continue;
-        var f = m[r2][col];
-        for (var j2 = 0; j2 <= 3; j2++) m[r2][j2] -= f * m[col][j2];
-      }
-    }
-    return [m[0][3], m[1][3], m[2][3]];
-  }
+  // (_solve3x3, a Gaussian 3x3 solver, was removed 2026-07-18 — the joint fusion
+  // EV converges by fixed-point iteration below and never called it.)
 
   // -------------------- exports (dual: browser global + CommonJS) --------------------
 
@@ -1162,7 +1117,6 @@
     gridQuality: gridQuality,
     coreKeyOf: coreKeyOf,
     grade: grade,
-    gradeBounds: gradeBounds,
     gradeToScore: gradeToScore,
     supportGradeToScore: supportGradeToScore,
     gemRank: gemRank,

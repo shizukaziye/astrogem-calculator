@@ -1,40 +1,29 @@
 /**
- * ocr/tesseract-engine.js — client-side screenshot reader using Tesseract.js.
+ * ocr/tesseract-engine.js — the LEGACY text-parsing LIBRARY (no longer an engine).
  *
- * DEFAULT Advisor engine: runs entirely in the browser, no accounts, works offline
- * (once the Tesseract CDN script + language model are cached). Reads the Lost Ark
- * "Processing" modal by cropping it into a few normalized regions (title / stat
- * diamonds / outcome list / footer), OCR-ing each at high contrast, then parsing
- * the text with a lexicon tuned to the common misreads. Everything is finally run
- * through the shared constraintSnap so the Advisor always gets a legal state.
+ * History: this was the original full-frame Tesseract Advisor engine. It was
+ * de-registered 2026-07-16 when the structural engine superseded it (69%/8% vs
+ * 100%/100% on the dev corpus), and its whole browser half (regional canvas crops,
+ * worker plumbing, the TesseractEngine class) was deleted 2026-07-18 as
+ * unreachable. What remains — and IS consumed — is the text lexicon:
  *
- * This is a tidied port of the reference pipeline in ark-grid-solver:
- *   astrogem-regions.js (ROIs + lexicon) and scan-screen.js
- *   (parseAstrogemText / parseCuttingStateText / parseOutcomesFromText).
+ *   GEM_NAME_COST + normalizeOcrText   → ocr/structural-engine.js (suffix→cost
+ *                                        table + OCR-typo normalizer)
+ *   parseConfig / parseCuttingState /
+ *   parseOutcomes                      → tools/eval-ocr.js (the legacy baseline
+ *                                        row it still scores in Node)
  *
- * Browser-only (needs <canvas> + the global `Tesseract`). In Node it registers but
- * reports isAvailable() === false. Depends on ocr/engine.js being loaded first.
+ * Origin of the lexicon: a tidied port of ark-grid-solver's astrogem-regions.js /
+ * scan-screen.js.
  */
 (function (root) {
   "use strict";
 
+  // (Kept only to preserve load-order parity with the browser; the parsers below
+  // are self-contained and take known effect names via their config argument.)
   var ENGINE_API = (typeof module !== "undefined" && module.exports)
     ? require("./engine.js")
     : root.OcrEngineAPI;
-
-  var BaseEngine = ENGINE_API.BaseEngine;
-  var EFFECT_POOLS = ENGINE_API.EFFECT_POOLS;
-
-  var IS_BROWSER = typeof document !== "undefined" && typeof window !== "undefined";
-
-  // ---------------- normalized regions (0..1 of width/height) ----------------
-  // Tuned on the fixed-layout Processing modal; scale to any capture resolution.
-  var ROIS = {
-    title:    { nx: 0.06, ny: 0.14, nw: 0.88, nh: 0.14 },
-    diamonds: { nx: 0.02, ny: 0.36, nw: 0.96, nh: 0.22 },
-    outcomes: { nx: 0.00, ny: 0.56, nw: 0.90, nh: 0.24 },
-    footer:   { nx: 0.04, ny: 0.80, nw: 0.92, nh: 0.18 }
-  };
 
   // ---------------- text normalization / lexicon ----------------
 
@@ -117,62 +106,7 @@
   };
   var EFFECT_KEYS_LONGEST = Object.keys(EFFECT_MAP).sort(function (a, b) { return b.length - a.length; });
 
-  // ---------------- canvas crop + preprocess ----------------
-
-  function cropToCanvas(img, roi) {
-    var w = img.naturalWidth || img.width;
-    var h = img.naturalHeight || img.height;
-    if (!w || !h) throw new Error("Image has no dimensions");
-    var sx = Math.floor(roi.nx * w);
-    var sy = Math.floor(roi.ny * h);
-    var sw = Math.max(1, Math.floor(roi.nw * w));
-    var sh = Math.max(1, Math.floor(roi.nh * h));
-    var scale = Math.min(3, Math.max(2, 2000 / sw));
-    var canvas = document.createElement("canvas");
-    canvas.width = Math.floor(sw * scale);
-    canvas.height = Math.floor(sh * scale);
-    var ctx = canvas.getContext("2d", { willReadFrequently: true });
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-    var id = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    var d = id.data;
-    for (var i = 0; i < d.length; i += 4) {
-      var y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-      var v = (y - 128) * 1.3 + 128;
-      v = Math.max(0, Math.min(255, v));
-      d[i] = d[i + 1] = d[i + 2] = v;
-    }
-    ctx.putImageData(id, 0, 0);
-    return canvas;
-  }
-
-  // Full-frame fallback preprocess (upscale + grayscale + contrast).
-  function preprocessFull(source) {
-    var w = source.naturalWidth || source.width || 0;
-    var h = source.naturalHeight || source.height || 0;
-    if (!w || !h) return source;
-    var targetW = Math.min(2560, Math.max(1920, w));
-    var scale = targetW / w;
-    var targetH = Math.round(h * scale);
-    var canvas = document.createElement("canvas");
-    canvas.width = targetW;
-    canvas.height = targetH;
-    var ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return source;
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(source, 0, 0, targetW, targetH);
-    var id = ctx.getImageData(0, 0, targetW, targetH);
-    var d = id.data;
-    for (var i = 0; i < d.length; i += 4) {
-      var y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-      y = Math.max(0, Math.min(255, (y - 128) * 1.35 + 128));
-      d[i] = d[i + 1] = d[i + 2] = y;
-    }
-    ctx.putImageData(id, 0, 0);
-    return canvas;
-  }
+  // (canvas crop/preprocess helpers removed 2026-07-18 with the browser half.)
 
   // ---------------- parsing ----------------
 
@@ -469,156 +403,12 @@
     return outcomes.slice(0, 4);
   }
 
-  // ---------------- Tesseract worker (reused) ----------------
-
-  var _workerPromise = null;
-  function getWorker() {
-    if (!_workerPromise) {
-      _workerPromise = (function () {
-        if (typeof Tesseract === "undefined") {
-          return Promise.reject(new Error("Tesseract.js not loaded (CDN script missing)."));
-        }
-        return Tesseract.createWorker("eng", 1, { logger: function () {} }).then(function (worker) {
-          return worker.setParameters({ tessedit_pageseg_mode: "6" })
-            .catch(function () {})  // PSM optional on some builds
-            .then(function () { return worker; });
-        });
-      })();
-    }
-    return _workerPromise;
-  }
-
-  function recognize(canvasOrImg) {
-    return getWorker().then(function (worker) {
-      return worker.recognize(canvasOrImg).then(function (r) {
-        return String((r && r.data && r.data.text) || "").trim();
-      });
-    });
-  }
-
-  function disposeWorker() {
-    if (_workerPromise) {
-      var p = _workerPromise;
-      _workerPromise = null;
-      p.then(function (w) { try { w.terminate(); } catch (e) {} }).catch(function () {});
-    }
-  }
-
-  // Ensure an <img> is decoded; accept a Blob/File or an HTMLImageElement.
-  function toImageElement(input) {
-    if (!IS_BROWSER) return Promise.reject(new Error("Tesseract engine is browser-only."));
-    if (input instanceof HTMLImageElement) {
-      if (input.naturalWidth) return Promise.resolve(input);
-      return input.decode().then(function () { return input; }).catch(function () {
-        return new Promise(function (res, rej) {
-          input.onload = function () { res(input); };
-          input.onerror = function () { rej(new Error("Image failed to load")); };
-        });
-      });
-    }
-    if (input instanceof HTMLCanvasElement) return Promise.resolve(input);
-    // Blob / File
-    return new Promise(function (res, rej) {
-      var url = URL.createObjectURL(input);
-      var img = new Image();
-      img.onload = function () { res(img); };
-      img.onerror = function () { URL.revokeObjectURL(url); rej(new Error("Image failed to load")); };
-      img.src = url;
-    });
-  }
-
-  // ---------------- the engine ----------------
-
-  function TesseractEngine() {}
-  TesseractEngine.prototype = Object.create(BaseEngine.prototype);
-  TesseractEngine.prototype.constructor = TesseractEngine;
-  TesseractEngine.prototype.name = "tesseract";
-  TesseractEngine.prototype.label = "Tesseract.js (legacy fallback)";
-  TesseractEngine.prototype.isAvailable = function () {
-    return IS_BROWSER && typeof Tesseract !== "undefined";
-  };
-  TesseractEngine.prototype.disposeWorker = disposeWorker;
-
-  // Read the screenshot regionally; fall back to a full-frame OCR if cropping fails.
-  TesseractEngine.prototype.parseScreenshot = function (input) {
-    var self = this;
-    return toImageElement(input).then(function (img) {
-      // For a canvas input we can only do a full-frame pass.
-      var isImg = (typeof HTMLImageElement !== "undefined") && (img instanceof HTMLImageElement);
-      if (!isImg) {
-        return recognize(preprocessFull(img)).then(function (txt) {
-          return self.constraintSnap(buildRaw(txt, txt, txt));
-        });
-      }
-      // Regional crops.
-      var keys = ["title", "diamonds", "outcomes", "footer"];
-      var seq = Promise.resolve();
-      var parts = {};
-      keys.forEach(function (k) {
-        seq = seq.then(function () {
-          var canvas = cropToCanvas(img, ROIS[k]);
-          return recognize(canvas).then(function (t) { parts[k] = t || ""; });
-        });
-      });
-      return seq.then(function () {
-        var stitched = [parts.title, parts.diamonds, parts.outcomes, parts.footer].join("\n\n");
-        var raw = buildRaw(stitched, stitched, parts.outcomes || stitched, parts);
-        return self.constraintSnap(raw);
-      }).catch(function () {
-        // Regional path blew up — fall back to full frame.
-        return recognize(preprocessFull(img)).then(function (txt) {
-          return self.constraintSnap(buildRaw(txt, txt, txt));
-        });
-      });
-    });
-  };
-
-  // Assemble a raw {config,state,outcomes,rarity,_debug} object from OCR text.
-  function buildRaw(configText, stateText, outcomeText, parts) {
-    var cfg = parseConfig(configText);
-    var cut = parseCuttingState(stateText);
-    // For outcome parsing we need known effect names — use whatever config we got,
-    // snapped enough that effect targets resolve.
-    var snappedCfgForOutcomes = {
-      baseCost: cfg.baseCost || 10,
-      gemType: cfg.gemType,
-      effect1: cfg.effect1, effect2: cfg.effect2
-    };
-    var outcomes = parseOutcomes(outcomeText, snappedCfgForOutcomes);
-    return {
-      config: {
-        baseCost: cfg.baseCost, gemType: cfg.gemType,
-        willpowerLevel: cfg.willpowerLevel, orderLevel: cfg.orderLevel,
-        effect1: cfg.effect1, effect1Level: cfg.effect1Level,
-        effect2: cfg.effect2, effect2Level: cfg.effect2Level
-      },
-      state: {
-        currentTurn: null, maxTurns: cut.maxTurns,
-        turnsRemaining: cut.turnsRemaining,
-        rerollsShownFree: cut.rerollsShownFree, rerollsShownDenom: cut.rerollsShownDenom,
-        processCost: cut.processCost, processCostMultiplier: cut.processCostMultiplier,
-        totalGoldSpent: 0, rosterBound: false
-      },
-      rarity: cfg.rarity,
-      outcomes: outcomes,
-      _debug: { parts: parts || null, configText: configText.slice(0, 1200) }
-    };
-  }
-
-  // ---------------- register + export ----------------
-
-  // NOT registered as a selectable engine (removed 2026-07-16 — the structural
-  // engine superseded it: 69%/8% vs 100%/100% on the dev corpus). The module stays
-  // loaded as a parser-function library: the structural engine consumes
-  // GEM_NAME_COST + normalizeOcrText, and tools/eval-ocr.js still scores it in Node
-  // as the legacy baseline row.
-  var instance = new TesseractEngine();
+  // ---------------- export (parser library only) ----------------
+  // The worker plumbing, canvas pipeline, and TesseractEngine class were deleted
+  // 2026-07-18 - de-registered since 2026-07-16 and unreachable. See the header.
 
   var EXPORT = {
-    TesseractEngine: TesseractEngine,
     GEM_NAME_COST: GEM_NAME_COST,
-    instance: instance,
-    // exported for the eval harness / unit testing in Node
     parseConfig: parseConfig,
     parseCuttingState: parseCuttingState,
     parseOutcomes: parseOutcomes,
@@ -627,8 +417,6 @@
   if (typeof module !== "undefined" && module.exports) {
     module.exports = EXPORT;
   } else {
-    root.TesseractEngine = TesseractEngine;
-    root.tesseractEngine = instance;
     root.OcrTesseractEngine = EXPORT;   // parser fns + lexicons for the structural engine
   }
 })(typeof globalThis !== "undefined" ? globalThis : this);

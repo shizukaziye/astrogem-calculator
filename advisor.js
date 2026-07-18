@@ -616,8 +616,15 @@
     if (!elTab) return;
     elTab.innerHTML = tabMarkup();
 
-    window.AdvisorSetup.init($("av-setup"), { onChange: function () {} });
-    window.AdvisorWindow.init($("av-window"), { onChange: function () {}, onApplied: onOutcomeApplied });
+    // Any manual edit (market assumptions or a window field) makes a rendered
+    // verdict stale — blank it, same as a new parse does. Cheap no-op when no
+    // result is showing.
+    var onAnyEdit = function () {
+      var res = $("av-result");
+      if (res && res.style.display !== "none") clearResult();
+    };
+    window.AdvisorSetup.init($("av-setup"), { onChange: onAnyEdit });
+    window.AdvisorWindow.init($("av-window"), { onChange: onAnyEdit, onApplied: onOutcomeApplied });
     renderEngines();
     renderShareBar();
 
@@ -643,9 +650,10 @@
       if (f) onImageFile(f);
     });
     var frame = $("av-window");
-    frame.addEventListener("dragover", function (e) { e.preventDefault(); });
+    frame.addEventListener("dragover", function (e) { e.preventDefault(); dz.classList.add("drag"); });
+    frame.addEventListener("dragleave", function () { dz.classList.remove("drag"); });
     frame.addEventListener("drop", function (e) {
-      e.preventDefault();
+      e.preventDefault(); dz.classList.remove("drag");
       var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
       if (f) onImageFile(f);
     });

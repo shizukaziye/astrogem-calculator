@@ -362,7 +362,8 @@
   // wheel level digits: gold, but downscaled captures blend the thin strokes with the
   // diamond face behind them (gold-over-green shifts h up to ~80) — wider than
   // isGoldText, still excluding true face greens (h≥100) and reds (h<20)
-  function isWheelLevelText(r, g, b) { var c = hsv(r, g, b); return c.h >= 30 && c.h < 80 && c.s > 0.4 && c.v > 0.5; }
+  // (isWheelLevelText removed 2026-07-18 — dead export; the engine reads wheel
+  // levels through isGoldText and its own local predicates.)
   // LOWER-outcome amounts ("Lv. 1"/"−1" beside a ▼) render RED, not chartreuse
   // (measured on the 2026-07-16 corpus). Hue reaches ~22 when the red text blends
   // with a gold icon face behind it (red-on-gold rows).
@@ -394,10 +395,8 @@
     }
     return { width: w, height: h, data: out };
   }
-  // ▲ proper is a purer green (h≈100+); starting at 95 keeps chartreuse amount text
-  // from counting as an up-arrow (matters once ▼ outcomes exist: count comparison)
-  function isGreenUp(r, g, b) { var c = hsv(r, g, b); return c.h >= 95 && c.h < 150 && c.s > 0.45 && c.v > 0.45; }
-  function isRedDown(r, g, b) { var c = hsv(r, g, b); return (c.h < 18 || c.h >= 345) && c.s > 0.45 && c.v > 0.40; }
+  // (isGreenUp/isRedDown removed 2026-07-18 — dead exports; the engine's arrow
+  // classifier uses its own tuned inline predicates next to the density gates.)
 
   // Pixel-count + centroid + bbox for a predicate — the ▲/▼ detector (color, not
   // glyph). `density` (count / bbox area) separates a solid arrow blob (~0.5) from
@@ -479,67 +478,9 @@
     return null;
   }
 
-  // Re-measure the wheel by scanning VERTICALLY through the center for the red (N)
-  // and gold (S) diamond faces. The blob-refine step can land both anchors on their
-  // diamonds yet short-measure the red→gold distance 15-20% (digit glow drags a
-  // centroid), which then drifts every anchor-relative region. The midpoint cy is
-  // robust (symmetric errors cancel); the face EXTENTS pin the true centers — using
-  // endpoints, not run lengths, so the level digit punching a hole through the
-  // middle of a face doesn't bias anything.
-  function refineWheelAnchors(img, anchors) {
-    var cx = (anchors.red.x + anchors.gold.x) / 2;
-    var cy0 = (anchors.red.y + anchors.gold.y) / 2;
-    var gap0 = Math.max(8, anchors.gold.y - anchors.red.y);
-    function mk(pred) { return pred; }
-    var isRedFace = mk(function (r, g, b) { var c = hsv(r, g, b); return (c.h < 25 || c.h >= 335) && c.s > 0.5 && c.v > 0.25; });
-    var isGoldFace = mk(function (r, g, b) { var c = hsv(r, g, b); return c.h >= 28 && c.h < 58 && c.s > 0.5 && c.v > 0.3; });
-    var isAnyFace = mk(function (r, g, b) { var c = hsv(r, g, b); return c.s > 0.45 && c.v > 0.25; });
-    function patchScore(px, py, pred) {
-      var r = Math.max(3, gap0 * 0.07), n = 0, hit = 0;
-      for (var y = Math.round(py - r); y <= py + r; y += 2) {
-        if (y < 0 || y >= img.height) continue;
-        for (var x = Math.round(px - r); x <= px + r; x += 2) {
-          if (x < 0 || x >= img.width) continue;
-          var i = (y * img.width + x) * 4;
-          n++;
-          if (pred(img.data[i], img.data[i + 1], img.data[i + 2])) hit++;
-        }
-      }
-      return n ? hit / n : 0;
-    }
-    // The discriminative signal (measured): the BOTTOM EDGE of the gold S face —
-    // coverage in a thin strip collapses 0.7→0.2 within ~0.1·gap of the tip, and the
-    // tip sits at cy + 0.786·gap in the game's (scale-invariant) modal art. On-face
-    // patch scores are a plateau (useless for fitting); this edge is a step function.
-    function stripGoldCov(y) {
-      var yy = Math.round(y);
-      if (yy < 1 || yy >= img.height - 1) return 0;
-      var half = Math.max(3, gap0 * 0.12), n = 0, hit = 0;
-      for (var dy = -1; dy <= 1; dy++) {
-        for (var x = Math.round(cx - half); x <= cx + half; x += 2) {
-          if (x < 0 || x >= img.width) continue;
-          var i = ((yy + dy) * img.width + x) * 4;
-          n++;
-          if (isGoldFace(img.data[i], img.data[i + 1], img.data[i + 2])) hit++;
-        }
-      }
-      return n ? hit / n : 0;
-    }
-    var k = gap0 * 0.55;
-    if (stripGoldCov(cy0 + k) < 0.4) return anchors;   // not on the gold face — bail
-    var kMax = gap0 * 1.35;
-    while (k < kMax && stripGoldCov(cy0 + k) >= 0.4) k += 2;
-    if (k >= kMax) return anchors;                     // edge never found
-    var gap = k / 0.786;
-    if (!(gap > gap0 * 0.75 && gap < gap0 * 1.55)) return anchors;
-    // sanity: the red face must exist at the implied N position
-    if (patchScore(cx, cy0 - gap / 2, isRedFace) < 0.3) return anchors;
-    return {
-      red: { x: cx, y: cy0 - gap / 2 },
-      gold: { x: cx, y: cy0 + gap / 2 }
-    };
-  }
-
+  // (refineWheelAnchors removed 2026-07-18 — four generations of vertical-scan
+  // anchor refinement all measured net-negative and were superseded by fitWheel
+  // below, which cross-validates two independent rulers. Nothing called it.)
   // Fit the wheel from ALL FOUR diamond faces at FULL resolution, with a built-in
   // cross-check: the red→gold vertical distance and the W→E horizontal distance
   // measure the SAME gap (W/E sit at ±0.70·gap), so the two estimates must agree.
@@ -697,12 +638,8 @@
     isGoldText: isGoldText,
     isWhiteText: isWhiteText,
     isAmountText: isAmountText,
-    isWheelLevelText: isWheelLevelText,
     isRedAmountText: isRedAmountText,
     upscaleBilinear: upscaleBilinear,
-    refineWheelAnchors: refineWheelAnchors,
-    isGreenUp: isGreenUp,
-    isRedDown: isRedDown,
     colorClusterStats: colorClusterStats,
     findMaskedTextLine: findMaskedTextLine,
     segmentGlyphs: segmentGlyphs,

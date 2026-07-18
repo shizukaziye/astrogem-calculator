@@ -625,6 +625,8 @@
       }
       render(); emit();
     },
+    // dev/test hook (no app caller): scripted verification flows use it to accept
+    // all amber flags in one call before driving Get advice
     clearUnconfirmed: function () { win.unconfirmed = {}; render(); emit(); },
     unconfirmedCount: function () { return Object.keys(win.unconfirmed).length; }
   };

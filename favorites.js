@@ -19,8 +19,6 @@
  *   add(region, name)       -> bool  (false only if already present or blank name)
  *   remove(region, name)    -> bool  (true if something was removed)
  *   toggle(region, name)    -> bool  (the NEW state: true = now favorited)
- *   count()                 -> number
- *   isFull()                -> bool  (always false — favorites are unlimited)
  *   onChange(cb)            -> unsubscribe fn; cb runs after every change
  *
  * node-safe: when there's no `document` (e.g. Node import for a sanity check) the
@@ -31,7 +29,6 @@
   "use strict";
 
   var COOKIE = "astrogem_favs";
-  var MAX = Infinity; // unlimited favorites (symbol kept for callers that reference it)
   var ONE_YEAR = 31536000; // seconds
 
   var hasDoc = (typeof document !== "undefined");
@@ -64,7 +61,7 @@
     try { parsed = JSON.parse(decodeURIComponent(raw)); } catch (e) { return []; }
     if (!Array.isArray(parsed)) return [];
     var out = [];
-    for (var i = 0; i < parsed.length && out.length < MAX; i++) {
+    for (var i = 0; i < parsed.length; i++) {
       var it = parsed[i];
       if (!it || it.name == null) continue;
       var region = String(it.region == null ? "" : it.region).toUpperCase();
@@ -105,8 +102,6 @@
     has: function (region, name) {
       return indexOf(items, region, name) !== -1;
     },
-    count: function () { return items.length; },
-    isFull: function () { return false; }, // unlimited favorites: never full
     add: function (region, name) {
       if (name == null || norm(name) === "") return false;
       if (indexOf(items, region, name) !== -1) return false; // dup
@@ -137,8 +132,8 @@
         var i = listeners.indexOf(cb);
         if (i !== -1) listeners.splice(i, 1);
       };
-    },
-    MAX: MAX
+    }
+    // (count/isFull/MAX removed 2026-07-18 — vestiges of a capped era, no callers.)
   };
 
   if (typeof window !== "undefined") window.Favorites = Favorites;
