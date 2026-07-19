@@ -1,0 +1,28 @@
+{
+  "_note": "Share-tier capture (3836x1830, gap≈202 erosion tier) of the SAME gem+turn as LOSTARK_aMgSXRTxDD — Shizu 2026-07-19. THE FIRST PRODUCTION SILENT ERROR: the green 'Lv. 3' digit's antialiased strokes blended with the face (hue>60), isGoldText kept only a 6x16 sliver, it committed '1'@0.82 silently, and the checksum wrote S=3 over a gm-0.113 synth S=1. Fixed by the narrow-fragment relaxed re-mask (+ the '1'-sibling solver arbitration as safety net). Regression guard: this file must read 4/3/2/1 with e1 NEVER silent-wrong.",
+  "config": {
+    "baseCost": 8,
+    "gemType": "order",
+    "willpowerLevel": 4,
+    "orderLevel": 1,
+    "effect1": "Brand Power",
+    "effect1Level": 3,
+    "effect2": "Additional Damage",
+    "effect2Level": 2
+  },
+  "state": {
+    "currentTurn": 4,
+    "maxTurns": 9,
+    "rerollsRemaining": 2,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "effect1", "amount": 1 },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
+    { "type": "do_nothing", "change": 0 },
+    { "type": "change_side_option", "target": "effect2" }
+  ]
+}

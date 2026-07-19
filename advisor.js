@@ -42,6 +42,40 @@
   var lastObjectUrl = null;
   var pendingCollect = null;   // { blob, parsed, source } — one record per parse
 
+  // ---------------- staleness beacon ----------------
+  // A tab left open across deploys keeps running OLD code silently — Shizu's tab
+  // did exactly that through THREE live incidents (pre-crop saves dying as fake
+  // "network errors", pre-synthesis level misreads, pre-zero cost reads) while
+  // every fix was already live for a fresh load. The client now knows its own
+  // version, asks the server (a no-store fetch of the tiny index.html) what is
+  // current, and puts up a loud banner when it is outdated. Checked at tab init
+  // and at every parse start, throttled to one probe per 10 minutes.
+  var CLIENT_V = 67;   // MUST match this file's ?v= in index.html on every deploy
+  var _staleAt = 0;
+  function checkStale() {
+    var now = Date.now();
+    if (now - _staleAt < 600000) return;
+    _staleAt = now;
+    try {
+      fetch("index.html", { cache: "no-store" }).then(function (r) { return r.text(); }).then(function (t) {
+        var m = t.match(/advisor\.js\?v=(\d+)/);
+        if (!m || parseInt(m[1], 10) <= CLIENT_V) return;
+        var b = $("av-stale");
+        if (!b) {
+          b = document.createElement("div");
+          b.id = "av-stale";
+          b.style.cssText = "background:#7a1f1f;color:#ffd7d7;padding:10px 14px;margin:0 0 10px;" +
+            "border:1px solid #c33;border-radius:6px;font-size:14px;font-weight:600";
+          var pane = document.getElementById("tab-advisor");
+          if (pane) pane.insertBefore(b, pane.firstChild);
+        }
+        b.textContent = "⚠ This tab is running an OLD version of the advisor (v" + CLIENT_V +
+          "; the site is on v" + m[1] + "). Press Ctrl+Shift+R now — parsing accuracy and " +
+          "training-record saving are both broken until you reload.";
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
   // ---------------- DOM helpers ----------------
   function $(id) { return document.getElementById(id); }
   function el(tag, attrs, html) {
@@ -498,6 +532,7 @@
         ((typeof eng.unavailableReason === "function" && eng.unavailableReason()) || ""), "err");
       return;
     }
+    checkStale();    // piggyback the version probe on every parse (10-min throttle)
     clearResult();   // new screenshot ⇒ any previous recommendation is stale
     pendingCollect = null;   // and so is any unshipped record — a FAILED parse must
                              // not leave gem A's image to pair with gem B's state
@@ -842,6 +877,7 @@
     var elTab = $("tab-advisor");
     if (!elTab) return;
     elTab.innerHTML = tabMarkup();
+    checkStale();   // announce an outdated tab the moment the advisor opens
 
     // Any manual edit (market assumptions or a window field) makes a rendered
     // verdict stale — blank it, same as a new parse does. Cheap no-op when no

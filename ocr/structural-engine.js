@@ -1184,6 +1184,38 @@
         }
         if (lvDet) (out._debug.lvDetail = out._debug.lvDetail || []).push(
           { line: { x: Math.round(lineX.x), y: Math.round(lineX.y), w: Math.round(lineX.w), h: Math.round(lineX.h) }, boxes: lvDet.join(" ") });
+        // NARROW-FRAGMENT re-mask (the absorber shape): at the windowed tiers the
+        // digit's antialiased strokes BLEND with the face tint (gold-over-green
+        // shifts hue to ~80) and isGoldText erodes the glyph to a sliver that
+        // classifies '1' (live 2aa9a4b2: green "Lv. 3" → a 6x16 fragment →
+        // '1'@0.82, SILENT). Re-mask with a blend-tolerant pred (h up to <100 —
+        // true face greens stay out; ≥22 — face reds stay out) and re-take the
+        // SAME glyph, matched by its right edge. Adoption needs a now-WIDE box
+        // classifying at the full commit bars — and a wide box is IoU-vetoable
+        // downstream, which the sliver never was. A true '1' stays narrow under
+        // the relaxed mask too, so this cannot rewrite genuine ones; clean
+        // frames produce full-width digits and never enter this branch.
+        if (!isGoldFace && db && db.isDigit && dbBox && dbBox.w / Math.max(1, dbBox.h) < 0.45) {
+          var lvPredRelaxed = function (r2, g2, b2) {
+            var c2 = L.hsv(r2, g2, b2);
+            return c2.h >= 22 && c2.h < 100 && c2.s > 0.35 && c2.v > 0.5;
+          };
+          var maskR = L.chromaMask(L.crop(raster, lineX), lvPredRelaxed);
+          var boxesR = segmentDigitBoxes(maskR);
+          var re = null, reBox = null;
+          for (var rj = 0; rj < boxesR.length; rj++) {
+            var bR = boxesR[rj];
+            if (Math.abs((bR.x + bR.w) - (dbBox.x + dbBox.w)) > 4) continue;   // same glyph only
+            if (bR.w / Math.max(1, bR.h) < 0.45) continue;                     // still a sliver — no gain
+            var svR = digitScoreVec(maskR, bR);
+            if (svR.isDigit) { re = svR; reBox = bR; }
+          }
+          if (re) {
+            db = re; dbBox = reBox; mask = maskR;
+            if (out._debug) (out._debug.lvRelax = out._debug.lvRelax || {})[nodeKind] =
+              Math.round(reBox.w) + "x" + Math.round(reBox.h) + "=" + re.full.ch + ":" + re.full.score.toFixed(2);
+          }
+        }
         if (db) {
           vec = db.vec;
           var b1 = -1, b1v = null, b2 = -1;
@@ -1209,7 +1241,14 @@
         // tiers a noise blob can template-match a digit (t6: a junk '1' returned
         // here and blocked every later rung); a strong synth disagreement wins,
         // agreement or a refused gate keeps the template read.
-        if (isGoldFace && LREFS && nodeKind) {
+        // NARROW boxes get the same cross-check on EVERY node: w/h < 0.45 is
+        // exactly the shape the ink-IoU veto above must skip, and it is the
+        // doppelgänger-absorber shape — a mask fragment of a wider digit
+        // template-matches '1' (live 2aa9a4b2: green "Lv. 3" lost its left
+        // half, the 6x16 sliver committed '1'@0.82 SILENTLY and the checksum
+        // pushed the error into a synth-refuted S). Wide boxes → IoU veto;
+        // narrow boxes → synthesis veto. No commit escapes both.
+        if (LREFS && nodeKind && (isGoldFace || (dbBox && dbBox.w / Math.max(1, dbBox.h) < 0.45))) {
           var srT = synthLevelRescue(nodeKind, p);
           // OVERRIDE bar: replacing a committed template read needs gm ≥ 0.03
           // (a clean capture's correct '3' was once overridden by an
@@ -1520,6 +1559,32 @@
             // "18" on a 15-point board and arithmetic wrote S=4 over a correct
             // hint of 1), while the hint channel is gated evidence
             if (ptsSoft && sHint !== remaining) { levels[3] = sHint; conf4[3] = 0.5; }
+            else if (sHint !== remaining) {
+              // FIRM pts disagreeing with the hint: the arithmetic blames S, but
+              // the hint is gated evidence — the likelier culprit is a '1'-valued
+              // W/E sibling (the ABSORBER class: eroded L→1, mask-fragment→1;
+              // live 2aa9a4b2: a green "Lv. 3" fragment committed '1'@0.82 and
+              // the checksum wrote S=3 over a gm-0.113 synth S=1). Test each such
+              // sibling: does the SYNTHESIS prefer the value implied by S=hint?
+              // Flip on the standard override bar; otherwise demote the sibling
+              // below the flag line — the mismatch proves something here is
+              // wrong, and a confident sibling is the one silent shape left.
+              var flipped = false;
+              for (var si = 1; si <= 2; si++) {
+                if (flipped || !pinned[si] || levels[si] !== 1) continue;
+                var vImp = remaining + 1 - sHint;   // sibling value if S = hint
+                if (vImp >= 2 && vImp <= 5 && LREFS) {
+                  var srF = synthLevelRescue(si === 1 ? "W" : "E", si === 1 ? nodes.nodeW : nodes.nodeE);
+                  if (srF && srF.value === vImp && srF.gm >= 0.03) {
+                    levels[si] = vImp; conf4[si] = 0.75;
+                    levels[3] = sHint; conf4[3] = 0.85;
+                    flipped = true;
+                    continue;
+                  }
+                }
+                conf4[si] = Math.min(conf4[si], 0.75);   // zero-silent guarantee
+              }
+            }
           }
         } else { levels[fi] = indep[fi].v != null ? indep[fi].v : 1; conf4[fi] = 0.3; }
       } else {
