@@ -35,7 +35,7 @@ const ALLOW_ORIGINS = [
   "http://127.0.0.1:8080"
 ];
 const GATE_TOKEN = "6104928cd0cc5374f5330e63e6a834f99aef7579db15c77d9d154932bf7a8ced";
-const MAX_BODY = 6 * 1024 * 1024;
+const MAX_BODY = 12 * 1024 * 1024;   // native-4K webp bodies run 1-9MB; KV's 25MB value cap is the true ceiling
 const DAILY_WRITE_CAP = 300;   // records/day — far above real use, far below the 1k KV free tier
 
 function cors(req) {

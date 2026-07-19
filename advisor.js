@@ -235,18 +235,26 @@
       var img = new Image();
       img.onload = function () {
         try {
-          // full native width: the first live flywheel record (2026-07-19) arrived
-          // downscaled to 1600px and was too degraded to debug or promote — a 4K
-          // webp is ~1MB, comfortably inside the worker's 6MB body cap and KV's
-          // 25MB value cap, and the pixels ARE the product here
-          var maxW = 3840;
-          var sc = Math.min(1, maxW / img.naturalWidth);
-          var c = document.createElement("canvas");
-          c.width = Math.round(img.naturalWidth * sc);
-          c.height = Math.round(img.naturalHeight * sc);
-          c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+          // Full native width first (the pixels ARE the product) — but a BUSY 4K
+          // frame at q0.8 can blow past the worker's body cap, and that is how a
+          // live record VANISHED (2026-07-19: the POST arrived, the store failed).
+          // Walk a quality/size ladder until the payload is guaranteed to fit
+          // (~9M chars ≈ 9MB body, under the worker's 12MB cap with headroom).
+          var LADDER = [[3840, "image/webp", 0.8], [3840, "image/webp", 0.6], [2560, "image/webp", 0.7], [2000, "image/jpeg", 0.8]];
+          var out = null;
+          for (var li = 0; li < LADDER.length; li++) {
+            var sc = Math.min(1, LADDER[li][0] / img.naturalWidth);
+            var c = document.createElement("canvas");
+            c.width = Math.round(img.naturalWidth * sc);
+            c.height = Math.round(img.naturalHeight * sc);
+            c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+            // the jpeg terminal rung also covers browsers whose canvas cannot
+            // ENCODE webp (they silently return a huge PNG dataURL instead)
+            out = c.toDataURL(LADDER[li][1], LADDER[li][2]);
+            if (out.length <= 9000000) break;
+          }
           URL.revokeObjectURL(url);
-          cb(c.toDataURL("image/webp", 0.8));
+          cb(out);
         } catch (e) { cb(null); }
       };
       img.onerror = function () { URL.revokeObjectURL(url); cb(null); };
