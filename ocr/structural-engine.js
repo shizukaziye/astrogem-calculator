@@ -37,6 +37,8 @@
   var TESS = IS_NODE ? require("./tesseract-engine.js") : (root.OcrTesseractEngine || root);
   var GLYPHS = null;
   try { GLYPHS = IS_NODE ? require("./glyphs.js").GLYPH_ATLAS : (root.OcrGlyphs && root.OcrGlyphs.GLYPH_ATLAS); } catch (e) {}
+  var LREFS = null;
+  try { LREFS = IS_NODE ? require("./level-refs.js").LEVEL_REFS : (root.OcrLevelRefs && root.OcrLevelRefs.LEVEL_REFS); } catch (e) {}
 
   var GEM_NAME_COST = (TESS && TESS.GEM_NAME_COST) || {
     stability: 8, corrosion: 8, solidity: 9, distortion: 9, immutability: 10, destruction: 10
@@ -732,6 +734,142 @@
       var isDigit = full && /^[1-5]$/.test(full.ch);
       return { vec: vec, top: top, isDigit: isDigit, full: full };
     }
+    // ---- ANALYSIS-BY-SYNTHESIS level rescue (2026-07-19) ----
+    // The method that finally read the degraded-tier digits classically: pristine
+    // 32×32 reference patches (ocr/level-refs.js, native-tier harvest) are BLURRED
+    // to candidate degradations and correlated against the observed patch over a
+    // sub-pixel alignment grid. Scored two independent ways (raw luminance +
+    // gradient magnitude); a value commits ONLY when both scorings rank the same
+    // digit first with a real gradient margin — on the measured corpus that gate
+    // shipped 8 correct commits and refused every wrong one. Fires only when the
+    // template AND OCR ladders both came back empty, so clean frames never pay.
+    var SYNTH_PS = 32, SYNTH_PATCH_GAP = 0.13;
+    var _synthTV = null;   // lazily-built blurred template variants
+    function _synthZnorm(p2) {
+      var out = new Float32Array(p2.length), mean = 0, i;
+      for (i = 0; i < p2.length; i++) mean += p2[i];
+      mean /= p2.length;
+      var va = 0;
+      for (i = 0; i < p2.length; i++) { out[i] = p2[i] - mean; va += out[i] * out[i]; }
+      var sd = Math.sqrt(va / p2.length) || 1;
+      for (i = 0; i < out.length; i++) out[i] /= sd;
+      return out;
+    }
+    function _synthGrad(p2) {
+      var PSZ = SYNTH_PS, g = new Float32Array(PSZ * PSZ);
+      for (var y = 1; y < PSZ - 1; y++) for (var x = 1; x < PSZ - 1; x++) {
+        var dx = p2[y * PSZ + x + 1] - p2[y * PSZ + x - 1], dy = p2[(y + 1) * PSZ + x] - p2[(y - 1) * PSZ + x];
+        g[y * PSZ + x] = Math.sqrt(dx * dx + dy * dy);
+      }
+      return _synthZnorm(g);
+    }
+    function _synthBlur(p2, sigma) {
+      var PSZ = SYNTH_PS;
+      var r = Math.max(1, Math.ceil(sigma * 2.5)), k = [], ks = 0, i;
+      for (i = -r; i <= r; i++) { var v = Math.exp(-i * i / (2 * sigma * sigma)); k.push(v); ks += v; }
+      for (i = 0; i < k.length; i++) k[i] /= ks;
+      var tmp = new Float32Array(PSZ * PSZ), out = new Float32Array(PSZ * PSZ), x, y, s, j;
+      for (y = 0; y < PSZ; y++) for (x = 0; x < PSZ; x++) {
+        s = 0;
+        for (j = -r; j <= r; j++) s += p2[y * PSZ + Math.max(0, Math.min(PSZ - 1, x + j))] * k[j + r];
+        tmp[y * PSZ + x] = s;
+      }
+      for (y = 0; y < PSZ; y++) for (x = 0; x < PSZ; x++) {
+        s = 0;
+        for (j = -r; j <= r; j++) s += tmp[Math.max(0, Math.min(PSZ - 1, y + j)) * PSZ + x] * k[j + r];
+        out[y * PSZ + x] = s;
+      }
+      return out;
+    }
+    function _synthCos(a, b) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * b[i]; return s / a.length; }
+    function _synthPatch(cx, cy) {
+      var PSZ = SYNTH_PS, side = SYNTH_PATCH_GAP * gap, out = new Float32Array(PSZ * PSZ);
+      var W2 = raster.width, H2 = raster.height, d = raster.data;
+      for (var py = 0; py < PSZ; py++) for (var px = 0; px < PSZ; px++) {
+        var sx = cx - side / 2 + (px + 0.5) * side / PSZ, sy = cy - side / 2 + (py + 0.5) * side / PSZ;
+        var x0 = Math.max(0, Math.min(W2 - 1, Math.floor(sx))), y0 = Math.max(0, Math.min(H2 - 1, Math.floor(sy)));
+        var x1 = Math.min(W2 - 1, x0 + 1), y1 = Math.min(H2 - 1, y0 + 1);
+        var fx = sx - x0, fy = sy - y0;
+        function lumAt(xx, yy) { var ii = (yy * W2 + xx) * 4; return 0.299 * d[ii] + 0.587 * d[ii + 1] + 0.114 * d[ii + 2]; }
+        out[py * PSZ + px] = lumAt(x0, y0) * (1 - fx) * (1 - fy) + lumAt(x1, y0) * fx * (1 - fy) +
+                             lumAt(x0, y1) * (1 - fx) * fy + lumAt(x1, y1) * fx * fy;
+      }
+      return out;
+    }
+    function _synthVariants() {
+      if (_synthTV || !LREFS) return _synthTV;
+      var SIGMAS = [0.6, 1.0, 1.5, 2.1, 2.8, 3.6];
+      _synthTV = {};
+      ["N", "S", "W", "E"].forEach(function (k) {
+        _synthTV[k] = {};
+        Object.keys(LREFS[k] || {}).forEach(function (cls) {
+          var arr = [];
+          (LREFS[k][cls] || []).forEach(function (ref) {
+            var base = new Float32Array(ref.q);
+            SIGMAS.forEach(function (sg) {
+              var b = _synthBlur(base, sg);
+              arr.push({ raw: _synthZnorm(b), grad: _synthGrad(b) });
+            });
+          });
+          _synthTV[k][cls] = arr;
+        });
+      });
+      return _synthTV;
+    }
+    function synthLevelRescue(kind, p) {
+      var dbgS = out._debug ? ((out._debug.synth = out._debug.synth || {})) : null;
+      var tv = _synthVariants();
+      if (!tv || !tv[kind] || !Object.keys(tv[kind]).length) { if (dbgS) dbgS[kind] = "no-refs"; return null; }
+      var cx, cy;
+      if (kind === "N" || kind === "S") { cx = p.x; cy = p.y + gap * 0.175; }
+      else {
+        // W/E: anchor on the BELOW-CENTER Lv line (the caption band above is a trap)
+        var lbox = { x: p.x - gap * 0.5, y: p.y - gap * 0.02, w: gap * 1.0, h: gap * 0.38 };
+        var lopts = {
+          rejectFill: 0.22, maxRowFill: 0.6,
+          minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.22), minRowPx: 3,
+          accept: function (r) { return Math.abs(r.x + r.w / 2 - p.x) <= gap * 0.28 && r.w >= gap * 0.03 && r.w <= gap * 0.85; }
+        };
+        var lline = L.findMaskedTextLine(raster, lbox, L.isGoldText, lopts);
+        if (!lline) lline = L.findMaskedTextLine(raster, lbox, L.isGoldText, Object.assign({}, lopts, { minRowPx: 1 }));
+        if (!lline) {
+          var lrelax = function (r2, g2, b2) { var c2 = L.hsv(r2, g2, b2); return c2.h >= 28 && c2.h <= 72 && c2.s > 0.28 && c2.v > 0.42; };
+          lline = L.findMaskedTextLine(raster, lbox, lrelax, Object.assign({}, lopts, { minRowPx: 1 }));
+        }
+        if (!lline) return null;
+        cx = lline.x + lline.w - gap * 0.05; cy = lline.y + lline.h / 2;
+      }
+      var xspan = (kind === "W" || kind === "E") ? 0.07 : 0.03;
+      var perRaw = {}, perGrad = {}, dy, dx, cls, i;
+      for (dy = -0.03; dy <= 0.0301; dy += 0.0075) {
+        for (dx = -xspan; dx <= xspan + 0.0001; dx += 0.0075) {
+          var op = _synthPatch(cx + dx * gap, cy + dy * gap);
+          var oraw = _synthZnorm(op), ograd = _synthGrad(op);
+          for (cls in tv[kind]) {
+            var arr = tv[kind][cls];
+            for (i = 0; i < arr.length; i++) {
+              var sr = _synthCos(oraw, arr[i].raw);
+              if (!(cls in perRaw) || sr > perRaw[cls]) perRaw[cls] = sr;
+              var sg = _synthCos(ograd, arr[i].grad);
+              if (!(cls in perGrad) || sg > perGrad[cls]) perGrad[cls] = sg;
+            }
+          }
+        }
+      }
+      function rank(per) {
+        return Object.keys(per).map(function (v) { return { v: parseInt(v, 10), s: per[v] }; })
+          .sort(function (a, b) { return b.s - a.s; });
+      }
+      var ra = rank(perRaw), rg = rank(perGrad);
+      if (!ra.length || !rg.length) { if (dbgS) dbgS[kind] = "no-scores"; return null; }
+      var gm = rg.length > 1 ? rg[0].s - rg[1].s : 1;
+      if (dbgS) dbgS[kind] = "raw " + ra[0].v + "@" + ra[0].s.toFixed(3) + " grad " + rg[0].v + "@" + rg[0].s.toFixed(3) + " gm " + gm.toFixed(3);
+      // COMMIT GATE: both scorings agree on the winner, with a real gradient margin
+      if (ra[0].v !== rg[0].v) return null;
+      if (gm < 0.02) return null;
+      return { value: ra[0].v, conf: 0.55 };
+    }
+
     // Read one level node: return the committed digit (template if strong, else the
     // OCR ladder — "Lv. N" isolation is the hard case) AND the raw template score
     // vector (feeds the constraint enumeration for the weak/free nodes below).
@@ -740,7 +878,7 @@
     // erode to a 5px sliver that classified as '1' @0.91 while the true '2' eroded
     // into a '/', so the L committed at 0.95 and the checksum pushed the error into
     // the free S node: a SILENT coherent-wrong board. Structure beats scores here.
-    async function readLevelFull(p, isGoldFace, hasLvPrefix) {
+    async function readLevelFull(p, isGoldFace, hasLvPrefix, nodeKind) {
       var box = { x: p.x - gap * 0.5, y: p.y - gap * 0.35, w: gap * 1.0, h: gap * 0.72 };
       var pred = L.isGoldText;
       if (isGoldFace) {
@@ -777,10 +915,24 @@
       // blind. Retry relaxed ONLY after the standard locate fails; not for the
       // gold-face S node, where a relaxed locate latches onto specular noise.
       if (!line && !isGoldFace) {
-        line = L.findMaskedTextLine(raster, box, pred, Object.assign({}, lineOptsLv, { minRowPx: 1 }));
+        // retry BELOW CENTER only: the digit/Lv line always sits there, and the
+        // relaxed row threshold otherwise latches onto the caption band above
+        // (measured -0.364 gap on the chat tier — it read caption garbage)
+        var boxLow = { x: box.x, y: p.y - gap * 0.02, w: box.w, h: gap * 0.38 };
+        line = L.findMaskedTextLine(raster, boxLow, pred, Object.assign({}, lineOptsLv, { minRowPx: 1 }));
       }
       if (out._debug && isGoldFace) out._debug.sLine = line ? { x: Math.round(line.x), y: Math.round(line.y), w: Math.round(line.w), h: Math.round(line.h) } : null;
-      if (!line) return { value: null, conf: 0, vec: null };
+      if (!line) {
+        // no locatable line at all — the synthesis rescue is the only reader left
+        // (it anchors itself: fixed offsets for bare digits, its own below-center
+        // locate for W/E) and this no-line path is precisely where the degraded
+        // tier lands
+        if (LREFS && nodeKind) {
+          var sr0 = synthLevelRescue(nodeKind, p);
+          if (sr0) return { value: sr0.value, conf: isGoldFace ? Math.min(sr0.conf, 0.5) : sr0.conf, vec: null, src: "synth" };
+        }
+        return { value: null, conf: 0, vec: null };
+      }
       var grow = Math.round(line.h * 0.5);
       var lineX = { x: line.x, y: line.y - grow, w: line.w, h: line.h + grow * 2 };
 
@@ -831,7 +983,15 @@
       }
       if (tmVal != null) {
         // the luminance-read S digit is real evidence, but the face is hostile ground
-        // — cap it so the checksum solve still arbitrates (and flags) disagreements
+        // — cap it so the checksum solve still arbitrates (and flags) disagreements.
+        // Gold-face template reads also get a synthesis CROSS-CHECK: at degraded
+        // tiers a noise blob can template-match a digit (t6: a junk '1' returned
+        // here and blocked every later rung); a strong synth disagreement wins,
+        // agreement or a refused gate keeps the template read.
+        if (isGoldFace && LREFS && nodeKind) {
+          var srT = synthLevelRescue(nodeKind, p);
+          if (srT && srT.value !== tmVal) { tmVal = srT.value; tmConf = 0.5; }
+        }
         return { value: tmVal, conf: isGoldFace ? Math.min(tmConf, 0.6) : tmConf, vec: vec, src: "tm" };
       }
       // OCR ladder (proven on "Lv. N"): plain → single-char → dilate
@@ -844,13 +1004,32 @@
       }
       var conf = m ? Math.min(0.9, read.conf + 0.2) : 0;
       if (isGoldFace) conf = Math.min(conf, 0.45);
+      if (LREFS && nodeKind && (!m || conf < 0.5)) {
+        // last rung: analysis-by-synthesis vs the pristine reference patches —
+        // agreement-gated, modest conf; the checksum arbitrates from here (and
+        // for S the value flows through the sHint channel, never pinned). It also
+        // arbitrates a sub-0.5 OCR read: at that confidence the ladder is
+        // guessing (dilated OCR hallucinates '1's on degraded masks and the junk
+        // read was BLOCKING this rung), while the agreement gate measured
+        // 8 correct commits / 0 wrong ones on the degraded corpus. AGREEMENT
+        // keeps the OCR provenance (vec intact for the corroborator) with a lift;
+        // only DISAGREEMENT replaces the read.
+        var sr = synthLevelRescue(nodeKind, p);
+        if (sr) {
+          var mVal = m ? parseInt(m[1], 10) : null;
+          if (mVal != null && mVal === sr.value) {
+            return { value: mVal, conf: Math.max(conf, isGoldFace ? 0.45 : 0.55), vec: vec, src: "ocr" };
+          }
+          return { value: sr.value, conf: isGoldFace ? Math.min(sr.conf, 0.5) : sr.conf, vec: vec, src: "synth" };
+        }
+      }
       return { value: m ? parseInt(m[1], 10) : null, conf: conf, vec: vec, src: "ocr" };
     }
     var lvFull = [
-      await readLevelFull(nodes.nodeN, false, false),   // willpower (bare digit)
-      await readLevelFull(nodes.nodeW, false, true),    // effect1 ("Lv. N")
-      await readLevelFull(nodes.nodeE, false, true),    // effect2 ("Lv. N")
-      await readLevelFull(nodes.nodeS, true, false)     // order (gold-on-gold bare digit)
+      await readLevelFull(nodes.nodeN, false, false, "N"),   // willpower (bare digit)
+      await readLevelFull(nodes.nodeW, false, true, "W"),    // effect1 ("Lv. N")
+      await readLevelFull(nodes.nodeE, false, true, "E"),    // effect2 ("Lv. N")
+      await readLevelFull(nodes.nodeS, true, false, "S")     // order (gold-on-gold bare digit)
     ];
     // The S (order) luminance read is a HINT, never a pinned value: at low res the
     // gold-on-gold digit is marginal and a wrong pin corrupts the checksum's
@@ -1019,6 +1198,14 @@
         if (rv >= 4 && rv <= 20) { pts = rv; ptsSoft = true; }
       }
     }
+    // TWO OR MORE synth commits mean the frame sits at the degraded tier where
+    // the header read is junk-prone too (live: "18" on a 15-point board arrived
+    // as a HARD read and bulldozed a correct gold hint) — demote pts to soft
+    // authority there. One incidental synth consult on an otherwise-clean frame
+    // is NOT the signature (requiring 2 keeps clean-frame confidences intact).
+    var _synthCommits = lvFull.filter(function (r) { return r && r.src === "synth"; }).length;
+    if (pts != null && !ptsSoft && _synthCommits >= 2) ptsSoft = true;
+
     // ---- JOINT LEVEL SOLVE ----
     // The 4 levels are 1-5 and SUM to the header points — a hard constraint that
     // couples the nodes. Pick the assignment maximizing total template score subject
@@ -1036,7 +1223,10 @@
       var kSumF = 0, nUnkF = 0;
       for (var kf = 0; kf < 4; kf++) { if (lvFull[kf].value != null) kSumF += lvFull[kf].value; else nUnkF++; }
       var hintF = (sHint != null && nUnkF > 0) ? 1 : 0;
-      if (nUnkF - hintF >= 2) {
+      // a SOFT pts read doesn't get to lean on the hint: on the degraded tier a
+      // junk header read (t6 live: "18", truth 15) slipped this gate via hint
+      // credit and forced the free pair onto an infeasible sum
+      if (ptsSoft ? nUnkF >= 2 : (nUnkF - hintF) >= 2) {
         var kAdj = kSumF + (hintF ? sHint : 0), uAdj = nUnkF - hintF;
         if (pts < Math.max(4, kAdj + uAdj) || pts > Math.min(20, kAdj + 5 * uAdj)) { pts = null; ptsSoft = false; }
       }
@@ -1094,6 +1284,11 @@
           // corroboration; disagreement drops S into hard-flag territory
           if (fi === 3 && sHint != null) {
             conf4[3] = sHint === remaining ? Math.max(conf4[3], 0.85) : Math.min(conf4[3], 0.5);
+            // ...and when the pts read is SOFT, a disagreeing hint WINS the value:
+            // soft header reads at the degraded tier are junk-prone (t6 live read
+            // "18" on a 15-point board and arithmetic wrote S=4 over a correct
+            // hint of 1), while the hint channel is gated evidence
+            if (ptsSoft && sHint !== remaining) { levels[3] = sHint; conf4[3] = 0.5; }
           }
         } else { levels[fi] = indep[fi].v != null ? indep[fi].v : 1; conf4[fi] = 0.3; }
       } else {
