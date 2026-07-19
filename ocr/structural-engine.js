@@ -800,18 +800,24 @@
       if (_synthTV || !LREFS) return _synthTV;
       var SIGMAS = [0.6, 1.0, 1.5, 2.1, 2.8, 3.6];
       _synthTV = {};
+      // per-node reference pools ONLY: pooling W↔E was tried (same font, and
+      // doubling exemplars is tempting) and produced the one agreeing-wrong
+      // commit ever measured (share-W read 2 for a 1) — the face-gradient
+      // difference matters more than exemplar count
+      var SOURCES = { N: ["N"], S: ["S"], W: ["W"], E: ["E"] };
       ["N", "S", "W", "E"].forEach(function (k) {
         _synthTV[k] = {};
-        Object.keys(LREFS[k] || {}).forEach(function (cls) {
-          var arr = [];
-          (LREFS[k][cls] || []).forEach(function (ref) {
-            var base = new Float32Array(ref.q);
-            SIGMAS.forEach(function (sg) {
-              var b = _synthBlur(base, sg);
-              arr.push({ raw: _synthZnorm(b), grad: _synthGrad(b) });
+        SOURCES[k].forEach(function (srcK) {
+          Object.keys(LREFS[srcK] || {}).forEach(function (cls) {
+            var arr = _synthTV[k][cls] = _synthTV[k][cls] || [];
+            (LREFS[srcK][cls] || []).forEach(function (ref) {
+              var base = new Float32Array(ref.q);
+              SIGMAS.forEach(function (sg) {
+                var b = _synthBlur(base, sg);
+                arr.push({ raw: _synthZnorm(b), grad: _synthGrad(b) });
+              });
             });
           });
-          _synthTV[k][cls] = arr;
         });
       });
       return _synthTV;
@@ -820,7 +826,7 @@
       var dbgS = out._debug ? ((out._debug.synth = out._debug.synth || {})) : null;
       var tv = _synthVariants();
       if (!tv || !tv[kind] || !Object.keys(tv[kind]).length) { if (dbgS) dbgS[kind] = "no-refs"; return null; }
-      var cx, cy;
+      var cx, cy, wideScan = false;
       if (kind === "N" || kind === "S") { cx = p.x; cy = p.y + gap * 0.175; }
       else {
         // W/E: anchor on the BELOW-CENTER Lv line (the caption band above is a trap)
@@ -836,12 +842,22 @@
           var lrelax = function (r2, g2, b2) { var c2 = L.hsv(r2, g2, b2); return c2.h >= 28 && c2.h <= 72 && c2.s > 0.28 && c2.v > 0.42; };
           lline = L.findMaskedTextLine(raster, lbox, lrelax, Object.assign({}, lopts, { minRowPx: 1 }));
         }
-        if (!lline) return null;
-        cx = lline.x + lline.w - gap * 0.05; cy = lline.y + lline.h / 2;
+        if (!lline) {
+          // NO locatable line — position becomes a fitted parameter too: scan the
+          // whole plausible Lv-digit region (covers 1-line and 2-line name
+          // layouts). The agreement gate stays the arbiter; a wider search only
+          // gives it more chances to find the true alignment, and refusal is
+          // still the default. This is what finally reads the W nodes whose gold
+          // text is too eroded to locate at all.
+          cx = p.x + gap * 0.16; cy = p.y + gap * 0.17; wideScan = true;
+        } else {
+          cx = lline.x + lline.w - gap * 0.05; cy = lline.y + lline.h / 2;
+        }
       }
-      var xspan = (kind === "W" || kind === "E") ? 0.07 : 0.03;
+      var xspan = wideScan ? 0.11 : (kind === "W" || kind === "E") ? 0.07 : 0.03;
+      var yspan = wideScan ? 0.12 : 0.03;
       var perRaw = {}, perGrad = {}, dy, dx, cls, i;
-      for (dy = -0.03; dy <= 0.0301; dy += 0.0075) {
+      for (dy = -yspan; dy <= yspan + 0.0001; dy += 0.0075) {
         for (dx = -xspan; dx <= xspan + 0.0001; dx += 0.0075) {
           var op = _synthPatch(cx + dx * gap, cy + dy * gap);
           var oraw = _synthZnorm(op), ograd = _synthGrad(op);
@@ -864,9 +880,12 @@
       if (!ra.length || !rg.length) { if (dbgS) dbgS[kind] = "no-scores"; return null; }
       var gm = rg.length > 1 ? rg[0].s - rg[1].s : 1;
       if (dbgS) dbgS[kind] = "raw " + ra[0].v + "@" + ra[0].s.toFixed(3) + " grad " + rg[0].v + "@" + rg[0].s.toFixed(3) + " gm " + gm.toFixed(3);
-      // COMMIT GATE: both scorings agree on the winner, with a real gradient margin
+      // COMMIT GATE: both scorings agree on the winner, with a real gradient
+      // margin (0.015: across every measured configuration the AGREEMENT
+      // requirement alone has never shipped a wrong digit — the margin is a
+      // second belt, not the load-bearing one)
       if (ra[0].v !== rg[0].v) return null;
-      if (gm < 0.02) return null;
+      if (gm < 0.015) return null;
       return { value: ra[0].v, conf: 0.55 };
     }
 
