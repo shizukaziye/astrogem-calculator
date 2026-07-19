@@ -235,7 +235,11 @@
       var img = new Image();
       img.onload = function () {
         try {
-          var maxW = 1600;
+          // full native width: the first live flywheel record (2026-07-19) arrived
+          // downscaled to 1600px and was too degraded to debug or promote — a 4K
+          // webp is ~1MB, comfortably inside the worker's 6MB body cap and KV's
+          // 25MB value cap, and the pixels ARE the product here
+          var maxW = 3840;
           var sc = Math.min(1, maxW / img.naturalWidth);
           var c = document.createElement("canvas");
           c.width = Math.round(img.naturalWidth * sc);

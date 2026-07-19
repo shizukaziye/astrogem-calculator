@@ -1,0 +1,28 @@
+{
+  "_note": "FIRST genuine flywheel record (2026-07-19, source=share, id mrrauvkr-fdq6b4) — stored at the old 1600px collect cap, so it is a degraded-tier sample (the cap is 3840 since v60). RARE 7-turn gem (first in corpus). A 'Bound Gold' tooltip covers the reroll pill — rerollsRemaining=1 is Shizu's LIVE correction (they saw the real screen; the pill is occluded in this copy). The live parse flagged both effect names at conf 0 and guessed them SWAPPED (Boss Damage/Attack Power crossed) — flagged, not silent; labels here are pixel-transcribed.",
+  "config": {
+    "baseCost": 9,
+    "gemType": "order",
+    "willpowerLevel": 1,
+    "orderLevel": 1,
+    "effect1": "Attack Power",
+    "effect1Level": 1,
+    "effect2": "Boss Damage",
+    "effect2Level": 2
+  },
+  "state": {
+    "currentTurn": 2,
+    "maxTurns": 7,
+    "rerollsRemaining": 1,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "effect1", "amount": 1 },
+    { "type": "raise_effect", "target": "order", "amount": 1 },
+    { "type": "raise_effect", "target": "willpower", "amount": 3 },
+    { "type": "raise_effect", "target": "order", "amount": 3 }
+  ]
+}
