@@ -592,6 +592,62 @@
       }
     }
     if (out.state.rerollsShownFree == null && !out.state.rerollsChargeSeen && !out.state.rerollsChargeSpent) {
+      // PILL RELOCATION rescue (2026-07-19 "2.3%" audit): on some capture framings
+      // the anchor-derived pill center sits high-left and the button CLIPS the
+      // rect corner — every mask rung then OCRs a truncated line (225202/225159:
+      // a plainly visible "1/2" read empty and the snap defaulted to fresh-3).
+      // Self-locate the text line in a zone grown toward the panel edge (right/
+      // down only — the outcome captions at the left stay out), the idiom every
+      // other read uses. The located line is WORD-CHECKED before any digit
+      // whitelist touches it (the 2026-07-18 lesson: a digits whitelist
+      // transliterates "Charge"), and the commit requires a real slash pair.
+      var pzone = { x: pillRect.x, y: pillRect.y, w: pillRect.w + gap * 0.30, h: pillRect.h + gap * 0.24 };
+      var pDim2 = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.35 && c.v > 0.45; };
+      var pline = L.findMaskedTextLine(raster, pzone, pDim2, {
+        rejectFill: 0.5, maxRowFill: 0.75, minRowPx: 2,
+        minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.18),
+        accept: function (r) { return r.w >= gap * 0.12 && r.w <= gap * 0.75; }
+      });
+      if (pline) {
+        var pgrow = Math.round(pline.h * 0.5);
+        var prect2 = { x: pline.x - pgrow, y: pline.y - pgrow, w: pline.w + pgrow * 2, h: pline.h + pgrow * 2 };
+        var pChk = await maskedOcr(prect2, pDim2, { psm: 7 });   // unwhitelisted first
+        if (!/charg|harge|chorge/i.test(normText(pChk.text))) {
+          var pReM = pChk.text.match(/(\d)\s*\/\s*(\d)/);
+          if (!pReM) {
+            var pRe = await dilatedOcr(L.crop(raster, prect2), pDim2, { scale: 3, whitelist: "0123456789/", psm: 7 });
+            pReM = pRe.text.match(/(\d)\s*\/\s*(\d)/);
+          }
+          if (pReM) {
+            var pa3 = parseInt(pReM[1], 10), pb3 = parseInt(pReM[2], 10);
+            if (pa3 <= 9 && (pb3 === 1 || pb3 === 2)) {
+              out.state.rerollsShownFree = pa3;
+              out.state.rerollsShownDenom = pb3;
+              confidence.state.rerollsRemaining = 0.75;   // rescue read — stays checkable
+            }
+          }
+        }
+      }
+    }
+    if (out.state.rerollsShownFree == null && !out.state.rerollsChargeSeen && !out.state.rerollsChargeSpent) {
+      // same clipping, Charge case: the ⟳ icon is absent on Charge pills, so
+      // relocation can't fire — retry the WORD on a modestly expanded rect
+      // (right/down toward the panel edge only; the gold outcome icons stay
+      // outside, so recomputing the gold-face fraction here is safe).
+      var chRectW = { x: pillRect.x - gap * 0.15, y: pillRect.y - gap * 0.10, w: pillRect.w + gap * 0.40, h: pillRect.h + gap * 0.24 };
+      var chSubW = L.crop(raster, chRectW);
+      var chDimPredW = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.4 && c.v > 0.32; };
+      var chReadW = await dilatedOcr(chSubW, chDimPredW, { scale: 3, psm: 7 });
+      if (/charg|harge|chorge/i.test(normText(chReadW.text))) {
+        var goldW = L.colorClusterStats(chSubW, function (r, g, b) {
+          var c = L.hsv(r, g, b); return c.h >= 30 && c.h < 55 && c.s > 0.45 && c.v > 0.5;
+        });
+        if (goldW.frac > 0.2) out.state.rerollsChargeSeen = true;   // gold face
+        else out.state.rerollsChargeSpent = true;                    // grey
+        confidence.state.rerollsRemaining = 0.7;   // clipped-geometry read — flagged
+      }
+    }
+    if (out.state.rerollsShownFree == null && !out.state.rerollsChargeSeen && !out.state.rerollsChargeSpent) {
       confidence.state.rerollsRemaining = 0.25;
     }
 
