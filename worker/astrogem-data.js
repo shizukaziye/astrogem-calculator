@@ -13,7 +13,13 @@
  * cap at 25MB; a bounded webp capture is ~150-700KB). R2 was abandoned for KV
  * (dashboard-enable friction, code 10042); revisit only if volume demands it.
  *
- * Routes (all gated with the site token ?k=):
+ * Routes (all require the site token ?k= — but note the asymmetry: READING
+ * (/list, /obj) is genuinely password-gated, while /collect's token arrives from
+ * every client unconditionally (gate.js collectToken) because collection must
+ * never be blocked by the lock (Shizu 2026-07-18: "only the AI-powered parsing
+ * should be password locked"). The ?k on /collect only stops blind endpoint
+ * scans; the real quota protection is DAILY_WRITE_CAP below — KV free tier
+ * allows 1k writes/day and a record is one write):
  *   POST /collect      body: JSON { image, parse, final, changed, meta } -> { ok, id }
  *   GET  /list?cursor= -> { keys: [...], cursor }
  *   GET  /obj?key=     -> the stored record JSON
@@ -30,6 +36,7 @@ const ALLOW_ORIGINS = [
 ];
 const GATE_TOKEN = "6104928cd0cc5374f5330e63e6a834f99aef7579db15c77d9d154932bf7a8ced";
 const MAX_BODY = 6 * 1024 * 1024;
+const DAILY_WRITE_CAP = 300;   // records/day — far above real use, far below the 1k KV free tier
 
 function cors(req) {
   const origin = req.headers.get("Origin") || "";
@@ -74,6 +81,16 @@ export default {
 
       const now = new Date();
       const day = now.toISOString().slice(0, 10);
+
+      // daily write cap — the collect token is public-in-source, so this counter
+      // is what actually protects the KV write quota
+      const dcKey = "dc:" + day;
+      const dcCount = parseInt((await env.COLLECT.get(dcKey)) || "0", 10);
+      if (dcCount >= DAILY_WRITE_CAP) {
+        return json({ error: "daily collection cap reached (" + DAILY_WRITE_CAP + "/day) — resets at UTC midnight" }, 429, req);
+      }
+      await env.COLLECT.put(dcKey, String(dcCount + 1), { expirationTtl: 2 * 24 * 3600 });
+
       const id = now.getTime().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
       const key = "col/" + day + "/" + id;
       const record = {

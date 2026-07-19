@@ -268,40 +268,41 @@
     } catch (e) {}
     return changed;
   }
-  // Ship the staged record. Resolves a short outcome string for the status line —
-  // NEVER silently: ~30 of Shizu's live records were eaten (2026-07-18) because the
-  // old version nulled pendingCollect and then bailed on a locked gate without a
-  // word. Locked now PROMPTS (the owner types the password once per session), a
-  // declined prompt keeps the record staged so the next Get advice retries, and
-  // the POST result is checked and reported.
+  // Ship the staged record. Resolves a short outcome string for the UI — NEVER
+  // silently: ~30 of Shizu's live records were eaten (2026-07-18) by a version
+  // that nulled pendingCollect and then bailed on a locked gate without a word.
+  // Collection is NOT password-gated (only the AI verifier is — Shizu 2026-07-18):
+  // it uses gate.collectToken(), which is always available. On a failed POST the
+  // record is re-staged so the next Get advice retries it.
   function sendCollect(finalState) {
     if (!pendingCollect) return Promise.resolve("none");
-    var ensure = (window.astrogemGate && window.astrogemGate.ensureUnlocked)
-      ? window.astrogemGate.ensureUnlocked() : Promise.resolve(false);
-    return ensure.then(function (ok) {
-      if (!ok) return "locked";   // record stays staged — unlock and click again
-      var rec = pendingCollect;
-      pendingCollect = null;   // one record per parse
-      return new Promise(function (resolve) {
-        toWebpDataUrl(rec.blob, function (dataUrl) {
-          if (!dataUrl) return resolve("image conversion failed");
-          var payload = {
-            image: dataUrl,
-            parse: rec.parsed,
-            final: finalState,
-            changed: diffParseVsFinal(rec.parsed, finalState),
-            meta: { engine: selectedEngine, source: rec.source, v: 1, ua: navigator.userAgent.slice(0, 80) }
-          };
-          try {
-            fetch(DATA_URL + "/collect?k=" + window.astrogemGate.token(), {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
-            }).then(function (r) { resolve(r.ok ? "saved" : "server said " + r.status); })
-              .catch(function () { resolve("network error"); });
-          } catch (e) { resolve("network error"); }
-        });
+    var rec = pendingCollect;
+    pendingCollect = null;   // one record per parse (re-staged below on failure)
+    return new Promise(function (resolve) {
+      toWebpDataUrl(rec.blob, function (dataUrl) {
+        if (!dataUrl) return resolve("image conversion failed");
+        var payload = {
+          image: dataUrl,
+          parse: rec.parsed,
+          final: finalState,
+          changed: diffParseVsFinal(rec.parsed, finalState),
+          meta: { engine: selectedEngine, source: rec.source, v: 1, ua: navigator.userAgent.slice(0, 80) }
+        };
+        var tok = (window.astrogemGate && window.astrogemGate.collectToken) ? window.astrogemGate.collectToken() : "";
+        try {
+          fetch(DATA_URL + "/collect?k=" + tok, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          }).then(function (r) { resolve(r.ok ? "saved" : "server said " + r.status); })
+            .catch(function () { resolve("network error"); });
+        } catch (e) { resolve("network error"); }
       });
+    }).then(function (res) {
+      // a transient failure keeps the record for a retry click — unless a newer
+      // parse already staged its own record
+      if (res !== "saved" && pendingCollect === null) pendingCollect = rec;
+      return res;
     });
   }
 
@@ -609,9 +610,7 @@
         d.textContent = "✓ Reading + your corrections saved for parser training.";
       } else {
         d.className = "av-warn";
-        d.textContent = "⚠ Training record NOT saved — " + (res === "locked"
-          ? "locked. Press Get advice again and enter the password."
-          : res + ".");
+        d.textContent = "⚠ Training record NOT saved (" + res + ") — it will retry on your next Get advice.";
       }
       box.appendChild(d);
     });

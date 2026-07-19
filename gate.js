@@ -50,5 +50,12 @@
   // hash (never the plaintext), and "" while locked so a locked client can't reach the Worker.
   function token() { return isUnlocked() ? HASH : ""; }
 
-  window.astrogemGate = { ensureUnlocked: ensureUnlocked, isUnlocked: isUnlocked, token: token };
+  // Parse-record collection is deliberately NOT password-gated (Shizu 2026-07-18: "only the
+  // AI-powered parsing should be password locked" — training data must always flow). The
+  // worker still wants ?k= to stop blind endpoint scans, and since this hash ships in the
+  // page source anyway, sending it unconditionally for collect gives up nothing. The real
+  // quota protection is the data worker's own daily write cap.
+  function collectToken() { return HASH; }
+
+  window.astrogemGate = { ensureUnlocked: ensureUnlocked, isUnlocked: isUnlocked, token: token, collectToken: collectToken };
 })();
