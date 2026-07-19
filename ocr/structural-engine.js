@@ -2042,9 +2042,32 @@
   StructuralEngine.prototype.name = "structural";
   StructuralEngine.prototype.label = "Structural (offline, default)";
   StructuralEngine.prototype.isAvailable = function () {
-    return typeof window !== "undefined" && typeof window.Tesseract !== "undefined" && typeof document !== "undefined";
+    // available when the background offload can run (it imports its OWN
+    // Tesseract) — the main-thread CDN bundle is no longer loaded up front;
+    // the inline fallback lazy-injects it on demand (see ensureTesseractCdn)
+    if (typeof window === "undefined" || typeof document === "undefined") return false;
+    if (typeof Worker !== "undefined" && typeof ImageData !== "undefined") return true;
+    return typeof window.Tesseract !== "undefined";
   };
-  StructuralEngine.prototype.unavailableReason = function () { return "Needs a browser with the Tesseract CDN script loaded."; };
+  StructuralEngine.prototype.unavailableReason = function () { return "Needs a browser with Web Worker support (or the Tesseract CDN script)."; };
+
+  // Lazy CDN injection for the INLINE FALLBACK only: with the offload healthy,
+  // the ~4MB Tesseract bundle never loads (or parses) on the main thread at all.
+  var _cdnP = null;
+  function ensureTesseractCdn() {
+    if (typeof window !== "undefined" && typeof window.Tesseract !== "undefined") return Promise.resolve(true);
+    if (_cdnP) return _cdnP;
+    _cdnP = new Promise(function (resolve) {
+      try {
+        var s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+        s.onload = function () { resolve(typeof window.Tesseract !== "undefined"); };
+        s.onerror = function () { _cdnP = null; resolve(false); };
+        document.head.appendChild(s);
+      } catch (e) { _cdnP = null; resolve(false); }
+    });
+    return _cdnP;
+  }
 
   var _workerP = null;
   function getWorker() {
@@ -2158,7 +2181,12 @@
   StructuralEngine.prototype.parseScreenshot = function (input) {
     var self = this;
     function inline() {
-      return toRaster(input).then(function (raster) {
+      // the fallback needs the main-thread Tesseract — inject it now if the
+      // page never loaded it (the offload path doesn't); a failed injection
+      // still parses on templates/colors and the honesty guard flags the rest
+      return ensureTesseractCdn().then(function () {
+        return toRaster(input);
+      }).then(function (raster) {
         return parseStructural(raster, browserOcr);
       }).then(function (raw) {
         var snapped = self.constraintSnap(raw);
@@ -2168,6 +2196,7 @@
         return snapped;
       });
     }
+    if (typeof window !== "undefined" && window.__agForceInline) return inline();   // debug hook
     return toRaster(input).then(function (raster) {
       return bgParse(raster).then(function (bgResult) {
         return bgResult || inline();
