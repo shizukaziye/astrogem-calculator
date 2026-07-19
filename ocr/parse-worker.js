@@ -36,34 +36,49 @@ self.onmessage = function (ev) {
   }
 };
 
-// Worker-side Tesseract: same serialization + self-healing rules as the main
-// thread's browserOcr (see structural-engine.js), but recognize() gets ImageData
-// directly — no canvas exists here and none is needed.
-var _wp = null;
-function getW() {
-  if (!_wp) {
-    _wp = self.Tesseract.createWorker("eng", 1, { logger: function () {} });
-    _wp.catch(function () { _wp = null; });
+// Worker-side Tesseract POOL (2 instances): the engine's reads dominated wall
+// time and were serialized on one instance. Two instances let independent reads
+// (the engine issues level nodes and outcome cells concurrently) overlap, and
+// each instance CACHES its last parameters — identical-param calls skip the
+// setParameters round-trip entirely. Same self-healing rules as the main
+// thread's browserOcr; recognize() gets ImageData directly (no canvas here).
+var POOL_N = 2;
+var _pool = [];   // [{p: workerPromise|null, q: tailPromise, params: lastParamsKey, busy: int}]
+for (var pi = 0; pi < POOL_N; pi++) _pool.push({ p: null, q: Promise.resolve(), params: "", busy: 0 });
+function slotWorker(slot) {
+  if (!slot.p) {
+    slot.p = self.Tesseract.createWorker("eng", 1, { logger: function () {} });
+    slot.p.catch(function () { slot.p = null; slot.params = ""; });
   }
-  return _wp;
+  return slot.p;
 }
-var _q = Promise.resolve();
 function wOcr(raster, opts) {
-  var call = _q.catch(function () {}).then(function () {
-    return getW().then(function (w) {
-      var params = { tessedit_pageseg_mode: String((opts && opts.psm) || 6), user_defined_dpi: "150" };
-      params.tessedit_char_whitelist = (opts && opts.whitelist) || "";
-      return w.setParameters(params).catch(function () {}).then(function () {
+  var psm = String((opts && opts.psm) || 6);
+  var wl = (opts && opts.whitelist) || "";
+  var key = psm + "|" + wl;
+  // prefer an idle slot already configured with these params, then any idle
+  // slot, then the least-busy — parameter affinity minimizes setParameters swaps
+  var slot = null, si;
+  for (si = 0; si < _pool.length; si++) if (!_pool[si].busy && _pool[si].params === key) { slot = _pool[si]; break; }
+  if (!slot) for (si = 0; si < _pool.length; si++) if (!_pool[si].busy) { slot = _pool[si]; break; }
+  if (!slot) { slot = _pool[0]; for (si = 1; si < _pool.length; si++) if (_pool[si].busy < slot.busy) slot = _pool[si]; }
+  slot.busy++;
+  var call = slot.q.catch(function () {}).then(function () {
+    return slotWorker(slot).then(function (w) {
+      var setP = slot.params === key ? Promise.resolve() : w.setParameters({
+        tessedit_pageseg_mode: psm, user_defined_dpi: "150", tessedit_char_whitelist: wl
+      }).then(function () { slot.params = key; }).catch(function () { slot.params = ""; });
+      return setP.then(function () {
         return w.recognize(new ImageData(new Uint8ClampedArray(raster.data), raster.width, raster.height));
       }).then(function (res) {
         return { text: (res && res.data && res.data.text) || "", conf: ((res && res.data && res.data.confidence) || 40) / 100 };
       });
     }).catch(function () {
-      _wp = null;   // dead worker — retry fresh on the next call
+      slot.p = null; slot.params = "";   // dead instance — retry fresh next call
       return { text: "", conf: 0, failed: true };
     });
-  });
-  _q = call;
+  }).then(function (r) { slot.busy--; return r; }, function (e) { slot.busy--; throw e; });
+  slot.q = call;
   return call;
 }
 

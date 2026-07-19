@@ -229,25 +229,34 @@
 
   // ---------------- parse collection ----------------
   // Re-encode the capture as a bounded webp data-URL (collection payloads stay small).
-  function toWebpDataUrl(blob, cb) {
+  function toWebpDataUrl(blob, rect, cb) {
     try {
       var url = URL.createObjectURL(blob);
       var img = new Image();
       img.onload = function () {
         try {
-          // Full native width first (the pixels ARE the product) — but a BUSY 4K
-          // frame at q0.8 can blow past the worker's body cap, and that is how a
-          // live record VANISHED (2026-07-19: the POST arrived, the store failed).
-          // Walk a quality/size ladder until the payload is guaranteed to fit
-          // (~9M chars ≈ 9MB body, under the worker's 12MB cap with headroom).
+          // CROP to the parser-reported panel when available (Shizu 2026-07-19:
+          // "crop the image before saving") — the background is ~85% of the
+          // frame and has zero training value, while _srcPanel keeps the pill/
+          // footer safety margins. No panel (parse failed to find one) → full
+          // frame; a panel-less frame is itself interesting data.
+          var sx = 0, sy = 0, sw = img.naturalWidth, shh = img.naturalHeight;
+          if (rect && rect.w > 200 && rect.h > 200) {
+            sx = Math.max(0, Math.round(rect.x)); sy = Math.max(0, Math.round(rect.y));
+            sw = Math.min(img.naturalWidth - sx, Math.round(rect.w));
+            shh = Math.min(img.naturalHeight - sy, Math.round(rect.h));
+          }
+          // quality/size ladder: the payload must provably fit the worker's cap
+          // (a full-frame record once VANISHED on an oversized body). Post-crop,
+          // the first rung wins essentially always.
           var LADDER = [[3840, "image/webp", 0.8], [3840, "image/webp", 0.6], [2560, "image/webp", 0.7], [2000, "image/jpeg", 0.8]];
           var out = null;
           for (var li = 0; li < LADDER.length; li++) {
-            var sc = Math.min(1, LADDER[li][0] / img.naturalWidth);
+            var sc = Math.min(1, LADDER[li][0] / sw);
             var c = document.createElement("canvas");
-            c.width = Math.round(img.naturalWidth * sc);
-            c.height = Math.round(img.naturalHeight * sc);
-            c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+            c.width = Math.round(sw * sc);
+            c.height = Math.round(shh * sc);
+            c.getContext("2d").drawImage(img, sx, sy, sw, shh, 0, 0, c.width, c.height);
             // the jpeg terminal rung also covers browsers whose canvas cannot
             // ENCODE webp (they silently return a huge PNG dataURL instead)
             out = c.toDataURL(LADDER[li][1], LADDER[li][2]);
@@ -291,14 +300,15 @@
     var rec = pendingCollect;
     pendingCollect = null;   // one record per parse (re-staged below on failure)
     return new Promise(function (resolve) {
-      toWebpDataUrl(rec.blob, function (dataUrl) {
+      var panelRect = rec.parsed && rec.parsed._srcPanel;
+      toWebpDataUrl(rec.blob, panelRect, function (dataUrl) {
         if (!dataUrl) return resolve("image conversion failed");
         var payload = {
           image: dataUrl,
           parse: rec.parsed,
           final: finalState,
           changed: diffParseVsFinal(rec.parsed, finalState),
-          meta: { engine: selectedEngine, source: rec.source, v: 1, ua: navigator.userAgent.slice(0, 80) }
+          meta: { engine: selectedEngine, source: rec.source, v: 2, cropped: !!panelRect, ua: navigator.userAgent.slice(0, 80) }
         };
         var tok = (window.astrogemGate && window.astrogemGate.collectToken) ? window.astrogemGate.collectToken() : "";
         try {

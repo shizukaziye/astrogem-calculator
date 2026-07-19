@@ -122,6 +122,17 @@
     var out = { config: {}, state: {}, outcomes: [], rarity: null, confidence: confidence };
     var ocrFails = 0;   // dead-OCR calls (worker never loaded / crashed mid-parse)
 
+    // phase timing (lands in _debug.timing) — the optimization loop's ruler:
+    // tmark(name) charges the elapsed time since the previous mark to `name`;
+    // OCR wall-time is also accumulated separately (it overlaps the phases)
+    var _tPrev = Date.now(), _timing = {}, _ocrMs = 0;
+    function tmark(name) { var n = Date.now(); _timing[name] = (_timing[name] || 0) + (n - _tPrev); _tPrev = n; }
+    var _ocrInner = ocrFn;
+    ocrFn = function (r, o) {
+      var t0 = Date.now();
+      return _ocrInner(r, o).then(function (res) { _ocrMs += Date.now() - t0; return res; });
+    };
+
     var found = L.panelOrWhole(raster);
     if (!found) {
       // not a Processing screenshot (or unrecognizable) — return an empty parse; the
@@ -195,6 +206,7 @@
     var geo = found.anchors ? L.wheelGeometry(found.anchors) : null;
     var panelConf = found.score;
     out._debug = { panel: found };
+    tmark("normalize");
 
     function roiCrop(key) { return L.crop(raster, L.roiRect(panel, key)); }
     async function ocrText(sub, opts) {
@@ -498,6 +510,7 @@
     if (out.state.processCost == null) confidence.state.processCostMultiplier = 0.3;
     if (out._debug) out._debug.costRead = { footText: footText.slice(0, 90), cval: cval };
 
+    tmark("footerTurnCost");
     // ---- reroll pill (ROI-scoped: the "Reset (1/1)" trap can't reach here) ----
     // The pill's full state machine (Shizu, 2026-07-17):
     //   "2/2" greyed  = turn 1 (nothing spent; the DIM text defeated the old white
@@ -661,6 +674,7 @@
       confidence.state.rerollsRemaining = 0.25;
     }
 
+    tmark("pill");
     // ---- gem name → gemType + baseCost (suffix table) ----
     // Fixed band primary (best measured); if it produces neither the type keyword nor
     // a suffix, retry on a LOCATED line — the name is the only long SATURATED text
@@ -711,6 +725,7 @@
     if (suffixHit) { out.config.baseCost = GEM_NAME_COST[suffixHit]; confidence.config.baseCost = suffixAmbig ? 0.6 : 0.85; }
     else confidence.config.baseCost = 0;
 
+    tmark("gemName");
     // ---- wheel levels (gold digits) + effect hue references ----
     var patchHalf = Math.max(4, gap * 0.06);
     function nodeColor(p) { return L.medianPatch(raster, p.x, p.y, patchHalf); }
@@ -1182,16 +1197,20 @@
       }
       return { value: m ? parseInt(m[1], 10) : null, conf: conf, vec: vec, src: "ocr" };
     }
-    var lvFull = [
-      await readLevelFull(nodes.nodeN, false, false, "N"),   // willpower (bare digit)
-      await readLevelFull(nodes.nodeW, false, true, "W"),    // effect1 ("Lv. N")
-      await readLevelFull(nodes.nodeE, false, true, "E"),    // effect2 ("Lv. N")
-      await readLevelFull(nodes.nodeS, true, false, "S")     // order (gold-on-gold bare digit)
-    ];
+    // the four node reads are data-independent — issue them CONCURRENTLY so the
+    // OCR pool (parse-worker.js) can overlap them; with a single serialized OCR
+    // backend (Node eval, inline fallback) the queue preserves old behavior
+    var lvFull = await Promise.all([
+      readLevelFull(nodes.nodeN, false, false, "N"),   // willpower (bare digit)
+      readLevelFull(nodes.nodeW, false, true, "W"),    // effect1 ("Lv. N")
+      readLevelFull(nodes.nodeE, false, true, "E"),    // effect2 ("Lv. N")
+      readLevelFull(nodes.nodeS, true, false, "S")     // order (gold-on-gold bare digit)
+    ]);
     // The S (order) luminance read is a HINT, never a pinned value: at low res the
     // gold-on-gold digit is marginal and a wrong pin corrupts the checksum's
     // arithmetic. The hint breaks enumeration ties (this is what un-swaps a live
     // "Atk Power 5 / Chaos Points 3" board) and corroborates-or-flags the solved S.
+    tmark("levelReads");
     var sHint = lvFull[3].value;
     lvFull[3] = { value: null, conf: 0, vec: lvFull[3].vec };
     var scoreVecs = lvFull.map(function (r) { return r.vec; });
@@ -1516,6 +1535,7 @@
     out.config.effect2Level = levels[2]; confidence.config.effect2Level = conf4[2];
     out.config.orderLevel = levels[3]; confidence.config.orderLevel = conf4[3];
     if (out._debug) out._debug.pts = pts + (ptsSoft ? "(soft)" : "") + " levels=" + levels.join(",");
+    tmark("ptsAndSolve");
 
     // ---- effect NAMES: W/E caption OCR (white serif over art — masked) ----
     // Tall band: 2-line names ("Ally Damage / Enh.") start ~0.28·gap above center; the
@@ -1709,6 +1729,7 @@
       if (rnE) { out.config.effect2 = rnE; confidence.config.effect2 = 0.6; }
     }
 
+    tmark("effectNames");
     // ---- the 4 outcomes ----
     var iconXs = geo ? geo.outIconXs : L.ROI.outIconXs.map(function (fx) { return panel.x + fx * panel.w; });
     var iconY = geo ? geo.outIconY : panel.y + L.ROI.outIconY * panel.h;
@@ -1965,6 +1986,11 @@
       Object.keys(confidence.state).forEach(function (k) { confidence.state[k] = Math.min(confidence.state[k] || 0, 0.5); });
       for (var ci = 0; ci < confidence.outcomes.length; ci++) confidence.outcomes[ci] = Math.min(confidence.outcomes[ci] || 0, 0.5);
     }
+    tmark("outcomes");
+    if (out._debug) {
+      _timing.ocrTotal = Math.round(_ocrMs);
+      out._debug.timing = _timing;
+    }
     return out;
   }
 
@@ -2144,10 +2170,16 @@
       _workerP = null;
     }
   };
-  // warm the OCR worker as soon as the engine loads (tab activation) so the first
-  // parse doesn't pay the worker + traineddata startup.
-  if (typeof window !== "undefined" && typeof window.Tesseract !== "undefined") {
-    try { getWorker(); } catch (e) {}
+  // Warm-up at engine load (tab activation) so the FIRST parse doesn't pay the
+  // startup: when the background offload is available, warm THAT (its
+  // importScripts + Tesseract spin up off-thread) and leave the main-thread
+  // Tesseract cold — it only exists as the inline fallback and spinning both
+  // doubled memory and startup for nothing. No offload → old main-thread warm.
+  if (typeof window !== "undefined") {
+    try {
+      if (typeof Worker !== "undefined" && typeof ImageData !== "undefined") getBgWorker();
+      else if (typeof window.Tesseract !== "undefined") getWorker();
+    } catch (e) {}
   }
 
   // ---------------------------------------------------------------------------
