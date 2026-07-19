@@ -42,6 +42,11 @@
     var _lr = IS_NODE ? require("./level-refs.js") : root.OcrLevelRefs;
     if (_lr) { LREFS = _lr.LEVEL_REFS; NREFS = _lr.NAME_REFS; }
   } catch (e) {}
+  // blurred-variant caches for the synthesis rescues — MODULE scope: building
+  // them costs ~400 blur+normalize passes and they depend only on the baked
+  // refs, so one build serves every parse (they used to be rebuilt inside
+  // every parseStructural call)
+  var _synthTVCache = null, _nsynthTVCache = null;
 
   var GEM_NAME_COST = (TESS && TESS.GEM_NAME_COST) || {
     stability: 8, corrosion: 8, solidity: 9, distortion: 9, immutability: 10, destruction: 10
@@ -747,7 +752,6 @@
     // shipped 8 correct commits and refused every wrong one. Fires only when the
     // template AND OCR ladders both came back empty, so clean frames never pay.
     var SYNTH_PS = 32, SYNTH_PATCH_GAP = 0.13;
-    var _synthTV = null;   // lazily-built blurred template variants
     function _synthZnorm(p2) {
       var out = new Float32Array(p2.length), mean = 0, i;
       for (i = 0; i < p2.length; i++) mean += p2[i];
@@ -800,7 +804,8 @@
       return out;
     }
     function _synthVariants() {
-      if (_synthTV || !LREFS) return _synthTV;
+      if (_synthTVCache || !LREFS) return _synthTVCache;
+      var _synthTV;
       var SIGMAS = [0.6, 1.0, 1.5, 2.1, 2.8, 3.6];
       _synthTV = {};
       // per-node reference pools ONLY: pooling W↔E was tried (same font, and
@@ -823,7 +828,8 @@
           });
         });
       });
-      return _synthTV;
+      _synthTVCache = _synthTV;
+      return _synthTVCache;
     }
     function synthLevelRescue(kind, p) {
       var dbgS = out._debug ? ((out._debug.synth = out._debug.synth || {})) : null;
@@ -894,7 +900,7 @@
     }
 
     // ---- name-band synthesis (same method, 6-class, wide patches) ----
-    var NPW = 48, NPH = 16, _nsynthTV = null;
+    var NPW = 48, NPH = 16;
     function _nZnorm(p2) {
       var out = new Float32Array(p2.length), mean = 0, i;
       for (i = 0; i < p2.length; i++) mean += p2[i];
@@ -946,9 +952,9 @@
       return out;
     }
     function _nsynthVariants() {
-      if (_nsynthTV || !NREFS) return _nsynthTV;
+      if (_nsynthTVCache || !NREFS) return _nsynthTVCache;
       var SIGMAS = [0.5, 0.9, 1.4, 2.0];
-      _nsynthTV = { W: {}, E: {} };
+      var _nsynthTV = { W: {}, E: {} };
       ["W", "E"].forEach(function (k) {
         var other = k === "W" ? "E" : "W";
         var names = {};
@@ -969,7 +975,8 @@
           _nsynthTV[k][n] = arr;
         });
       });
-      return _nsynthTV;
+      _nsynthTVCache = _nsynthTV;
+      return _nsynthTVCache;
     }
     // Classify the name band against reference patches; candidates constrained to
     // `allowed` (the cost pool) minus `avoid`. Same dual-scoring agreement gate.
@@ -2024,17 +2031,86 @@
     return call;
   }
 
+  // ---- background parse offload (2026-07-19: "don't freeze the website") ----
+  // The parse runs in ocr/parse-worker.js when Workers are available; the main
+  // thread only decodes the input to a raster (cheap) and transfers the buffer.
+  // ANY offload failure disables it for the session and the inline path takes
+  // over — identical behavior, just blocking.
+  var _bg = null, _bgDisabled = false, _bgSeq = 0, _bgPending = {};
+  function bgWorkerUrls() {
+    var v = {};
+    try {
+      ((window.LAZY_TABS && window.LAZY_TABS.advisor) || []).forEach(function (u) {
+        var m = String(u).match(/([^\/]+\.js)(\?v=\d+)?$/);
+        if (m) v[m[1]] = m[2] || "";
+      });
+    } catch (e) {}
+    function f(name, dir) { return (dir || "") + name + (v[name] || ""); }
+    return [
+      "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
+      f("astrogem.js", "../model/"), f("engine.js"), f("layout.js"), f("glyphs.js"),
+      f("level-refs.js"), f("tesseract-engine.js"), f("structural-engine.js")
+    ];
+  }
+  function getBgWorker() {
+    if (_bgDisabled || typeof Worker === "undefined" || typeof ImageData === "undefined") {
+      return Promise.resolve(null);
+    }
+    if (_bg) return _bg.readyP.then(function (ok) { return ok ? _bg : null; });
+    var w;
+    try { w = new Worker("ocr/parse-worker.js?v=1"); }
+    catch (e) { _bgDisabled = true; return Promise.resolve(null); }
+    var readyResolve;
+    _bg = { w: w, readyP: new Promise(function (res) { readyResolve = res; }) };
+    w.onmessage = function (ev) {
+      var m = ev.data || {};
+      if (m.type === "ready") readyResolve(true);
+      else if (m.type === "init-error") { _bgDisabled = true; readyResolve(false); }
+      else if (m.type === "result" && _bgPending[m.id]) {
+        var cb = _bgPending[m.id];
+        delete _bgPending[m.id];
+        cb(m);
+      }
+    };
+    w.onerror = function () {
+      _bgDisabled = true;
+      try { readyResolve(false); } catch (e) {}
+      Object.keys(_bgPending).forEach(function (id) { var cb = _bgPending[id]; delete _bgPending[id]; cb({ error: "worker crashed" }); });
+    };
+    w.postMessage({ type: "init", urls: bgWorkerUrls() });
+    return _bg.readyP.then(function (ok) { return ok ? _bg : null; });
+  }
+  function bgParse(raster) {
+    return getBgWorker().then(function (bg) {
+      if (!bg) return null;
+      return new Promise(function (resolve) {
+        var id = ++_bgSeq;
+        _bgPending[id] = function (m) { resolve(m.error ? null : m.result); };
+        // TRANSFER the pixels (zero-copy) — the raster is dead to this thread
+        // afterwards; the fallback path re-decodes from the original input
+        bg.w.postMessage({ type: "parse", id: id, width: raster.width, height: raster.height, buf: raster.data.buffer }, [raster.data.buffer]);
+      });
+    });
+  }
+
   StructuralEngine.prototype.parseScreenshot = function (input) {
     var self = this;
+    function inline() {
+      return toRaster(input).then(function (raster) {
+        return parseStructural(raster, browserOcr);
+      }).then(function (raw) {
+        var snapped = self.constraintSnap(raw);
+        snapped.confidence = raw.confidence ? snapped.confidence : undefined;
+        if (raw.ocrDegraded) snapped.ocrDegraded = true;
+        if (raw._srcPanel) snapped._srcPanel = raw._srcPanel;   // for the AI verifier's crop
+        return snapped;
+      });
+    }
     return toRaster(input).then(function (raster) {
-      return parseStructural(raster, browserOcr);
-    }).then(function (raw) {
-      var snapped = self.constraintSnap(raw);
-      snapped.confidence = raw.confidence ? snapped.confidence : undefined;
-      if (raw.ocrDegraded) snapped.ocrDegraded = true;
-      if (raw._srcPanel) snapped._srcPanel = raw._srcPanel;   // for the AI verifier's crop
-      return snapped;
-    });
+      return bgParse(raster).then(function (bgResult) {
+        return bgResult || inline();
+      });
+    }).catch(function () { return inline(); });
   };
   function toRaster(input) {
     return new Promise(function (resolve, reject) {
