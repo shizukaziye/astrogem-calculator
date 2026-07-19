@@ -75,6 +75,7 @@ fallbacks — and the channel ORDER is measured, not aesthetic:
 | footer (Process x/N, cost) | plain-background OCR with a three-way vote (template digits / located line / footer block) + a last-resort rescue band | the footer is the one place OCR is genuinely strong |
 | reroll pill / Charge | OCR + template+aspect verification; dim rescue at a 0.52 ink floor (between pill background ~0.47 and ink ~0.55); Charge word retried at v>0.32 | tiny dim text right at the OCR floor; the denominator is {1,2} so aspect alone decides it |
 | outcome cells | icon hue self-calibrated against the same image's own W/E diamonds; chartreuse/red amount lines; grey cells get a dedicated dilated OCR pass; sign rules ("a '+' is fat and survives; the thin '−' is what drops") | icon colors follow the SLOT, not the effect — a fixed effect→color table would be wrong |
+| degraded-tier levels & names (LAST rung) | **analysis-by-synthesis** (§2.6): pristine reference patches blurred to candidate degradations, correlated over a sub-pixel grid, dual-scored | the only classical method (of nine tried) that reads sub-10px digits; commits only on cross-channel agreement |
 
 ### 2.4 Constraint arbitration — the checksum solver
 
@@ -107,6 +108,32 @@ resolves `{failed:true}`, is discarded, and ≥3 failures cap EVERY confidence a
 emit pool-guessed effects at 0.8 forever), and eval prints SILENT errors + flag
 coverage on every run so the zero-silents invariant is re-verified continuously.
 
+### 2.6 Analysis-by-synthesis — the degraded-tier rescue (2026-07-19)
+
+When the template AND OCR ladders both fail on a level digit or an effect name,
+the last rung fits the degradation instead of fighting it: pristine 32×32
+reference patches (baked from native-tier labeled samples by
+`tools/build-level-refs.js` into `ocr/level-refs.js`, gradient-energy
+self-aligned, exemplars **stratified across resolution tiers**) are Gaussian-
+blurred to candidate degradations and correlated against the observed patch over
+a sub-pixel alignment grid — position itself becomes a fitted parameter when no
+line locates (the wide scan). A value commits ONLY when raw-luminance and
+gradient-magnitude scorings agree on the winner above a node-specific margin
+floor (S = 0.015, others 0.01), and **overriding an existing read demands
+gm ≥ 0.03** — asymmetric on purpose. Names get the same treatment at 48×16 plus
+a purely structural rung first: fuzzy keyword × measured caption line-count ×
+pool uniqueness ("jamage" on two lines in pool 9 ⇒ Ally Damage Enh., uniquely).
+
+Eight classical method families failed before this one worked (masked templates,
+pre-upscaled masks, greyscale OCR — which *hallucinates* — glyph NCC, reference
+patches in three configurations, the joint board solve); their failure modes are
+recorded in the error-review artifact. Three calibration knobs were tried,
+caught regressing by the tribunal, and reverted (W↔E ref pooling produced the
+only agreeing-wrong ever measured; sharpest-only exemplars traded fixes for
+regressions; a flat 0.01 margin let a clean capture's gold agree-wrong at
+exactly 0.010). **The tribunal is the method**: every knob passes the full eval
+with the 55 clean captures untouched and zero silents, or it reverts.
+
 ## 3. The decision layer
 
 `model/dp.js` ranks four actions from the parsed state (advisor.js calls
@@ -132,7 +159,17 @@ flood the DB with unreviewed data).
 ## 4. The collection flywheel — and its one trap
 
 Every manual Get advice ships {image, parse, final state, diff} to the
-`astrogem-data` worker (KV). Corrections are ground-truth labels…
+`astrogem-data` worker (KV). The capture is **cropped to `_srcPanel`** (native
+panel pixels, pill/footer margins included — records run ~150KB) and the save is
+**guaranteed**: an adaptive quality ladder keeps the payload provably inside the
+worker's 12MB cap, the worker writes the record BEFORE the day counter, failures
+return honest errors, and the client shows "✓ saved" / "⚠ NOT saved (why)" on
+every attempt with automatic re-staging for retry. (A record once vanished
+silently — oversized body + counter-first writes + a silent locked-gate discard;
+each hole is closed and E2E-proven.) Collection is NOT password-gated — only the
+AI verifier is; the worker's daily write cap is the quota guard.
+
+Corrections are ground-truth labels…
 **fallibly** so: a live correction once contradicted its own screenshot's
 checksum (the parser had been right). The rules that follow:
 
@@ -168,12 +205,22 @@ The process that worked, distilled — future sessions should start here:
 
 ## 6. Known limits and open ends
 
-- **Physical occlusion** (the pet sprite on a diamond) is unwinnable by reading;
-  the pool/checksum machinery recovers what it can and flags the rest.
-- **Chat-rerendered captures** (the 2000px double-webp copies) are below the
-  OCR floor for gold level text; they stay in the corpus as flagged hard cases.
+Current state (2026-07-19, v82, 60-sample corpus): **99.7% headline, zero silent
+errors, all 55 clean captures whole-parse-perfect, and exactly ONE wrong scalar
+in the entire corpus — the tooltip-occluded reroll pill** (absent pixels; no
+reader of any kind). The AI verifier reads every remaining flagged field
+correctly when unlocked.
+
+- **Physical occlusion** (a pet sprite, a hovering tooltip) is unwinnable by
+  reading — the information is not in the image. Flagged, verifier-eligible
+  where pixels exist elsewhere.
+- ~~Chat-rerendered captures below the OCR floor~~ **RESOLVED (2026-07-19)**:
+  the analysis-by-synthesis rescue (§2.6) reads their levels and names
+  classically; the tier itself is extinct in production (native-resolution
+  collection since v60).
 - **Uncommon rarity and Destruction (cost-10) gems** have little/no corpus
   coverage; the vocabulary and pools support them, but they're untested inputs.
+  (The one live cost-10 frame ever collected died in a pre-hardening upload.)
 - ~~The glyph atlas pollution~~ **RESOLVED (2026-07-18 pass 2):** the atlas was
   regenerated with the tip-gated harvester (clean '1'/'2'/'3', the harvest/read
   segmentation bounds unified at 1.7) and landed at full parity — the one
@@ -200,6 +247,41 @@ The process that worked, distilled — future sessions should start here:
   5016); the model returns its JSON sometimes as an OBJECT, sometimes as text
   with bare fractions (`"currentTurn": 5/9`) — both repaired server-side; and
   empty answers are never cached (a transient failure must not poison the 7-day
-  cache). Measured answer quality on first probes: ~5-6 of 8 fields correct on a
-  degraded rerender, 3/4 on a crisp 4K panel — good enough for tie-breaking
-  under the adopt-but-keep-flagged rule, not for standalone reading.
+  cache). Measured answer quality: 13/13 correct across every readable
+  remaining field it was tested on (gold centers, the pet frame, a mangled
+  2-line name) — the vision model carries the shape priors classical methods
+  lack, which is why it backstops the flags.
+
+## 7. Performance architecture (2026-07-19 optimization sprint)
+
+The parse runs **off the main thread** and the site never freezes:
+
+- `ocr/parse-worker.js` — a classic Web Worker importScripts the same engine
+  stack (the client sends its own cache-busted URLs from `LAZY_TABS`, so worker
+  and page can never version-skew), receives the decoded raster by zero-copy
+  buffer TRANSFER, and runs `parseStructural` + `constraintSnap` there. Any
+  offload failure (creation, init, crash) disables it for the session and the
+  identical inline path takes over. Measured: 227 rAF/s on the page during a
+  full parse — display refresh rate, zero blocking.
+- **Tesseract pool (2 instances) with parameter affinity** inside the worker:
+  each instance caches its last psm/whitelist; identical-param calls skip the
+  setParameters round-trip. The engine issues everything data-independent
+  CONCURRENTLY: the four level nodes, the four outcome cells, and the whole
+  footer phase (launched early, awaited before outcomes). Serialized backends
+  (Node eval, the inline fallback) preserve old behavior through their queues.
+- **The footer psm-6 block — the parse's single largest OCR — is skipped** when
+  the template∧button-OCR votes already agree on the Process pair and the no-OCR
+  cost-template read lands; it is fetched lazily only when actually needed.
+- **Warm-up moved to tab load** (the background worker boots its pool while the
+  user is still reading the page); the main-thread Tesseract stays cold unless
+  the offload is unavailable. **Idle teardown** reclaims the pool's ~160MB of
+  wasm heap after 5 minutes without a parse (lazy ~2s re-warm).
+- The synthesis reference caches (~400 blur+normalize passes) build once per
+  session at module scope, not per parse. `_debug.timing` phase marks are the
+  sprint's ruler; the finding that drove everything: **OCR wall-time dominates
+  and the pixel loops are nearly free.**
+
+Measured end-to-end in the browser: warm clean-frame parse-to-advice
+**1.6–2.3s** (25–35s before the sprint); the worst corpus frame (grey Charge,
+every rescue ladder, plus an AI-verifier round-trip) 9.4s, fully in background.
+Accuracy was bit-identical at every step — the eval gate ran after each change.
