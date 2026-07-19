@@ -71,7 +71,9 @@
   // procCost(cm) = 900 * (1 + cm/100), floored at 100 and rounded (mirrors
   // nested.js _applyProcessStep, which rounds and clamps the process cost).
   function procCost(cm) {
-    return Math.max(100, Math.round(A.COSTS.processBase * (1 + (cm || 0) / 100)));
+    // cm = -100 is REAL: the game's "-100% Processing Cost" outcome shows a
+    // literal "Processing Cost 0" (live 2026-07-19) — no phantom 100g floor
+    return Math.max(0, Math.round(A.COSTS.processBase * (1 + (cm || 0) / 100)));
   }
   // rerollCost: free unless it is the LAST reroll (r===1 -> 3800), per nested.js.
   function rerollCost(r) {

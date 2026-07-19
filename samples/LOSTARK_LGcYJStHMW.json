@@ -1,0 +1,28 @@
+{
+  "_note": "Game-client screenshot (LOSTARK_*.jpg, 3834x1797, JPEG tier) — Shizu 2026-07-19. FIRST 'Processing Cost 0' sample: the -100% cost outcome landed, footer shows a literal lone 0 (the pre-fix parser could only read 450/900/1800 and defaulted 900 flagged). Board: 1+3+2+3 = 9 pts, header '9 Astrogem Points' confirms. Grey Charge = rerolls 0.",
+  "config": {
+    "baseCost": 8,
+    "gemType": "order",
+    "willpowerLevel": 1,
+    "orderLevel": 3,
+    "effect1": "Additional Damage",
+    "effect1Level": 3,
+    "effect2": "Attack Power",
+    "effect2Level": 2
+  },
+  "state": {
+    "currentTurn": 5,
+    "maxTurns": 9,
+    "rerollsRemaining": 0,
+    "processCost": 0,
+    "processCostMultiplier": -100,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "reroll_increase", "change": 1 },
+    { "type": "raise_effect", "target": "effect1", "amount": 1 },
+    { "type": "raise_effect", "target": "willpower", "amount": 1 },
+    { "type": "change_gold_cost", "change": 100 }
+  ]
+}

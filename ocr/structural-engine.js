@@ -517,6 +517,22 @@
               var cv2 = parseInt(digs2, 10);
               if (cv2 === 450 || cv2 === 900 || cv2 === 1800) { cval = cv2; costConf = 0.85; }
             }
+          } else if (runStart2 > 0 && run2.length === 1) {
+            // ZERO rung — "Processing Cost 0" is REAL (the -100% outcome landed;
+            // two live frames 2026-07-19, iou 0.96 on both). A lone trailing
+            // glyph after the wide gap IS the right-aligned value, and 0 is the
+            // only 1-digit cost, so demand a STRONG '0' on a round-ish box.
+            // (A mask-eaten "900" leaving only its last digit would need the two
+            // left digits — same font, same brightness, adjacent — to vanish
+            // alone; not a real failure mode outside occlusion, which kills the
+            // label boxes this branch requires via runStart2 > 0.)
+            var zb = run2[0].box;
+            var zd = iouDigit(tgC2.mask, zb);
+            if (out._debug) out._debug.costZero = zd ? zd.ch + ":" + zd.score.toFixed(2) : "null";
+            if (zd && zd.ch === "0" && zd.score >= 0.7 &&
+                zb.h >= cmedH2 * 0.6 && zb.w >= zb.h * 0.45 && zb.w <= zb.h * 1.15) {
+              cval = 0; costConf = 0.85;
+            }
           }
         }
       }
@@ -535,6 +551,14 @@
         if (tokM) cval = parseInt(tokM[2].replace(/[.,\s]/g, ""), 10);
       }
       if (cval == null) costTemplateRead();
+      if (cval == null) {
+        // psm6 text zero: the LABEL survives OCR only fuzzily ("Pools nog Jost 0"
+        // — live), so anchor on the 'ost' stem then a LONE 0. The non-digit gap
+        // cannot skip a leading digit, so 450/900/1,800 (and caption "+100%")
+        // can never satisfy this.
+        var zM = footText.match(/ost[^\d\n]{0,8}0(?!\d)/i);
+        if (zM) { cval = 0; costConf = 0.75; }
+      }
     }
     if (cval != null) { out.state.processCost = cval; confidence.state.processCostMultiplier = costConf; }
     if (out.state.processCost == null) confidence.state.processCostMultiplier = 0.3;

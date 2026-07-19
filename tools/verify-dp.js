@@ -85,21 +85,22 @@ function dpSelfCheck() {
     // t==0 base case MUST equal the terminal gem value.
     ["t0 base-case == gemValue", W(c10perfect, 0, 3, 0, 1.0, 1500000, false, "wor"), gv(c10perfect, 1.0, 1500000)],
     ["perfect t0 base1", W(c10perfect, 0, 3, 0, 1.0, 1500000, false, "wor"), 753205.0790],
-    // Re-frozen 2026-07-16: the previous constants predated a deliberate model change
-    // (they no longer matched ANY commit of that day, including pre-turn-1-reroll-fix
-    // model files) and the selfcheck had been failing silently. Values below captured
-    // from the current implementation and validated against the MC battery (--quick).
-    ["start10 t5 r3 base1 wor", W(start10, 5, 3, 0, 1.0, 1500000, false, "wor"), 3028.4444],
-    ["start10 t5 r3 base1 iid", W(start10, 5, 3, 0, 1.0, 1500000, false, "iid"), 2026.8871],
-    ["mid t3 r2 base1 wor", W(mid, 3, 2, 0, 1.0, 1500000, false, "wor"), 35234.8844],
+    // Re-frozen 2026-07-19: deliberate model change — the phantom Math.max(100,·)
+    // floor on process cost at cm=-100 was removed (the game shows a literal
+    // "Processing Cost 0" after the -100% outcome), so every cost-bearing W rose
+    // ~0.1-0.2%. The rosterBound pin (costs don't count) was correctly unmoved.
+    // Validated against the full MC battery after re-freezing.
+    ["start10 t5 r3 base1 wor", W(start10, 5, 3, 0, 1.0, 1500000, false, "wor"), 3032.8512],
+    ["start10 t5 r3 base1 iid", W(start10, 5, 3, 0, 1.0, 1500000, false, "iid"), 2028.9206],
+    ["mid t3 r2 base1 wor", W(mid, 3, 2, 0, 1.0, 1500000, false, "wor"), 35237.9149],
     ["start10 t6 r3 base0.5 RB wor", W(start10, 6, 3, 0, 0.5, 1500000, true, "wor"), 293507.4734],
     // SUPPORT axis (opts.axis): supportValue terminals against support-scale baselines
     // (A.supportGradeToScore(65)=0.19581, (80)=0.23882 at freeze time; the literals below
     // bake the RESULTING W so a baseline-scale drift also trips). Frozen 2026-07-16 when
     // the axis was threaded through topLevelAdvice; the MC battery stays DPS-only
     // (nested.js has no support axis).
-    ["supStart c9 t9 r3 sup65 wor", Wax(supStart, 9, 3, 0, A.supportGradeToScore ? A.supportGradeToScore(65) : NaN, 1500000, false, "wor", "support"), 28674.4175],
-    ["supMid c8 t5 r2 sup80 wor", Wax(supMid, 5, 2, 0, A.supportGradeToScore ? A.supportGradeToScore(80) : NaN, 1500000, false, "wor", "support"), 15966.3551]
+    ["supStart c9 t9 r3 sup65 wor", Wax(supStart, 9, 3, 0, A.supportGradeToScore ? A.supportGradeToScore(65) : NaN, 1500000, false, "wor", "support"), 28735.2358],
+    ["supMid c8 t5 r2 sup80 wor", Wax(supMid, 5, 2, 0, A.supportGradeToScore ? A.supportGradeToScore(80) : NaN, 1500000, false, "wor", "support"), 15984.4463]
   ];
   var ok = 0, bad = [];
   cases.forEach(function (c) {

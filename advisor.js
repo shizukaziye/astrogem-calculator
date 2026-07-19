@@ -360,7 +360,7 @@
     currentTurn: 'the "Process (x/N)" button at the bottom — answer exactly "x/N"',
     maxTurns: 'the "Process (x/N)" button at the bottom — answer exactly "x/N"',
     rerollsRemaining: 'the counter at the right end of the outcome row — answer "N/M" if it shows numbers, "charge-gold" if it is a bright gold Charge button, "charge-grey" if it is a greyed-out Charge button',
-    processCostMultiplier: 'the "Processing Cost" gold number near the bottom — answer "450", "900" or "1800"'
+    processCostMultiplier: 'the "Processing Cost" gold number near the bottom — answer "0", "900" or "1800"'
   };
   var VERIFY_EFFECTS = ["Attack Power", "Additional Damage", "Boss Damage", "Brand Power", "Ally Damage Enh.", "Ally Attack Enh."];
 
@@ -431,7 +431,8 @@
     }
     if (key === "processCostMultiplier") {
       var cm = raw.replace(/[^\d]/g, "");
-      return cm === "450" ? -100 : cm === "900" ? 0 : cm === "1800" ? 100 : null;
+      // "0" is the real -100% display; "450" kept as a legacy alias for the same step
+      return cm === "0" || cm === "450" ? -100 : cm === "900" ? 0 : cm === "1800" ? 100 : null;
     }
     var nv = parseInt(raw.replace(/[^\d]/g, ""), 10);
     if (key === "baseCost") return [8, 9, 10].indexOf(nv) !== -1 ? nv : null;

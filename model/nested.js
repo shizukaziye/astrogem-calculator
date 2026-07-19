@@ -188,7 +188,7 @@
     st.totalGoldSpent += (st.rosterBound ? 0 : st.processCost);
     if (outcome.type === "change_gold_cost" && !st.rosterBound) {
       st.processCostMultiplier = Math.max(-100, Math.min(100, st.processCostMultiplier + outcome.change));
-      st.processCost = Math.max(100, Math.round(A.COSTS.processBase * (1 + st.processCostMultiplier / 100)));
+      st.processCost = Math.max(0, Math.round(A.COSTS.processBase * (1 + st.processCostMultiplier / 100)));
     }
     if (outcome.type === "reroll_increase") {
       st.rerollsRemaining += outcome.change || 1;

@@ -75,7 +75,10 @@
   function maxRerolls() { return (RARITY[win.rarity] || RARITY.epic).maxRerolls; }
   function pool() { return (EFFECT_POOLS[win.config.baseCost] || []).slice(); }
   function pointsSum() { var c = win.config; return (c.willpowerLevel | 0) + (c.orderLevel | 0) + (c.effect1Level | 0) + (c.effect2Level | 0); }
-  function processCost() { return Math.max(1, Math.round(900 * (1 + win.costMult / 100))); }
+  // costMult -100 = the game's "-100% Processing Cost" outcome: the footer shows a
+  // literal 0 and the picker's "0" option must DISPLAY 0 (a Math.max(1,·) here made
+  // choosing 0 show "1" — live report 2026-07-19)
+  function processCost() { return Math.max(0, Math.round(900 * (1 + win.costMult / 100))); }
 
   // ---- normalize (the UI-side mirror of constraintSnap) ----
   function normalize() {

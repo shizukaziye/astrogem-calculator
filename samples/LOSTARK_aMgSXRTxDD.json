@@ -1,0 +1,28 @@
+{
+  "_note": "Game-client screenshot (3834x1797 JPEG tier) — Shizu 2026-07-19. The 'Order Points 1' gem from the live report: SITE (stale pre-synthesis client) showed order=3; current parser reads 1 correctly. Board: 4+3+2+1 = 10 pts, header '10 Astrogem Points' confirms. Processing Cost 900 (multiplier 0). Pill '1/2' bright -> rerollsRemaining 2.",
+  "config": {
+    "baseCost": 8,
+    "gemType": "order",
+    "willpowerLevel": 4,
+    "orderLevel": 1,
+    "effect1": "Brand Power",
+    "effect1Level": 3,
+    "effect2": "Additional Damage",
+    "effect2Level": 2
+  },
+  "state": {
+    "currentTurn": 4,
+    "maxTurns": 9,
+    "rerollsRemaining": 2,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "effect1", "amount": 1 },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 },
+    { "type": "do_nothing", "change": 0 },
+    { "type": "change_side_option", "target": "effect2" }
+  ]
+}

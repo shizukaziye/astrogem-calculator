@@ -314,7 +314,9 @@
     if (sIn.processCostMultiplier != null) {
       mult = clampInt(sIn.processCostMultiplier, -100, 100, 0);
     } else if (sIn.processCost != null) {
-      mult = Math.round((clampInt(sIn.processCost, 1, 99999, COSTS.processBase) / COSTS.processBase - 1) * 100);
+      // 0 is a REAL reading ("Processing Cost 0" after the -100% outcome) — the
+      // old lower clamp of 1 quietly destroyed it
+      mult = Math.round((clampInt(sIn.processCost, 0, 99999, COSTS.processBase) / COSTS.processBase - 1) * 100);
       mult = Math.max(-100, Math.min(100, mult));
     } else {
       mult = 0;
@@ -322,7 +324,7 @@
     // Snap to the discrete steps the game actually uses (…,-100,0,100). The only
     // reachable multipliers are -100, 0, +100 (each cost outcome is ±100%).
     mult = mult <= -50 ? -100 : (mult >= 50 ? 100 : 0);
-    var processCost = Math.max(1, Math.round(COSTS.processBase * (1 + mult / 100)));
+    var processCost = Math.max(0, Math.round(COSTS.processBase * (1 + mult / 100)));
 
     var state = {
       currentTurn: currentTurn,

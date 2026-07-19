@@ -1,0 +1,28 @@
+{
+  "_note": "Game-client screenshot (3834x1797 JPEG tier) — Shizu 2026-07-19. SECOND 'Processing Cost 0' sample (footer lone 0, multiplier -100). Board: 1+1+3+1 = 6 pts, header '6 Astrogem Points' confirms. Pill '2/2' bright = 2 free + unspent paid -> rerollsRemaining 3.",
+  "config": {
+    "baseCost": 8,
+    "gemType": "order",
+    "willpowerLevel": 1,
+    "orderLevel": 1,
+    "effect1": "Additional Damage",
+    "effect1Level": 1,
+    "effect2": "Brand Power",
+    "effect2Level": 3
+  },
+  "state": {
+    "currentTurn": 4,
+    "maxTurns": 9,
+    "rerollsRemaining": 3,
+    "processCost": 0,
+    "processCostMultiplier": -100,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "willpower", "amount": 1 },
+    { "type": "raise_effect", "target": "willpower", "amount": 3 },
+    { "type": "raise_effect", "target": "effect1", "amount": 2 },
+    { "type": "raise_effect", "target": "effect2", "amount": 1 }
+  ]
+}
