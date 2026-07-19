@@ -32,7 +32,10 @@
   // ---- state (module-singleton: the advisor has one setup section) ----
   var host = null, onChangeCb = null;
   var axis = "dps";
-  var gpd = Econ ? Econ.GPD_DEFAULT : 1500000;
+  // Advisor default: 10M gold per 1% damage (Shizu 2026-07-19 — endgame pricing;
+  // the chip row still offers every tier, and combat-power auto-set overrides).
+  // The choice isn't persisted, so the default IS the working value most sessions.
+  var gpd = 10000000;
   var gpdAuto = false;             // true while the chip was set from combat power
   var baseIdx = 5;                 // GRADE_ROWS index; 5 = grade 65 = B+ (≈ the old 1.0 default)
   var baseShift = 0;               // manual ◀ ▶ offset vs the character-derived index

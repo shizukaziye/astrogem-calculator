@@ -89,7 +89,6 @@ export default {
       if (dcCount >= DAILY_WRITE_CAP) {
         return json({ error: "daily collection cap reached (" + DAILY_WRITE_CAP + "/day) — resets at UTC midnight" }, 429, req);
       }
-      await env.COLLECT.put(dcKey, String(dcCount + 1), { expirationTtl: 2 * 24 * 3600 });
 
       const id = now.getTime().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
       const key = "col/" + day + "/" + id;
@@ -102,7 +101,16 @@ export default {
         changed: body.changed || null,   // precomputed diff (client convenience)
         meta: body.meta || null          // engine name, app version, source
       };
-      await env.COLLECT.put(key, JSON.stringify(record));
+      // RECORD FIRST, counter after (a live record once vanished while the
+      // counter incremented — the old order consumed cap on a failed write and
+      // let the client believe the save landed); a caught failure reports 500
+      // so the client's NOT-saved note is truthful and the record re-stages
+      try {
+        await env.COLLECT.put(key, JSON.stringify(record));
+      } catch (e) {
+        return json({ error: "storage write failed: " + String(e && e.message || e).slice(0, 120) }, 500, req);
+      }
+      await env.COLLECT.put(dcKey, String(dcCount + 1), { expirationTtl: 2 * 24 * 3600 }).catch(function () {});
       return json({ ok: true, id: id }, 200, req);
     }
 
