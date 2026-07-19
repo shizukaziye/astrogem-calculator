@@ -408,20 +408,33 @@
         }
       }
     }
-    var footTop = goldY + gap * 1.13;
-    var footRead = await maskedOcr(
-      { x: cx - gap * 2.35, y: footTop, w: gap * 4.7, h: Math.max(gap * 0.6, panel.y + panel.h - footTop - 2) },
-      L.isWhiteText, { psm: 6 });
-    var footText = normText(footRead.text);
-    var pairB = parseProcPair(footText);
     function pairEq(p, q) { return p && q && p.a === q.a && p.b === q.b; }
     var pair = null, pairConf = 0;
-    if (pairT && (pairEq(pairT, pairA) || pairEq(pairT, pairB))) { pair = pairT; pairConf = 0.96; }
-    else if (pairEq(pairA, pairB)) { pair = pairA; pairConf = 0.95; }
-    else if (pairT) { pair = pairT; pairConf = 0.88; }
-    else if (pairA && pairB) { pair = pairA; pairConf = 0.6; }
-    else if (pairA) { pair = pairA; pairConf = 0.85; }
-    else if (pairB) { pair = pairB; pairConf = 0.7; }
+    // template ∧ button-OCR agreement settles the pair WITHOUT the footer block
+    if (pairT && pairEq(pairT, pairA)) { pair = pairT; pairConf = 0.96; }
+    var footTop = goldY + gap * 1.13;
+    var footText = "", footBlockRan = false;
+    async function readFootBlock() {
+      if (footBlockRan) return;
+      footBlockRan = true;
+      var footRead = await maskedOcr(
+        { x: cx - gap * 2.35, y: footTop, w: gap * 4.7, h: Math.max(gap * 0.6, panel.y + panel.h - footTop - 2) },
+        L.isWhiteText, { psm: 6 });
+      footText = normText(footRead.text);
+    }
+    if (!pair) {
+      // the block read is the corroborating voter only when the cheap votes
+      // disagree — it is the single LARGEST OCR call of the parse and on most
+      // clean captures pure redundancy (skip measured safe by the full gate)
+      await readFootBlock();
+      var pairB = parseProcPair(footText);
+      if (pairT && pairEq(pairT, pairB)) { pair = pairT; pairConf = 0.96; }
+      else if (pairEq(pairA, pairB)) { pair = pairA; pairConf = 0.95; }
+      else if (pairT) { pair = pairT; pairConf = 0.88; }
+      else if (pairA && pairB) { pair = pairA; pairConf = 0.6; }
+      else if (pairA) { pair = pairA; pairConf = 0.85; }
+      else if (pairB) { pair = pairB; pairConf = 0.7; }
+    }
     if (!pair) {
       // LAST-RESORT rescue: on several live shots the located band was the Balance
       // row (the wheel gap measured a few % small) AND the psm6 footer block was
@@ -446,22 +459,16 @@
     confidence.state.rarity = maxT != null ? pairConf : 0;
     confidence.state.currentTurn = turnsRemaining != null ? pairConf : 0;
 
-    // Processing Cost: prefer the word-anchored number; fall back to the bare cost
-    // tokens (450 / 900 / 1800 are the only possible values; OCR renders 1,800 as
-    // "1.800"/"1,800"/"1800")
-    var costM = footText.match(/cost\D{0,12}?([\d.,]{3,7})/i);
+    // Processing Cost: when the footer block was SKIPPED, the no-OCR template
+    // read goes first (its {450,900,1800} whitelist is the guard); the block's
+    // word-anchored regexes remain the primary when the block ran anyway, and
+    // the block is only fetched here if the template missed.
     var cval = null;
-    if (costM) {
-      var cv = parseInt(costM[1].replace(/[.,]/g, ""), 10);
-      if (cv >= 100 && cv <= 9999) cval = cv;
-    }
-    if (cval == null) {
-      // "1,800" OCRs with the comma as '.', ',' or a bare SPACE ("1 800" — live miss)
-      var tokM = footText.match(/(^|\D)(450|900|1[.,\s]?800)(\D|$)/);
-      if (tokM) cval = parseInt(tokM[2].replace(/[.,\s]/g, ""), 10);
-    }
     var costConf = 0.9;
-    if (cval == null) {
+    var _costTplTried = false;
+    function costTemplateRead() {
+      if (_costTplTried || cval != null) return;
+      _costTplTried = true;
       // TEMPLATE rescue: the footer psm6 block reads garbage on many low-res shots
       // (measured: the cost went unread on 40/56 — the single biggest false-alarm
       // class, every one a wasted "confirm me"). The cost ROW is structurally easy:
@@ -506,9 +513,24 @@
         }
       }
     }
+    if (!footBlockRan) costTemplateRead();   // skip path: the no-OCR read goes first
+    if (cval == null) {
+      await readFootBlock();
+      var costM = footText.match(/cost\D{0,12}?([\d.,]{3,7})/i);
+      if (costM) {
+        var cv = parseInt(costM[1].replace(/[.,]/g, ""), 10);
+        if (cv >= 100 && cv <= 9999) cval = cv;
+      }
+      if (cval == null) {
+        // "1,800" OCRs with the comma as '.', ',' or a bare SPACE ("1 800" — live miss)
+        var tokM = footText.match(/(^|\D)(450|900|1[.,\s]?800)(\D|$)/);
+        if (tokM) cval = parseInt(tokM[2].replace(/[.,\s]/g, ""), 10);
+      }
+      if (cval == null) costTemplateRead();
+    }
     if (cval != null) { out.state.processCost = cval; confidence.state.processCostMultiplier = costConf; }
     if (out.state.processCost == null) confidence.state.processCostMultiplier = 0.3;
-    if (out._debug) out._debug.costRead = { footText: footText.slice(0, 90), cval: cval };
+    if (out._debug) out._debug.costRead = { footText: footBlockRan ? footText.slice(0, 90) : "(block skipped)", cval: cval };
 
     tmark("footerTurnCost");
     // ---- reroll pill (ROI-scoped: the "Reset (1/1)" trap can't reach here) ----
