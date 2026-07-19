@@ -1124,9 +1124,22 @@
         return true;
       };
     }
-    async function readEffectName(p, faceHue) {
+    // relaxed variant for the last rescue rung: at small scales the antialiased
+    // white text picks up the face tint, and the strict pred's highlight-exclusion
+    // eats the TEXT itself (measured on the first flywheel record: strict mask 0.7%
+    // ink → junk; this pred → a clean "Atk. Power"). Only ever used after the
+    // strict rungs failed, so the highlight-pollution the strict pred exists to
+    // prevent cannot regress clean frames.
+    function effectNamePredRelaxed() {
+      return function (r, g, b) { var c = L.hsv(r, g, b); return c.v > 0.5 && c.s < 0.45; };
+    }
+    async function readEffectName(p, faceHue, rung) {
       var rect = { x: p.x - gap * 0.55, y: p.y - gap * 0.34, w: gap * 1.1, h: gap * 0.36 };
-      var read = await maskedOcr(rect, effectNamePred(faceHue), { psm: 6 });
+      var read = rung === "relaxed"
+        ? await dilatedOcr(L.crop(raster, rect), effectNamePredRelaxed(), { scale: "auto", maxAuto: 4, psm: 6 })
+        : rung === "dilate"
+          ? await dilatedOcr(L.crop(raster, rect), effectNamePred(faceHue), { scale: "auto", maxAuto: 4, psm: 6 })
+          : await maskedOcr(rect, effectNamePred(faceHue), { psm: 6 });
       return { text: normText(read.text).toLowerCase().replace(/\n/g, " "), conf: read.conf };
     }
     // Most-specific patterns FIRST: "Enh." appears only in the two Ally effects, so an
@@ -1155,8 +1168,22 @@
       return null;
     }
     function lexEffect(t, avoid) { return lexIn(t, poolNames, avoid); }
-    var nmW = await readEffectName(nodes.nodeW, hueW);
-    var nmE = await readEffectName(nodes.nodeE, hueE);
+    // Name-read rescue ladder (the FIRST live flywheel record, 2026-07-19: a
+    // share-canvas frame OCR'd "Atk. Power" as "Abo Fo" — under the Tesseract
+    // floor — so both names came back null and the snap filled pool-order
+    // defaults that looked like a W/E swap). Same rescue pattern every other
+    // read has: plain → dilated ×auto → relaxed-pred dilated. Later rungs run
+    // only when the text still lexes to nothing, so clean frames cost zero
+    // extra OCR calls.
+    async function readNameLadder(p, faceHue) {
+      var nm = await readEffectName(p, faceHue);
+      if (!lexIn(nm.text, null, null)) nm = await readEffectName(p, faceHue, "dilate");
+      if (!lexIn(nm.text, null, null)) nm = await readEffectName(p, faceHue, "relaxed");
+      return nm;
+    }
+    var nmW = await readNameLadder(nodes.nodeW, hueW);
+    var nmE = await readNameLadder(nodes.nodeE, hueE);
+    if (out._debug) out._debug.nmTexts = { W: nmW.text.slice(0, 60), E: nmE.text.slice(0, 60) };
 
     // ---- pair→cost CROSS-CHECK (before pool-constrained lexing) ----
     // The effect pair constrains the cost: some pairs exist in exactly ONE pool
@@ -1172,7 +1199,10 @@
         var pl = ENGINE_API.EFFECT_POOLS[ck];
         return pl.indexOf(rawE1) !== -1 && pl.indexOf(rawE2) !== -1;
       }).map(Number);
-      if (costsWithPair.length === 1 && out.config.baseCost != null && costsWithPair[0] !== out.config.baseCost) {
+      // fires on a WRONG suffix read and also on a NULL one (first flywheel
+      // record: cost unreadable → snap defaulted to 10 → pool-10 canonicalization
+      // rewrote two correctly-read names, which presented as a W/E "swap")
+      if (costsWithPair.length === 1 && costsWithPair[0] !== out.config.baseCost) {
         out.config.baseCost = costsWithPair[0];
         confidence.config.baseCost = Math.min(confidence.config.baseCost, 0.75);   // below the flag threshold
         poolNames = (ENGINE_API.EFFECT_POOLS && ENGINE_API.EFFECT_POOLS[out.config.baseCost]) || null;
