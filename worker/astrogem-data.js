@@ -35,7 +35,12 @@ const ALLOW_ORIGINS = [
   "http://127.0.0.1:8080"
 ];
 const GATE_TOKEN = "6104928cd0cc5374f5330e63e6a834f99aef7579db15c77d9d154932bf7a8ced";
-const MAX_BODY = 12 * 1024 * 1024;   // native-4K webp bodies run 1-9MB; KV's 25MB value cap is the true ceiling
+// MEASURED 2026-07-19: bodies ≥6MB kill the free-tier isolate mid-read — Cloudflare
+// then serves an HTML 500 WITHOUT CORS headers, which browsers mask as a bare
+// "network error" (exactly how a night of Shizu's records died: a pre-crop client
+// shipping 5-9MB full frames). ≤5MB parses fine. Gate BELOW the kill line so
+// oversize is a visible CORS'd 413 the client can react to, never a silent death.
+const MAX_BODY = 5 * 1024 * 1024;
 const DAILY_WRITE_CAP = 300;   // records/day — far above real use, far below the 1k KV free tier
 
 function cors(req) {
@@ -56,18 +61,33 @@ function json(obj, status, req) {
   });
 }
 
+// The whole handler runs behind this catch: an uncaught throw would otherwise
+// surface as a Cloudflare error page with NO CORS headers, which the browser
+// reports as a plain "network error" — indistinguishable from being offline.
+// (A hard resource kill still can't be caught; MAX_BODY is what prevents those.)
 export default {
   async fetch(req, env) {
+    try { return await handle(req, env); }
+    catch (e) { return json({ error: "worker error: " + String(e && e.message || e).slice(0, 140) }, 500, req); }
+  }
+};
+
+async function handle(req, env) {
     const u = new URL(req.url);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(req) });
     if (u.pathname === "/health") return json({ ok: true }, 200, req);
     if (!gated(u)) return json({ error: "locked" }, 403, req);
 
     if (req.method === "POST" && u.pathname === "/collect") {
+      // gate on the header FIRST (browsers always send it for string bodies),
+      // then re-check the actual text — both run BEFORE the expensive parse
       const len = parseInt(req.headers.get("Content-Length") || "0", 10);
-      if (len > MAX_BODY) return json({ error: "too large" }, 413, req);
+      if (len > MAX_BODY) return json({ error: "too large (" + Math.round(len / 1e5) / 10 + "MB > 5MB)" }, 413, req);
+      let raw;
+      try { raw = await req.text(); } catch (e) { return json({ error: "body read failed" }, 400, req); }
+      if (raw.length > MAX_BODY) return json({ error: "too large" }, 413, req);
       let body;
-      try { body = await req.json(); } catch (e) { return json({ error: "bad json" }, 400, req); }
+      try { body = JSON.parse(raw); } catch (e) { return json({ error: "bad json" }, 400, req); }
       if (!body || typeof body !== "object") return json({ error: "bad body" }, 400, req);
       // a record without a real capture or a final state is useless for training —
       // reject it loudly so the client can tell the user (a silent 1×1-pixel test
@@ -134,5 +154,4 @@ export default {
     }
 
     return json({ error: "no route" }, 404, req);
-  }
-};
+}

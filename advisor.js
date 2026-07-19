@@ -227,7 +227,11 @@
 
   // ---------------- parse collection ----------------
   // Re-encode the capture as a bounded webp data-URL (collection payloads stay small).
-  function toWebpDataUrl(blob, rect, cb) {
+  // maxChars is a HARD proof obligation, not a hint: the data worker's isolate DIES
+  // on bodies ≥6MB — and dies WITHOUT CORS headers, so the browser reports a bare
+  // "network error" (2026-07-19: a night of live records lost exactly this way).
+  // The worker gates at 5MB; we stay far under it.
+  function toWebpDataUrl(blob, rect, maxChars, cb) {
     try {
       var url = URL.createObjectURL(blob);
       var img = new Image();
@@ -244,10 +248,13 @@
             sw = Math.min(img.naturalWidth - sx, Math.round(rect.w));
             shh = Math.min(img.naturalHeight - sy, Math.round(rect.h));
           }
-          // quality/size ladder: the payload must provably fit the worker's cap
-          // (a full-frame record once VANISHED on an oversized body). Post-crop,
-          // the first rung wins essentially always.
-          var LADDER = [[3840, "image/webp", 0.8], [3840, "image/webp", 0.6], [2560, "image/webp", 0.7], [2000, "image/jpeg", 0.8]];
+          // quality/size ladder, descending until the result fits maxChars.
+          // Post-crop the first rung wins essentially always; the deep rungs
+          // exist for full-frame (panel-less) sends and shrunken retries. The
+          // terminal rung (1600-wide jpeg 0.6, ~150-250K chars) fits ANY cap
+          // this file passes, so `out` provably fits before we return it.
+          var LADDER = [[3840, "image/webp", 0.8], [3840, "image/webp", 0.6], [2560, "image/webp", 0.7],
+                        [2560, "image/webp", 0.5], [2000, "image/jpeg", 0.75], [1600, "image/jpeg", 0.6]];
           var out = null;
           for (var li = 0; li < LADDER.length; li++) {
             var sc = Math.min(1, LADDER[li][0] / sw);
@@ -255,10 +262,10 @@
             c.width = Math.round(sw * sc);
             c.height = Math.round(shh * sc);
             c.getContext("2d").drawImage(img, sx, sy, sw, shh, 0, 0, c.width, c.height);
-            // the jpeg terminal rung also covers browsers whose canvas cannot
+            // the jpeg terminal rungs also cover browsers whose canvas cannot
             // ENCODE webp (they silently return a huge PNG dataURL instead)
             out = c.toDataURL(LADDER[li][1], LADDER[li][2]);
-            if (out.length <= 9000000) break;
+            if (out.length <= maxChars) break;
           }
           URL.revokeObjectURL(url);
           cb(out);
@@ -306,7 +313,12 @@
     if (rec.lastSentKey === finalKey) return Promise.resolve("none");
     return new Promise(function (resolve) {
       var panelRect = rec.parsed && rec.parsed._srcPanel;
-      toWebpDataUrl(rec.blob, panelRect, function (dataUrl) {
+      // 3.5M chars ≈ 3.5MB image → whole body stays well under the worker's 5MB
+      // death line. Each failed send HALVES the cap for the next retry (500K
+      // floor = always deliverable): if size is ever the problem again, the
+      // retry heals itself instead of failing identically forever.
+      var cap = Math.max(500000, 3500000 >> (rec.shrink || 0));
+      toWebpDataUrl(rec.blob, panelRect, cap, function (dataUrl) {
         if (!dataUrl) return resolve("image conversion failed");
         var payload = {
           image: dataUrl,
@@ -327,6 +339,7 @@
       });
     }).then(function (res) {
       if (res === "saved") rec.lastSentKey = finalKey;   // dedupe identical re-clicks
+      else if (res !== "none") rec.shrink = (rec.shrink || 0) + 1;   // retry smaller
       return res;
     });
   }
@@ -635,7 +648,8 @@
         d.textContent = "✓ Reading + your corrections saved for parser training.";
       } else {
         d.className = "av-warn";
-        d.textContent = "⚠ Training record NOT saved (" + res + ") — it will retry on your next Get advice.";
+        d.textContent = "⚠ Training record NOT saved (" + res + ") — it will retry smaller on your next Get advice." +
+          (pendingCollect && pendingCollect.shrink >= 2 ? " If this keeps happening, refresh the page (Ctrl+F5)." : "");
       }
       box.appendChild(d);
     });
