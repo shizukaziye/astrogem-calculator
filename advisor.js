@@ -296,7 +296,14 @@
   function sendCollect(finalState) {
     if (!pendingCollect) return Promise.resolve("none");
     var rec = pendingCollect;
-    pendingCollect = null;   // one record per parse (re-staged below on failure)
+    // ONE RECORD PER (parse, final-state) — not per parse. The old
+    // consume-on-first-click rule silently no-opped the SECOND click, which in
+    // real use is THE valuable one: click advice → notice a wrong field →
+    // correct it → click again (live 2026-07-19: an order 4→2 correction
+    // vanished this way). The stage now survives sends; a re-click ships again
+    // only when the final state actually changed.
+    var finalKey = JSON.stringify(finalState);
+    if (rec.lastSentKey === finalKey) return Promise.resolve("none");
     return new Promise(function (resolve) {
       var panelRect = rec.parsed && rec.parsed._srcPanel;
       toWebpDataUrl(rec.blob, panelRect, function (dataUrl) {
@@ -306,7 +313,7 @@
           parse: rec.parsed,
           final: finalState,
           changed: diffParseVsFinal(rec.parsed, finalState),
-          meta: { engine: selectedEngine, source: rec.source, v: 2, cropped: !!panelRect, ua: navigator.userAgent.slice(0, 80) }
+          meta: { engine: selectedEngine, source: rec.source, v: 3, cropped: !!panelRect, resend: !!rec.lastSentKey, ua: navigator.userAgent.slice(0, 80) }
         };
         var tok = (window.astrogemGate && window.astrogemGate.collectToken) ? window.astrogemGate.collectToken() : "";
         try {
@@ -319,9 +326,7 @@
         } catch (e) { resolve("network error"); }
       });
     }).then(function (res) {
-      // a transient failure keeps the record for a retry click — unless a newer
-      // parse already staged its own record
-      if (res !== "saved" && pendingCollect === null) pendingCollect = rec;
+      if (res === "saved") rec.lastSentKey = finalKey;   // dedupe identical re-clicks
       return res;
     });
   }

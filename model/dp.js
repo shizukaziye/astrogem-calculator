@@ -688,13 +688,18 @@
       rerollCost_ = rc + rch.expSpend;
     }
 
-    // ---- RESET (last turn only, per Shizu's rule) ----
-    // Reset (1/1) returns the gem to a fresh unprocessed state (all levels 1, full
-    // turns + rerolls, cost multiplier cleared) for COSTS.reset gold. Ranked only on
-    // the final turn: that's when "both Process and Complete are worse than starting
-    // over" is the live question. It wins the argmax exactly when it beats them.
+    // ---- RESET (ranked whenever COMPLETE would win, or on the last turn) ----
+    // Shizu 2026-07-19: "calculate reset on every turn that you recommend
+    // complete, not just the last turn" — if stopping is the right call, paying
+    // COSTS.reset to start the cut over is ALWAYS the live alternative, whatever
+    // the turn. Reset (1/1) returns the gem to a fresh unprocessed state (all
+    // levels 1, full turns + rerolls, cost multiplier cleared). NOTE: the parser
+    // does not yet read the Reset (x/1) counter, so this assumes the gem's reset
+    // is unused — the UI disclaimer covers it.
+    var completeWouldWin = !excludeComplete &&
+      completeNet >= processNet && completeNet >= rerollNet;
     var resetNet = -Infinity, resetScore = NaN, resetAbove = 0, resetCost_ = 0;
-    if (t === 1 && A.COSTS && A.COSTS.reset != null) {
+    if ((t === 1 || completeWouldWin) && A.COSTS && A.COSTS.reset != null) {
       var freshCfg = {
         baseCost: config.baseCost, gemType: config.gemType,
         willpowerLevel: 1, orderLevel: 1,
@@ -726,7 +731,7 @@
     // pressing the in-game button. The class-keyed memo makes same-class pairs free.
     var resetCombos = null;
     if (A.COSTS && A.COSTS.reset != null &&
-        (t === 1 || (actions[0] && actions[0].name === "Complete"))) {
+        (t === 1 || completeWouldWin || (actions[0] && actions[0].name === "Complete"))) {
       var poolR = A.EFFECT_POOLS[config.baseCost] || [];
       var freshRr = freshRerollsFor(solver.maxTurns);
       resetCombos = [];
