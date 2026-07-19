@@ -189,6 +189,8 @@
       '#av-setup .avs-sel .meta{color:var(--dim)}' +
       '#av-setup .avs-status{color:var(--dim);font-size:12px;margin-top:3px;min-height:14px}' +
       '#av-setup .avs-rowline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}' +
+      // slimmer gpd chips so all 8 tiers (incl. 10M) hold one row at usual widths
+      '#av-setup .avs-gpd{padding:6px 10px}' +
       '#av-setup .avs-rowline .lab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);font-weight:700;min-width:120px}' +
       '#av-setup .avs-note{font-size:11px;color:var(--dim);margin:2px 0 6px 0}' +
       '#av-setup .avs-note .warn{color:#e8b84a;font-weight:600}' +
@@ -238,7 +240,7 @@
           '<button type="button" class="mbtn avs-axis' + (axis === "support" ? " active" : "") + '" data-axis="support">Support</button>' +
           '</div>'
         : "") +
-      '<div class="avs-rowline"><span class="lab">Gold per 1% damage</span>' + gpdChips + '</div>' +
+      '<div class="avs-rowline"><span class="lab">Gold / 1% DMG</span>' + gpdChips + '</div>' +
       (gnote ? '<div class="avs-note">' + gnote.replace(/⚠ [^·]+/g, function (w) { return '<span class="warn">' + esc(w.trim()) + '</span>'; }) + '</div>' : "") +
       '<div class="avs-rowline"><span class="lab">Baseline</span>' +
       '  <button type="button" id="avs-base-dn" class="avs-arrow"' + (baseIdx <= 0 ? " disabled" : "") + '>&#9664;</button>' +
