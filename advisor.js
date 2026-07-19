@@ -89,12 +89,10 @@
 '  #tab-advisor .rank-badge{display:inline-block;padding:1px 9px;border-radius:99px;font-size:15px;font-weight:800;line-height:1.5;vertical-align:middle;font-variant-numeric:tabular-nums}' +
 '  #tab-advisor .av-bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:8px;display:none}' +
 '  #tab-advisor .av-bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .1s}' +
-'  #tab-advisor .av-wip{background:rgba(217,83,79,.14);border:1px solid #d9534f;color:#ff9b97;border-radius:8px;padding:11px 14px;font-weight:800;letter-spacing:.05em;text-align:center;margin-bottom:14px}' +
 '  #tab-advisor .av-warn{font-size:12px;color:#e8b84a;margin-top:6px}' +
 '  #tab-advisor .linklike{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;padding:0 2px;text-decoration:underline}' +
 '  #tab-advisor .av-share{display:flex;gap:10px;align-items:center;margin-top:8px}' +
 '</style>' +
-'<div class="av-wip">⚠ DO NOT USE — WORK IN PROGRESS</div>' +
 // two balanced columns: LEFT = the cut (the lookalike window),
 // RIGHT = your economy (character/market), the verdict, then the screenshot intake.
 '<div class="av-cols">' +
