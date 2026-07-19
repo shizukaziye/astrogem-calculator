@@ -37,8 +37,11 @@
   var TESS = IS_NODE ? require("./tesseract-engine.js") : (root.OcrTesseractEngine || root);
   var GLYPHS = null;
   try { GLYPHS = IS_NODE ? require("./glyphs.js").GLYPH_ATLAS : (root.OcrGlyphs && root.OcrGlyphs.GLYPH_ATLAS); } catch (e) {}
-  var LREFS = null;
-  try { LREFS = IS_NODE ? require("./level-refs.js").LEVEL_REFS : (root.OcrLevelRefs && root.OcrLevelRefs.LEVEL_REFS); } catch (e) {}
+  var LREFS = null, NREFS = null;
+  try {
+    var _lr = IS_NODE ? require("./level-refs.js") : root.OcrLevelRefs;
+    if (_lr) { LREFS = _lr.LEVEL_REFS; NREFS = _lr.NAME_REFS; }
+  } catch (e) {}
 
   var GEM_NAME_COST = (TESS && TESS.GEM_NAME_COST) || {
     stability: 8, corrosion: 8, solidity: 9, distortion: 9, immutability: 10, destruction: 10
@@ -842,13 +845,13 @@
           var lrelax = function (r2, g2, b2) { var c2 = L.hsv(r2, g2, b2); return c2.h >= 28 && c2.h <= 72 && c2.s > 0.28 && c2.v > 0.42; };
           lline = L.findMaskedTextLine(raster, lbox, lrelax, Object.assign({}, lopts, { minRowPx: 1 }));
         }
-        if (!lline) {
-          // NO locatable line — position becomes a fitted parameter too: scan the
-          // whole plausible Lv-digit region (covers 1-line and 2-line name
-          // layouts). The agreement gate stays the arbiter; a wider search only
-          // gives it more chances to find the true alignment, and refusal is
-          // still the default. This is what finally reads the W nodes whose gold
-          // text is too eroded to locate at all.
+        if (!lline || lline.w < gap * 0.18) {
+          // NO locatable line — or only a FRAGMENT (a full "Lv. N" line is
+          // ≥0.27 gap wide; a 0.11-gap fragment's right edge points nowhere
+          // near the digit, which is how t8-E anchored off garbage) — position
+          // becomes a fitted parameter: scan the whole plausible Lv-digit
+          // region (covers 1-line and 2-line name layouts). The agreement gate
+          // stays the arbiter; refusal is still the default.
           cx = p.x + gap * 0.16; cy = p.y + gap * 0.17; wideScan = true;
         } else {
           cx = lline.x + lline.w - gap * 0.05; cy = lline.y + lline.h / 2;
@@ -880,13 +883,135 @@
       if (!ra.length || !rg.length) { if (dbgS) dbgS[kind] = "no-scores"; return null; }
       var gm = rg.length > 1 ? rg[0].s - rg[1].s : 1;
       if (dbgS) dbgS[kind] = "raw " + ra[0].v + "@" + ra[0].s.toFixed(3) + " grad " + rg[0].v + "@" + rg[0].s.toFixed(3) + " gm " + gm.toFixed(3);
-      // COMMIT GATE: both scorings agree on the winner, with a real gradient
-      // margin (0.015: across every measured configuration the AGREEMENT
-      // requirement alone has never shipped a wrong digit — the margin is a
-      // second belt, not the load-bearing one)
+      // COMMIT GATE: both scorings agree on the winner, gradient margin above a
+      // NODE-SPECIFIC noise floor: S needs 0.015 (its gold-on-gold correlations
+      // run tighter spreads — a clean capture's S once agree-wronged at exactly
+      // 0.010), the others 0.01 (t6-E's correct fill sits at 0.012). Callers
+      // that OVERRIDE an existing read demand ≥ 0.03 via the returned gm.
       if (ra[0].v !== rg[0].v) return null;
-      if (gm < 0.015) return null;
-      return { value: ra[0].v, conf: 0.55 };
+      if (gm < (kind === "S" ? 0.015 : 0.01)) return null;
+      return { value: ra[0].v, conf: 0.55, gm: gm };
+    }
+
+    // ---- name-band synthesis (same method, 6-class, wide patches) ----
+    var NPW = 48, NPH = 16, _nsynthTV = null;
+    function _nZnorm(p2) {
+      var out = new Float32Array(p2.length), mean = 0, i;
+      for (i = 0; i < p2.length; i++) mean += p2[i];
+      mean /= p2.length;
+      var va = 0;
+      for (i = 0; i < p2.length; i++) { out[i] = p2[i] - mean; va += out[i] * out[i]; }
+      var sd = Math.sqrt(va / p2.length) || 1;
+      for (i = 0; i < out.length; i++) out[i] /= sd;
+      return out;
+    }
+    function _nGrad(p2) {
+      var g = new Float32Array(NPW * NPH);
+      for (var y = 1; y < NPH - 1; y++) for (var x = 1; x < NPW - 1; x++) {
+        var dx = p2[y * NPW + x + 1] - p2[y * NPW + x - 1], dy = p2[(y + 1) * NPW + x] - p2[(y - 1) * NPW + x];
+        g[y * NPW + x] = Math.sqrt(dx * dx + dy * dy);
+      }
+      return _nZnorm(g);
+    }
+    function _nBlur(p2, sigma) {
+      var r = Math.max(1, Math.ceil(sigma * 2.5)), k = [], ks = 0, i;
+      for (i = -r; i <= r; i++) { var v = Math.exp(-i * i / (2 * sigma * sigma)); k.push(v); ks += v; }
+      for (i = 0; i < k.length; i++) k[i] /= ks;
+      var tmp = new Float32Array(NPW * NPH), out = new Float32Array(NPW * NPH), x, y, s, j;
+      for (y = 0; y < NPH; y++) for (x = 0; x < NPW; x++) {
+        s = 0;
+        for (j = -r; j <= r; j++) s += p2[y * NPW + Math.max(0, Math.min(NPW - 1, x + j))] * k[j + r];
+        tmp[y * NPW + x] = s;
+      }
+      for (y = 0; y < NPH; y++) for (x = 0; x < NPW; x++) {
+        s = 0;
+        for (j = -r; j <= r; j++) s += tmp[Math.max(0, Math.min(NPH - 1, y + j)) * NPW + x] * k[j + r];
+        out[y * NPW + x] = s;
+      }
+      return out;
+    }
+    function _nPatch(cx, cy) {
+      var out = new Float32Array(NPW * NPH);
+      var bw = gap * 1.06, bh = gap * 0.34;
+      var W2 = raster.width, H2 = raster.height, d = raster.data;
+      function lumAt(xx, yy) { var ii = (yy * W2 + xx) * 4; return 0.299 * d[ii] + 0.587 * d[ii + 1] + 0.114 * d[ii + 2]; }
+      for (var py = 0; py < NPH; py++) for (var px = 0; px < NPW; px++) {
+        var sx = cx - bw / 2 + (px + 0.5) * bw / NPW, sy = cy - bh / 2 + (py + 0.5) * bh / NPH;
+        var x0 = Math.max(0, Math.min(W2 - 1, Math.floor(sx))), y0 = Math.max(0, Math.min(H2 - 1, Math.floor(sy)));
+        var x1 = Math.min(W2 - 1, x0 + 1), y1 = Math.min(H2 - 1, y0 + 1);
+        var fx = sx - x0, fy = sy - y0;
+        out[py * NPW + px] = lumAt(x0, y0) * (1 - fx) * (1 - fy) + lumAt(x1, y0) * fx * (1 - fy) +
+                             lumAt(x0, y1) * (1 - fx) * fy + lumAt(x1, y1) * fx * fy;
+      }
+      return out;
+    }
+    function _nsynthVariants() {
+      if (_nsynthTV || !NREFS) return _nsynthTV;
+      var SIGMAS = [0.5, 0.9, 1.4, 2.0];
+      _nsynthTV = { W: {}, E: {} };
+      ["W", "E"].forEach(function (k) {
+        var other = k === "W" ? "E" : "W";
+        var names = {};
+        Object.keys(NREFS[k] || {}).forEach(function (n) { names[n] = NREFS[k][n]; });
+        // other-side fill ONLY for classes this side has never seen (name bands
+        // are big white text — cross-side transfer is safe for absent classes,
+        // and same-side refs stay primary; digit-pooling's lesson respected)
+        Object.keys(NREFS[other] || {}).forEach(function (n) { if (!names[n]) names[n] = NREFS[other][n]; });
+        Object.keys(names).forEach(function (n) {
+          var arr = [];
+          names[n].forEach(function (ref) {
+            var base = new Float32Array(ref.q);
+            SIGMAS.forEach(function (sg) {
+              var b = _nBlur(base, sg);
+              arr.push({ raw: _nZnorm(b), grad: _nGrad(b) });
+            });
+          });
+          _nsynthTV[k][n] = arr;
+        });
+      });
+      return _nsynthTV;
+    }
+    // Classify the name band against reference patches; candidates constrained to
+    // `allowed` (the cost pool) minus `avoid`. Same dual-scoring agreement gate.
+    function synthNameRescue(kind, p, allowed, avoid) {
+      var tv = _nsynthVariants();
+      if (!tv || !tv[kind]) return null;
+      var cands = Object.keys(tv[kind]).filter(function (n) {
+        if (avoid && n === avoid) return false;
+        if (allowed && allowed.indexOf(n) === -1) return false;
+        return true;
+      });
+      if (cands.length < 2) return null;   // a 1-candidate "choice" proves nothing
+      var cx = p.x, cy = p.y - gap * 0.16;
+      var perRaw = {}, perGrad = {}, dy, dx, i;
+      for (dy = -0.03; dy <= 0.0301; dy += 0.01) {
+        for (dx = -0.03; dx <= 0.0301; dx += 0.01) {
+          var op = _nPatch(cx + dx * gap, cy + dy * gap);
+          var oraw = _nZnorm(op), ograd = _nGrad(op);
+          for (i = 0; i < cands.length; i++) {
+            var n = cands[i], arr = tv[kind][n];
+            for (var j = 0; j < arr.length; j++) {
+              var sr = 0, sg = 0, a = arr[j];
+              for (var q2 = 0; q2 < oraw.length; q2++) { sr += oraw[q2] * a.raw[q2]; sg += ograd[q2] * a.grad[q2]; }
+              sr /= oraw.length; sg /= oraw.length;
+              if (!(n in perRaw) || sr > perRaw[n]) perRaw[n] = sr;
+              if (!(n in perGrad) || sg > perGrad[n]) perGrad[n] = sg;
+            }
+          }
+        }
+      }
+      function rank(per) {
+        return Object.keys(per).map(function (n) { return { n: n, s: per[n] }; })
+          .sort(function (a, b) { return b.s - a.s; });
+      }
+      var ra = rank(perRaw), rg = rank(perGrad);
+      if (!ra.length || !rg.length) return null;
+      var gmN = rg.length > 1 ? rg[0].s - rg[1].s : 1;
+      if (out._debug) (out._debug.synthName = out._debug.synthName || {})[kind] =
+        "raw " + ra[0].n + "@" + ra[0].s.toFixed(3) + " | grad " + rg[0].n + "@" + rg[0].s.toFixed(3) + " gm " + gmN.toFixed(3);
+      if (ra[0].n !== rg[0].n) return null;
+      if (gmN < 0.015) return null;
+      return ra[0].n;
     }
 
     // Read one level node: return the committed digit (template if strong, else the
@@ -1009,7 +1134,10 @@
         // agreement or a refused gate keeps the template read.
         if (isGoldFace && LREFS && nodeKind) {
           var srT = synthLevelRescue(nodeKind, p);
-          if (srT && srT.value !== tmVal) { tmVal = srT.value; tmConf = 0.5; }
+          // OVERRIDE bar: replacing a committed template read needs gm ≥ 0.03
+          // (a clean capture's correct '3' was once overridden by an
+          // agreeing-wrong '5' at a sub-0.015 margin)
+          if (srT && srT.value !== tmVal && srT.gm >= 0.03) { tmVal = srT.value; tmConf = 0.5; }
         }
         return { value: tmVal, conf: isGoldFace ? Math.min(tmConf, 0.6) : tmConf, vec: vec, src: "tm" };
       }
@@ -1039,7 +1167,10 @@
           if (mVal != null && mVal === sr.value) {
             return { value: mVal, conf: Math.max(conf, isGoldFace ? 0.45 : 0.55), vec: vec, src: "ocr" };
           }
-          return { value: sr.value, conf: isGoldFace ? Math.min(sr.conf, 0.5) : sr.conf, vec: vec, src: "synth" };
+          // null-fill at the base gate; OVERRIDING a read value needs gm ≥ 0.03
+          if (mVal == null || sr.gm >= 0.03) {
+            return { value: sr.value, conf: isGoldFace ? Math.min(sr.conf, 0.5) : sr.conf, vec: vec, src: "synth" };
+          }
         }
       }
       return { value: m ? parseInt(m[1], 10) : null, conf: conf, vec: vec, src: "ocr" };
@@ -1486,6 +1617,90 @@
     var effFloor = poolNames ? 0.82 : 0;
     confidence.config.effect1 = out.config.effect1 ? Math.max(effFloor, Math.min(0.92, nmW.conf + 0.3)) : 0;
     confidence.config.effect2 = out.config.effect2 ? Math.max(effFloor, Math.min(0.92, nmE.conf + 0.3)) : 0;
+    // name rescue ladder when the lexicon got nothing (rare1: a 2-line
+    // "Ally Damage Enh." OCR'd as 'jamage and the lexicon rightly refused).
+    // Rung 1 — STRUCTURE: fuzzy keyword (edit distance 1 on tokens) × measured
+    // LINE COUNT × the cost pool. Each name has a fixed render: 2-line names are
+    // Ally Damage Enh. / Ally Attack Enh. / Additional Damage; the rest are
+    // 1-line. When exactly ONE pool candidate survives, that's a unique
+    // structural identification ("jamage" ×2 lines in pool 9 ⇒ Ally Damage
+    // Enh., the only 2-line damage-name there). Rung 2 — patch synthesis.
+    // Both commit FLAGGED at 0.6, never the 0.82 pool floor.
+    var NAME_2LINE = { "Ally Damage Enh.": 1, "Ally Attack Enh.": 1, "Additional Damage": 1 };
+    var FUZZY_KEYS = [
+      ["damage", ["Boss Damage", "Ally Damage Enh.", "Additional Damage"]],
+      ["attack", ["Attack Power", "Ally Attack Enh."]],
+      ["power", ["Attack Power", "Brand Power"]],
+      ["boss", ["Boss Damage"]],
+      ["brand", ["Brand Power"]],
+      ["additional", ["Additional Damage"]],
+      ["ally", ["Ally Damage Enh.", "Ally Attack Enh."]]
+    ];
+    function editDist1(a, b) {
+      if (a === b) return true;
+      if (Math.abs(a.length - b.length) > 1) return false;
+      var i = 0, j = 0, edits = 0;
+      while (i < a.length && j < b.length) {
+        if (a[i] === b[j]) { i++; j++; continue; }
+        if (++edits > 1) return false;
+        if (a.length > b.length) i++;
+        else if (b.length > a.length) j++;
+        else { i++; j++; }
+      }
+      return edits + (a.length - i) + (b.length - j) <= 1;
+    }
+    function countNameLines(p) {
+      var zone = { x: p.x - gap * 0.55, y: p.y - gap * 0.36, w: gap * 1.1, h: gap * 0.40 };
+      var sub = L.crop(raster, zone);
+      var mask = L.chromaMask(sub, L.isWhiteText);
+      var rows = [], y, x;
+      for (y = 0; y < mask.height; y++) {
+        var on = 0;
+        for (x = 0; x < mask.width; x++) if (mask.data[(y * mask.width + x) * 4] < 128) on++;
+        rows.push(on);
+      }
+      var minPx = Math.max(2, Math.round(mask.width * 0.03));
+      var bands = 0, run = 0, minRun = Math.max(3, Math.round(gap * 0.035));
+      for (y = 0; y < rows.length; y++) {
+        if (rows[y] >= minPx) run++;
+        else { if (run >= minRun) bands++; run = 0; }
+      }
+      if (run >= minRun) bands++;
+      return bands;
+    }
+    function structuralName(nmText, p, allowed, avoid) {
+      var toks = nmText.split(/[^a-z]+/).filter(function (t) { return t.length >= 4; });
+      var hits = {};
+      FUZZY_KEYS.forEach(function (fk) {
+        var kw = fk[0];
+        for (var ti = 0; ti < toks.length; ti++) {
+          if (editDist1(toks[ti], kw)) { fk[1].forEach(function (n) { hits[n] = 1; }); break; }
+        }
+      });
+      var cands = Object.keys(hits).filter(function (n) {
+        if (avoid && n === avoid) return false;
+        if (allowed && allowed.indexOf(n) === -1) return false;
+        return true;
+      });
+      if (!cands.length) return null;
+      if (cands.length > 1) {
+        var lines = countNameLines(p);
+        if (lines === 1 || lines === 2) {
+          cands = cands.filter(function (n) { return (lines === 2) === !!NAME_2LINE[n]; });
+        }
+      }
+      return cands.length === 1 ? cands[0] : null;
+    }
+    if (!out.config.effect1) {
+      var rnW = structuralName(nmW.text, nodes.nodeW, poolNames, null) ||
+        (NREFS ? synthNameRescue("W", nodes.nodeW, poolNames, null) : null);
+      if (rnW) { out.config.effect1 = rnW; confidence.config.effect1 = 0.6; }
+    }
+    if (!out.config.effect2) {
+      var rnE = structuralName(nmE.text, nodes.nodeE, poolNames, out.config.effect1) ||
+        (NREFS ? synthNameRescue("E", nodes.nodeE, poolNames, out.config.effect1) : null);
+      if (rnE) { out.config.effect2 = rnE; confidence.config.effect2 = 0.6; }
+    }
 
     // ---- the 4 outcomes ----
     var iconXs = geo ? geo.outIconXs : L.ROI.outIconXs.map(function (fx) { return panel.x + fx * panel.w; });
