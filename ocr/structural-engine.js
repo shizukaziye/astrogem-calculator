@@ -346,10 +346,18 @@
       };
     }
 
+    // The FIND mask for dim button/footer text — shared by the footer phase, the
+    // pill, and the cost reads, so it lives OUTSIDE the async footer wrapper.
+    var dimBtnWhite = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.3 && c.v > 0.6; };
+
     // ---- footer: Process (x/N) — anchored tight button first, block fallback ----
+    // Wrapped as a CONCURRENT phase (launched here, awaited before outcomes): its
+    // OCR chain overlaps the pill and gem-name reads across the worker pool. All
+    // its state is local; it writes only its own out/confidence fields.
     // OCR confusions to survive (all observed): "(" reads as a glued "1" ("(4/7)" →
     // "14/7"), "/" reads as ":" or "." — so capture the SINGLE digit adjacent to the
     // separator and accept the separator class loosely. N can only be 5/7/9.
+    var footerP = (async function footerPhase() {
     function parseProcPair(text) {
       // take the LAST valid pair — the Process button is the bottom-most row
       var re = /(\d)\s*[:\/l|.]\s*(\d)\s*[\)\]]?/g, m, best = null;
@@ -366,8 +374,8 @@
     // rescue). Agree → high conf; disagree → A wins but flagged.
     // The FIND mask is looser than the read mask: upscaled glyphs keep only a sparse
     // bright skeleton (5-17 px/row at ×2), so v>0.6 + a low row threshold or no band
-    // ever forms (this was every "turn read at 0.70" flag).
-    var dimBtnWhite = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.3 && c.v > 0.6; };
+    // ever forms (this was every "turn read at 0.70" flag). (dimBtnWhite is defined
+    // above the phase wrapper — it is shared with the pill and cost reads.)
     // DESCENDING locate: the zone's topmost white band is sometimes NOT the button —
     // on shots where the wheel gap measures a few % small, the Balance row slips into
     // the zone top, gets located, OCRs to garbage, and the turn silently defaulted
@@ -531,8 +539,9 @@
     if (cval != null) { out.state.processCost = cval; confidence.state.processCostMultiplier = costConf; }
     if (out.state.processCost == null) confidence.state.processCostMultiplier = 0.3;
     if (out._debug) out._debug.costRead = { footText: footBlockRan ? footText.slice(0, 90) : "(block skipped)", cval: cval };
+    })();   // footerPhase — awaited before the outcomes section
 
-    tmark("footerTurnCost");
+    tmark("footerLaunch");
     // ---- reroll pill (ROI-scoped: the "Reset (1/1)" trap can't reach here) ----
     // The pill's full state machine (Shizu, 2026-07-17):
     //   "2/2" greyed  = turn 1 (nothing spent; the DIM text defeated the old white
@@ -1752,6 +1761,7 @@
     }
 
     tmark("effectNames");
+    await footerP;   // join the concurrent footer phase before the final section
     // ---- the 4 outcomes ----
     var iconXs = geo ? geo.outIconXs : L.ROI.outIconXs.map(function (fx) { return panel.x + fx * panel.w; });
     var iconY = geo ? geo.outIconY : panel.y + L.ROI.outIconY * panel.h;

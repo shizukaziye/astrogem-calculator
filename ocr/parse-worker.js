@@ -45,6 +45,22 @@ self.onmessage = function (ev) {
 var POOL_N = 2;
 var _pool = [];   // [{p: workerPromise|null, q: tailPromise, params: lastParamsKey, busy: int}]
 for (var pi = 0; pi < POOL_N; pi++) _pool.push({ p: null, q: Promise.resolve(), params: "", busy: 0 });
+
+// IDLE TEARDOWN: two live Tesseract instances hold ~160MB of wasm heap — real
+// money on a gaming machine. After 5 minutes without a parse the instances are
+// terminated and rebuilt lazily on the next call (a ~2s re-warm, paid only by
+// the first parse after a long break).
+var IDLE_MS = 5 * 60 * 1000;
+var _lastUse = Date.now();
+setInterval(function () {
+  if (Date.now() - _lastUse < IDLE_MS) return;
+  _pool.forEach(function (slot) {
+    if (slot.p && !slot.busy) {
+      slot.p.then(function (w) { try { w.terminate(); } catch (e) {} }).catch(function () {});
+      slot.p = null; slot.params = "";
+    }
+  });
+}, 60 * 1000);
 function slotWorker(slot) {
   if (!slot.p) {
     slot.p = self.Tesseract.createWorker("eng", 1, { logger: function () {} });
@@ -53,6 +69,7 @@ function slotWorker(slot) {
   return slot.p;
 }
 function wOcr(raster, opts) {
+  _lastUse = Date.now();
   var psm = String((opts && opts.psm) || 6);
   var wl = (opts && opts.whitelist) || "";
   var key = psm + "|" + wl;
