@@ -1733,7 +1733,10 @@
     // ---- the 4 outcomes ----
     var iconXs = geo ? geo.outIconXs : L.ROI.outIconXs.map(function (fx) { return panel.x + fx * panel.w; });
     var iconY = geo ? geo.outIconY : panel.y + L.ROI.outIconY * panel.h;
-    for (var oi = 0; oi < 4; oi++) {
+    // the four cells are data-independent — read them CONCURRENTLY (the OCR pool
+    // overlaps them; serialized backends preserve old order via their queues);
+    // every write below is oi-indexed, so completion order cannot matter
+    async function readOutcomeCell(oi) {
       var icol = L.medianPatch(raster, iconXs[oi], iconY, patchHalf);
       var icls = L.hueClass(icol[0], icol[1], icol[2]);
       var ihue = L.hsv(icol[0], icol[1], icol[2]).h;
@@ -1965,9 +1968,10 @@
         o = { type: "do_nothing" };
         oconf += 0.2;
       }
-      out.outcomes.push(o);
+      out.outcomes[oi] = o;
       confidence.outcomes[oi] = Math.max(0, Math.min(0.95, oconf * panelConf));
     }
+    await Promise.all([0, 1, 2, 3].map(readOutcomeCell));
 
     // panel-quality attenuation on the art-region fields
     ["willpowerLevel", "orderLevel", "effect1Level", "effect2Level", "effect1", "effect2"].forEach(function (k) {
