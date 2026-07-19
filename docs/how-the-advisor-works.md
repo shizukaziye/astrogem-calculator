@@ -161,13 +161,17 @@ flood the DB with unreviewed data).
 Every manual Get advice ships {image, parse, final state, diff} to the
 `astrogem-data` worker (KV). The capture is **cropped to `_srcPanel`** (native
 panel pixels, pill/footer margins included — records run ~150KB) and the save is
-**guaranteed**: an adaptive quality ladder keeps the payload provably inside the
-worker's 12MB cap, the worker writes the record BEFORE the day counter, failures
-return honest errors, and the client shows "✓ saved" / "⚠ NOT saved (why)" on
-every attempt with automatic re-staging for retry. (A record once vanished
-silently — oversized body + counter-first writes + a silent locked-gate discard;
-each hole is closed and E2E-proven.) Collection is NOT password-gated — only the
-AI verifier is; the worker's daily write cap is the quota guard.
+**guaranteed**: an adaptive quality ladder keeps the image ≤3.5M chars — far
+under the worker's 5MB gate, which itself sits under the MEASURED free-tier kill
+line (bodies ≥6MB die mid-read and Cloudflare's error page has no CORS headers,
+so the browser reports only "network error"; a night of live records was lost
+exactly this way, 2026-07-19). Each failed send halves the image cap for the
+next retry (500K floor), the worker writes the record BEFORE the day counter,
+failures return honest CORS'd errors, and the client shows "✓ saved" / "⚠ NOT
+saved (why)" on every attempt with automatic re-staging. (Every lost-record
+incident — locked-gate discard, counter-first writes, oversize kill, second-
+click no-op — is closed and E2E-proven.) Collection is NOT password-gated —
+only the AI verifier is; the worker's daily write cap is the quota guard.
 
 Corrections are ground-truth labels…
 **fallibly** so: a live correction once contradicted its own screenshot's
