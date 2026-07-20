@@ -27,6 +27,60 @@
   // the exact DP ignores it; the MC only runs as a DPS-axis fallback).
   var MC_RUNS = 1000, MC_INNER = 150;
 
+  // ---------------- DP off the main thread (#6) ----------------
+  // The exact DP (model/dp.js topLevelAdvice) used to run synchronously on the main
+  // thread — a big solve (early turns on an Epic gem) could freeze the whole tab for
+  // its duration. model/dp-worker.js runs the identical, unmodified DP in a Worker;
+  // this just ships state/baseline/options over (all plain JSON — no functions, no
+  // DOM refs, so structured clone is a non-issue) and resolves with the same result
+  // shape evaluateActionsDP already returned synchronously.
+  var dpWorker = null, dpWorkerDead = false;
+  function getDPWorker() {
+    if (dpWorkerDead || typeof Worker === "undefined") return null;
+    if (!dpWorker) {
+      // ?v= for the SAME staleness-avoidance reason as the LAZY_TABS list in
+      // index.html — bump whenever model/dp-worker.js changes (it also has its
+      // own ?v= pins for astrogem.js/nested.js/dp.js; keep both in sync on edit).
+      try { dpWorker = new Worker("model/dp-worker.js?v=1"); }
+      catch (e) { dpWorkerDead = true; return null; }
+    }
+    return dpWorker;
+  }
+  // Same signature/return shape as the old synchronous window.evaluateActionsDP,
+  // minus onProgress (nothing calls it mid-solve today — see dp-worker.js's note —
+  // so there's nothing to relay; the caller shows an indeterminate bar instead).
+  // Falls back to the synchronous main-thread call if Workers aren't available at
+  // all (very old browsers) or the worker fails to construct/load — degrades to
+  // the pre-#6 behavior rather than losing advice entirely.
+  function evaluateActionsDPAsync(state, baseline, goldPerDamage, numRuns, options) {
+    var w = getDPWorker();
+    if (!w) {
+      return new Promise(function (resolve, reject) {
+        try { resolve(window.evaluateActionsDP(state, baseline, goldPerDamage, numRuns, null, options)); }
+        catch (e) { reject(e); }
+      });
+    }
+    return new Promise(function (resolve, reject) {
+      function onMsg(e) {
+        w.removeEventListener("message", onMsg);
+        w.removeEventListener("error", onErr);
+        if (e.data && e.data.ok) resolve(e.data.result);
+        else reject(new Error((e.data && e.data.error) || "DP worker failed"));
+      }
+      function onErr(err) {
+        w.removeEventListener("message", onMsg);
+        w.removeEventListener("error", onErr);
+        // the worker itself is broken (e.g. a 404 on model/dp-worker.js under a
+        // stricter static host) — don't keep retrying a dead worker every click
+        dpWorkerDead = true; dpWorker = null;
+        reject(err instanceof Error ? err : new Error((err && err.message) || "DP worker error"));
+      }
+      w.addEventListener("message", onMsg);
+      w.addEventListener("error", onErr);
+      w.postMessage({ state: state, baseline: baseline, goldPerDamage: goldPerDamage, numRuns: numRuns, options: options });
+    });
+  }
+
   // Parse-collection endpoint (worker/astrogem-data.js): every parse + the state the
   // user actually ran advice with (their corrections = ground-truth labels) goes to
   // Cloudflare KV so the corpus grows itself. Gated with the site token; fire-and-forget.
@@ -50,7 +104,7 @@
   // version, asks the server (a no-store fetch of the tiny index.html) what is
   // current, and puts up a loud banner when it is outdated. Checked at tab init
   // and at every parse start, throttled to one probe per 10 minutes.
-  var CLIENT_V = 69;   // MUST match this file's ?v= in index.html on every deploy
+  var CLIENT_V = 70;   // MUST match this file's ?v= in index.html on every deploy
   var _staleAt = 0;
   function checkStale() {
     var now = Date.now();
@@ -123,6 +177,12 @@
 '  #tab-advisor .rank-badge{display:inline-block;padding:1px 9px;border-radius:99px;font-size:15px;font-weight:800;line-height:1.5;vertical-align:middle;font-variant-numeric:tabular-nums}' +
 '  #tab-advisor .av-bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin-top:8px;display:none}' +
 '  #tab-advisor .av-bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .1s}' +
+// The DP worker doesn't report per-node progress (see model/dp-worker.js) — a
+// sliding indeterminate stripe communicates "still working" honestly, instead of
+// a fake linear bar that either sits at 0% for the whole solve or lies about how
+// close it is to done.
+'  #tab-advisor .av-bar.av-bar-indeterminate > i{width:40%;animation:av-bar-slide 1.1s ease-in-out infinite}' +
+'  @keyframes av-bar-slide{0%{margin-left:-40%}100%{margin-left:100%}}' +
 '  #tab-advisor .av-warn{font-size:12px;color:#e8b84a;margin-top:6px}' +
 '  #tab-advisor .linklike{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;padding:0 2px;text-decoration:underline}' +
 '  #tab-advisor .av-share{display:flex;gap:10px;align-items:center;margin-top:8px}' +
@@ -738,56 +798,65 @@
 
     try { window.NESTED_INNER_RUNS = MC_INNER; } catch (e) {}
     var bar = $("av-bar"), barI = $("av-bar-i");
-    bar.style.display = "block"; barI.style.width = "0%";
+    bar.style.display = "block"; barI.style.width = "0%"; bar.classList.remove("av-bar-indeterminate");
     $("av-go").disabled = true;
     clearResult("Calculating the recommended action…");
     setStatus(hasDP ? "Solving the exact decision model…" : "Simulating…", "working");
     function onProgress(done, total) { barI.style.width = (total ? Math.round((done / total) * 100) : 0) + "%"; }
 
     setTimeout(function () {
-      var engineUsed = null;
-      try {
-        var result;
-        var opts = { includeSim2: includeSim2, axis: m.axis };
-        if (hasDP) {
-          try {
-            result = window.evaluateActionsDP(state, m.baselineScore, m.gpd, MC_RUNS, onProgress, opts);
-            engineUsed = "dp";
-          } catch (dpErr) {
-            console.error("DP failed:", dpErr);
-            if (m.axis === "support" || !hasMC) {
-              setStatus("The exact model failed" + (m.axis === "support" ? " — support-axis advice has no Monte-Carlo fallback" : "") + ": " + (dpErr && dpErr.message || dpErr), "err");
-              $("av-go").disabled = false; bar.style.display = "none";
-              clearResult();
-              return;
+      (async function () {
+        var engineUsed = null;
+        try {
+          var result;
+          var opts = { includeSim2: includeSim2, axis: m.axis };
+          if (hasDP) {
+            try {
+              // Off the main thread (#6) — the exact DP doesn't report per-node
+              // progress today, so an indeterminate stripe stands in for the old
+              // (equally fake) instant 0%->100% jump, minus the UI freeze.
+              bar.classList.add("av-bar-indeterminate");
+              result = await evaluateActionsDPAsync(state, m.baselineScore, m.gpd, MC_RUNS, opts);
+              bar.classList.remove("av-bar-indeterminate");
+              engineUsed = "dp";
+            } catch (dpErr) {
+              bar.classList.remove("av-bar-indeterminate");
+              console.error("DP failed:", dpErr);
+              if (m.axis === "support" || !hasMC) {
+                setStatus("The exact model failed" + (m.axis === "support" ? " — support-axis advice has no Monte-Carlo fallback" : "") + ": " + (dpErr && dpErr.message || dpErr), "err");
+                $("av-go").disabled = false; bar.style.display = "none";
+                clearResult();
+                return;
+              }
+              setStatus("Exact model errored; falling back to Monte Carlo…", "working");
+              result = window.evaluateActions(state, m.baselineScore, m.gpd, MC_RUNS, onProgress, { includeSim2: includeSim2 });
+              engineUsed = "mc";
             }
-            setStatus("Exact model errored; falling back to Monte Carlo…", "working");
+          } else {
+            if (m.axis === "support") { setStatus("Support-axis advice needs the exact model (not loaded).", "err"); $("av-go").disabled = false; bar.style.display = "none"; return; }
             result = window.evaluateActions(state, m.baselineScore, m.gpd, MC_RUNS, onProgress, { includeSim2: includeSim2 });
             engineUsed = "mc";
           }
-        } else {
-          if (m.axis === "support") { setStatus("Support-axis advice needs the exact model (not loaded).", "err"); $("av-go").disabled = false; bar.style.display = "none"; return; }
-          result = window.evaluateActions(state, m.baselineScore, m.gpd, MC_RUNS, onProgress, { includeSim2: includeSim2 });
-          engineUsed = "mc";
+          barI.style.width = "100%";
+          renderResult(result, state, m, includeSim2, engineUsed);
+          if (isAuto) {
+            var nA = window.AdvisorWindow.unconfirmedCount();
+            setStatus(note + (nA
+              ? "Auto-advice shown — " + nA + " highlighted field" + (nA > 1 ? "s" : "") + " to double-check. Correct them and press Get advice to recompute & save."
+              : "Auto-advice shown. Press Get advice after any corrections to save the reading."), "");
+          } else {
+            setStatus("Done.", "");
+          }
+        } catch (err) {
+          console.error(err);
+          setStatus("Solver error: " + (err && err.message || err), "err");
+          clearResult();
+        } finally {
+          bar.classList.remove("av-bar-indeterminate");
+          $("av-go").disabled = false;
+          setTimeout(function () { bar.style.display = "none"; }, 400);
         }
-        barI.style.width = "100%";
-        renderResult(result, state, m, includeSim2, engineUsed);
-        if (isAuto) {
-          var nA = window.AdvisorWindow.unconfirmedCount();
-          setStatus(note + (nA
-            ? "Auto-advice shown — " + nA + " highlighted field" + (nA > 1 ? "s" : "") + " to double-check. Correct them and press Get advice to recompute & save."
-            : "Auto-advice shown. Press Get advice after any corrections to save the reading."), "");
-        } else {
-          setStatus("Done.", "");
-        }
-      } catch (err) {
-        console.error(err);
-        setStatus("Solver error: " + (err && err.message || err), "err");
-        clearResult();
-      } finally {
-        $("av-go").disabled = false;
-        setTimeout(function () { bar.style.display = "none"; }, 400);
-      }
+      })();
     }, 30);
   }
 
