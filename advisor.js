@@ -50,7 +50,7 @@
   // version, asks the server (a no-store fetch of the tiny index.html) what is
   // current, and puts up a loud banner when it is outdated. Checked at tab init
   // and at every parse start, throttled to one probe per 10 minutes.
-  var CLIENT_V = 67;   // MUST match this file's ?v= in index.html on every deploy
+  var CLIENT_V = 68;   // MUST match this file's ?v= in index.html on every deploy
   var _staleAt = 0;
   function checkStale() {
     var now = Date.now();
@@ -362,13 +362,23 @@
           meta: { engine: selectedEngine, source: rec.source, v: 3, cropped: !!panelRect, resend: !!rec.lastSentKey, ua: navigator.userAgent.slice(0, 80) }
         };
         var tok = (window.astrogemGate && window.astrogemGate.collectToken) ? window.astrogemGate.collectToken() : "";
+        // A rejected fetch is CORS-masked — the browser hides WHY. Probe the tiny
+        // /health route to split the two real causes apart: reachable worker +
+        // failed upload = connection blip (retry helps); unreachable worker =
+        // something on THIS machine blocks workers.dev (adblock lists do; the
+        // full live-origin battery passes 2026-07-20, so the server side is out).
+        function diagnoseNetError() {
+          return fetch(DATA_URL + "/health", { method: "GET" })
+            .then(function (h) { return h.ok ? "network error mid-upload — will retry smaller" : "worker unhealthy (" + h.status + ")"; })
+            .catch(function () { return "workers.dev is BLOCKED on this machine — check your adblocker/DNS"; });
+        }
         try {
           fetch(DATA_URL + "/collect?k=" + tok, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
           }).then(function (r) { resolve(r.ok ? "saved" : "server said " + r.status); })
-            .catch(function () { resolve("network error"); });
+            .catch(function () { diagnoseNetError().then(resolve); });
         } catch (e) { resolve("network error"); }
       });
     }).then(function (res) {
