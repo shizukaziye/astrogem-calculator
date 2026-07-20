@@ -228,7 +228,18 @@
     var text = normalizeOcrText(stitched).toLowerCase();
     var result = { turnsRemaining: null, maxTurns: null,
       rerollsShownFree: null, rerollsShownDenom: null,
+      resetsRemaining: null,
       processCost: null, processCostMultiplier: null };
+
+    // "Reset (x/1)": x in {0,1}. Read it BEFORE the reroll-fraction pass strips it
+    // out (see the noReset note below) — this engine used to only exclude that text
+    // to protect the reroll read, never actually reporting the value itself (#7),
+    // so dp.js's Reset gating (model/dp.js) had nothing to go on from this engine.
+    var resetM = text.match(/reset\s*\(\s*(\d+)\s*\/\s*(\d+)\s*\)/i);
+    if (resetM) {
+      var rsA = parseInt(resetM[1], 10), rsB = parseInt(resetM[2], 10);
+      if (rsB === 1 && (rsA === 0 || rsA === 1)) result.resetsRemaining = rsA;
+    }
 
     var procTurn = text.match(/process\s*\(\s*(\d+)\s*\/\s*(\d+)\s*\)/i);
     if (procTurn) {

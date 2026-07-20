@@ -209,6 +209,7 @@ function makeNodeTesseractParser() {
         state: {
           currentTurn: null, maxTurns: cut.maxTurns, turnsRemaining: cut.turnsRemaining,
           rerollsShownFree: cut.rerollsShownFree, rerollsShownDenom: cut.rerollsShownDenom,
+          resetsRemaining: cut.resetsRemaining,
           processCost: cut.processCost,
           processCostMultiplier: cut.processCostMultiplier, totalGoldSpent: 0, rosterBound: false
         },

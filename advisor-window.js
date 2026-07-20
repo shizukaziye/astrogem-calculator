@@ -64,6 +64,7 @@
       effect1: "Attack Power", effect1Level: 1, effect2: "Boss Damage", effect2Level: 1 },
     currentTurn: 1,
     rerollsRemaining: 3,          // MODEL units (incl. the paid final reroll)
+    resetsRemaining: 1,           // the in-game "Reset (x/1)" counter; undefined = unknown
     costMult: 0,
     outcomes: [{ type: "do_nothing" }, { type: "do_nothing" }, { type: "do_nothing" }, { type: "do_nothing" }],
     unconfirmed: {}               // key -> 1 (e.g. "config.effect1", "outcomes.2", "state.rerollsRemaining")
@@ -97,6 +98,7 @@
     win.rerollsRemaining = Math.max(0, Math.min(9, parseInt(win.rerollsRemaining, 10)));
     if (isNaN(win.rerollsRemaining)) win.rerollsRemaining = maxRerolls();
     if (win.currentTurn === 1) win.rerollsRemaining = Math.max(win.rerollsRemaining, maxRerolls());
+    win.resetsRemaining = (win.resetsRemaining === 0 || win.resetsRemaining === 1) ? win.resetsRemaining : undefined;
     win.costMult = win.costMult >= 50 ? 100 : (win.costMult <= -50 ? -100 : 0);
     win.outcomes = (win.outcomes || []).slice(0, 4);
     while (win.outcomes.length < 4) win.outcomes.push({ type: "do_nothing" });
@@ -210,7 +212,8 @@
       '#av-window .pw-gemname{display:block;margin:6px auto 2px;font-size:17px;background:none;border:0;cursor:pointer}' +
       '#av-window .pw-points{font-size:13px;color:#e7e9ee}' +
       '#av-window .pw-points .q{display:inline-flex;width:15px;height:15px;border-radius:50%;background:#2b8f7c;color:#dff6ef;font-size:10px;align-items:center;justify-content:center;margin-left:5px;font-family:sans-serif;cursor:help}' +
-      '#av-window .pw-resetpill{display:block;margin:9px auto;background:#3a3f4a;border:1px solid #4a5160;border-radius:7px;color:#b9bfca;font-size:13px;padding:5px 0;width:72%;text-align:center}' +
+      '#av-window .pw-resetpill{display:block;margin:9px auto;background:#3a3f4a;border:1px solid #4a5160;border-radius:7px;color:#b9bfca;font-size:13px;padding:5px 0;width:72%;text-align:center;cursor:pointer;font-family:inherit}' +
+      '#av-window .pw-resetpill:hover{border-color:#66c7ff}' +
       '#av-window .pw-wheel{position:relative;width:300px;height:286px;margin:4px auto}' +
       '#av-window .pw-node{position:absolute;width:96px;background:none;border:0;cursor:pointer;color:#f2f4f8;text-align:center;padding:0}' +
       '#av-window .pw-node .nm{display:block;font-size:12px;line-height:1.15;text-shadow:0 1px 3px #000;margin-top:2px}' +
@@ -309,7 +312,8 @@
       '    <button type="button" class="pw-gemname' + conf("config.gemType") + '" data-act="gemtype" style="color:' + (RARITY_COLOR[win.rarity] || "#b06fe0") + '" title="Click to switch Order/Chaos">' +
              esc(c.gemType === "chaos" ? "Chaos Astrogem" : "Order Astrogem") + '</button>' +
       '    <div class="pw-points">' + pointsSum() + ' Astrogem Points<span class="q" title="Derived: the four levels summed. Check it against the number the game shows — a mismatch means a transcription slip.">?</span></div>' +
-      '    <div class="pw-resetpill">Reset (1/1)</div>' +
+      '    <button type="button" class="pw-resetpill' + conf("state.resetsRemaining") + '" data-act="reset" title="Reset — pay 20,000g to return the gem to a fresh unprocessed state. Click to set what the game currently shows.">' +
+             'Reset (' + (win.resetsRemaining === 0 ? 0 : 1) + '/1)</button>' +
       '  </div>' +
       '  <div class="pw-wheel">' +
       '    <svg class="pw-dial" viewBox="0 0 300 270" aria-hidden="true">' +
@@ -440,6 +444,22 @@
     openPop(anchor, "Rerolls remaining (model units)", body,
       function (b) { win.rerollsRemaining = parseInt(b.getAttribute("data-v"), 10); markConfirmed("state.rerollsRemaining"); closePop(); render(); emit(); });
   }
+  // Manual override for the in-game "Reset (x/1)" counter — dp.js (model/dp.js
+  // topLevelAdvice) reads resetsRemaining===0 to exclude Reset from advice once
+  // it's spent; undefined defaults to "assume unused". The pill used to be a
+  // hardcoded "Reset (1/1)" with no click handler at all (issue #7) — always
+  // showing available regardless of the real state, and no way to correct it
+  // whether OCR missed the read or you're filling the window by hand.
+  function editResets(anchor) {
+    var cur = win.resetsRemaining === 0 ? 0 : 1;
+    var opts = [
+      optBtn(1, "1/1 <span style='opacity:.6'>(available)</span>", cur === 1),
+      optBtn(0, "0/1 <span style='opacity:.6'>(already used)</span>", cur === 0)
+    ];
+    var body = '<div class="opts" style="flex-direction:column;align-items:stretch">' + opts.join("") + '</div>';
+    openPop(anchor, "Reset remaining", body,
+      function (b) { win.resetsRemaining = parseInt(b.getAttribute("data-v"), 10); markConfirmed("state.resetsRemaining"); closePop(); render(); emit(); });
+  }
   // ---- "process this outcome" (the game chose it) ----
   // Mirrors model/nested.js _applyProcessStep: cost multiplier ACCUMULATES (never
   // auto-resets), reroll_increase stacks, change_side_option keeps the level and only
@@ -555,6 +575,7 @@
       if (act === "level") { editLevel(btn, btn.getAttribute("data-target")); return; }
       if (act === "outcome") { editOutcome(btn, parseInt(btn.getAttribute("data-i"), 10)); return; }
       if (act === "rerolls") { editRerolls(btn); return; }
+      if (act === "reset") { editResets(btn); return; }
       if (act === "cost") { editCost(btn); return; }
       if (act === "turn") { editTurn(btn); return; }
     };
@@ -593,7 +614,8 @@
         rerollsRemaining: win.rerollsRemaining,
         // Reset (x/1) counter, parsed 2026-07-20 (crafted's PR): 0 = spent (dp
         // must not rank Reset), 1 = available, undefined = unread (dp assumes
-        // unused — the historical default). No UI control; carried parse->dp.
+        // unused — the historical default). Manually settable via the pw-resetpill
+        // button (editResets) since #7 — parse prefills it, the pill corrects it.
         resetsRemaining: win.resetsRemaining,
         processCost: processCost(),
         processCostMultiplier: win.costMult,
