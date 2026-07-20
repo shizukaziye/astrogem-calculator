@@ -781,9 +781,13 @@
     if (resetM) {
       out.state.resetsRemaining = parseInt(resetM[1], 10);
       confidence.state.resetsRemaining = 0.85;
-    } else {
-      confidence.state.resetsRemaining = 0.2;
     }
+    // UNREAD stays ABSENT — no low-confidence entry. The advisor window ingests
+    // confidence.state keys GENERICALLY into its unconfirmed set, and this field
+    // has no rendered control: a 0.2 here made every miss inflate "N fields to
+    // double-check" with an entry the user could never see, click, or clear
+    // (caught reviewing the PR merge). Absent = the pre-PR contract: dp assumes
+    // the reset unused, nothing flags.
     tmark("resetPill");
     // ---- gem name → gemType + baseCost (suffix table) ----
     // Fixed band primary (best measured); if it produces neither the type keyword nor

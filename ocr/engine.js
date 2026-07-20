@@ -382,7 +382,9 @@
             sIn.rerollsChargeSeen || sIn.rerollsChargeSpent || currentTurn === 1, false);
           return rerollAmbiguous ? Math.min(base, 0.4) : base;
         })(),
-        resetsRemaining: fieldConf(sconf.resetsRemaining, sIn.resetsRemaining != null, false),
+        // absent when unread (fieldConf's !inputPresent -> 0 would phantom-flag a
+        // field that has no UI control; the window's null-guard skips undefined)
+        resetsRemaining: sIn.resetsRemaining != null ? fieldConf(sconf.resetsRemaining, true, false) : undefined,
         processCostMultiplier: fieldConf(sconf.processCostMultiplier,
           sIn.processCostMultiplier != null || sIn.processCost != null, false)
       },

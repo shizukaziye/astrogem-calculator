@@ -591,6 +591,10 @@
         currentTurn: win.currentTurn,
         maxTurns: maxTurns(),
         rerollsRemaining: win.rerollsRemaining,
+        // Reset (x/1) counter, parsed 2026-07-20 (crafted's PR): 0 = spent (dp
+        // must not rank Reset), 1 = available, undefined = unread (dp assumes
+        // unused — the historical default). No UI control; carried parse->dp.
+        resetsRemaining: win.resetsRemaining,
         processCost: processCost(),
         processCostMultiplier: win.costMult,
         totalGoldSpent: 0,
@@ -612,6 +616,7 @@
       };
       win.currentTurn = st.currentTurn || 1;
       win.rerollsRemaining = st.rerollsRemaining != null ? st.rerollsRemaining : maxRerolls();
+      win.resetsRemaining = (st.resetsRemaining === 0 || st.resetsRemaining === 1) ? st.resetsRemaining : undefined;
       win.costMult = st.processCostMultiplier || 0;
       win.outcomes = (parsed.outcomes || []).slice(0, 4);
       // confidence -> "confirm me" marks (threshold 0.8; see ocr/engine.js contract)
