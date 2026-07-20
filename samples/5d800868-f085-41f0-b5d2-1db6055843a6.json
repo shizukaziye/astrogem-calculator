@@ -1,0 +1,28 @@
+{
+  "_note": "Share-tier capture (3836x1830) — Shizu 2026-07-20. THE ICON-POISONED PILL: the ⟳ icon template-matched '3'@0.75+ while the true serif-'1' scored under the filter, so the exactly-3-glyph rule saw [icon,'/','2'] = '3/2' and outvoted a correct OCR '1/2' (shown as rerolls 4, flagged 0.75). Fixed by slash-adjacency numerator selection. Pill truth: '1/2' bright -> rerollsRemaining 2. Chaos gem: 1+1+5+2 = 9 pts, header confirms. Cost row 1,800 (multiplier +100).",
+  "config": {
+    "baseCost": 8,
+    "gemType": "chaos",
+    "willpowerLevel": 1,
+    "orderLevel": 2,
+    "effect1": "Ally Damage Enh.",
+    "effect1Level": 1,
+    "effect2": "Additional Damage",
+    "effect2Level": 5
+  },
+  "state": {
+    "currentTurn": 5,
+    "maxTurns": 9,
+    "rerollsRemaining": 2,
+    "processCost": 1800,
+    "processCostMultiplier": 100,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    { "type": "raise_effect", "target": "order", "amount": 1 },
+    { "type": "lower_effect", "target": "order", "amount": 1 },
+    { "type": "raise_effect", "target": "effect1", "amount": 1 },
+    { "type": "reroll_increase", "change": 1 }
+  ]
+}

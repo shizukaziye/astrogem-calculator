@@ -61,6 +61,27 @@ function json(obj, status, req) {
   });
 }
 
+// Every FAILED /collect attempt is journaled to KV (err:<day>/<ts>, 7-day TTL,
+// ≤40 writes/day) with status + size + UA + origin. Debugging doctrine: a
+// browser masks the interesting failures (CORS-hidden rejects, stale clients'
+// oversize sends) — the journal sees every attempt that REACHED Cloudflare, so
+// "no col/ record AND no err/ entry" proves the request never left the user's
+// machine (extension/DNS block), while an err/ entry names the reject reason.
+async function logErr(env, req, status, detail) {
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    const ecKey = "ec:" + day;
+    const ec = parseInt((await env.COLLECT.get(ecKey)) || "0", 10);
+    if (ec >= 40) return;
+    await env.COLLECT.put("err:" + day + "/" + Date.now().toString(36), JSON.stringify({
+      status: status, detail: String(detail).slice(0, 120),
+      ua: (req.headers.get("User-Agent") || "").slice(0, 90),
+      origin: req.headers.get("Origin") || "", len: req.headers.get("Content-Length") || ""
+    }), { expirationTtl: 7 * 24 * 3600 });
+    await env.COLLECT.put(ecKey, String(ec + 1), { expirationTtl: 2 * 24 * 3600 });
+  } catch (e) {}
+}
+
 // The whole handler runs behind this catch: an uncaught throw would otherwise
 // surface as a Cloudflare error page with NO CORS headers, which the browser
 // reports as a plain "network error" — indistinguishable from being offline.
@@ -68,7 +89,10 @@ function json(obj, status, req) {
 export default {
   async fetch(req, env) {
     try { return await handle(req, env); }
-    catch (e) { return json({ error: "worker error: " + String(e && e.message || e).slice(0, 140) }, 500, req); }
+    catch (e) {
+      await logErr(env, req, 500, "uncaught: " + String(e && e.message || e));
+      return json({ error: "worker error: " + String(e && e.message || e).slice(0, 140) }, 500, req);
+    }
   }
 };
 
@@ -82,20 +106,22 @@ async function handle(req, env) {
       // gate on the header FIRST (browsers always send it for string bodies),
       // then re-check the actual text — both run BEFORE the expensive parse
       const len = parseInt(req.headers.get("Content-Length") || "0", 10);
-      if (len > MAX_BODY) return json({ error: "too large (" + Math.round(len / 1e5) / 10 + "MB > 5MB)" }, 413, req);
+      if (len > MAX_BODY) { await logErr(env, req, 413, "content-length " + len); return json({ error: "too large (" + Math.round(len / 1e5) / 10 + "MB > 5MB)" }, 413, req); }
       let raw;
-      try { raw = await req.text(); } catch (e) { return json({ error: "body read failed" }, 400, req); }
-      if (raw.length > MAX_BODY) return json({ error: "too large" }, 413, req);
+      try { raw = await req.text(); } catch (e) { await logErr(env, req, 400, "body read failed"); return json({ error: "body read failed" }, 400, req); }
+      if (raw.length > MAX_BODY) { await logErr(env, req, 413, "raw length " + raw.length); return json({ error: "too large" }, 413, req); }
       let body;
-      try { body = JSON.parse(raw); } catch (e) { return json({ error: "bad json" }, 400, req); }
-      if (!body || typeof body !== "object") return json({ error: "bad body" }, 400, req);
+      try { body = JSON.parse(raw); } catch (e) { await logErr(env, req, 400, "bad json"); return json({ error: "bad json" }, 400, req); }
+      if (!body || typeof body !== "object") { await logErr(env, req, 400, "bad body"); return json({ error: "bad body" }, 400, req); }
       // a record without a real capture or a final state is useless for training —
       // reject it loudly so the client can tell the user (a silent 1×1-pixel test
       // record once sat in the store masquerading as data)
       if (typeof body.image !== "string" || !/^data:image\/(webp|png|jpeg);base64,[A-Za-z0-9+/=]{1000,}/.test(body.image)) {
+        await logErr(env, req, 400, "image missing/stub");
         return json({ error: "image required (real capture, not a stub)" }, 400, req);
       }
       if (!body.final || typeof body.final !== "object" || !body.final.config) {
+        await logErr(env, req, 400, "final state missing");
         return json({ error: "final state required" }, 400, req);
       }
 
@@ -107,6 +133,7 @@ async function handle(req, env) {
       const dcKey = "dc:" + day;
       const dcCount = parseInt((await env.COLLECT.get(dcKey)) || "0", 10);
       if (dcCount >= DAILY_WRITE_CAP) {
+        await logErr(env, req, 429, "daily cap");
         return json({ error: "daily collection cap reached (" + DAILY_WRITE_CAP + "/day) — resets at UTC midnight" }, 429, req);
       }
 
@@ -128,6 +155,7 @@ async function handle(req, env) {
       try {
         await env.COLLECT.put(key, JSON.stringify(record));
       } catch (e) {
+        await logErr(env, req, 500, "storage write: " + String(e && e.message || e));
         return json({ error: "storage write failed: " + String(e && e.message || e).slice(0, 120) }, 500, req);
       }
       await env.COLLECT.put(dcKey, String(dcCount + 1), { expirationTtl: 2 * 24 * 3600 }).catch(function () {});

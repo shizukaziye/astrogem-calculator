@@ -585,11 +585,30 @@
     {
       var tgR = templateGlyphs(pillRect, dimBtnWhite);
       if (tgR) {
-        var digsR = tgR.filter(function (t) { return t.ch && /^[\d\/]$/.test(t.ch) && t.score >= 0.75; });
-        if (digsR.length === 3 && digsR[1].ch === "/" && /^\d$/.test(digsR[0].ch) && /^\d$/.test(digsR[2].ch)) {
-          var rn = digsR[0].box.w / Math.max(1, digsR[0].box.h) < 0.45 ? 1 : parseInt(digsR[0].ch, 10);
-          var rd = digsR[2].box.w / Math.max(1, digsR[2].box.h) < 0.45 ? 1 : parseInt(digsR[2].ch, 10);
-          if (rn <= 9 && (rd === 1 || rd === 2)) tPair = { n: rn, d: rd };   // stacked counters (3/2…) legal
+        // Anchor on the SLASH and take the POSITIONALLY adjacent boxes. The old
+        // rule ("exactly 3 score≥0.75 digit/slash glyphs") had a poisoning hole:
+        // the ⟳ icon can template-match a digit (live 5d800868: icon→'3'@0.75+)
+        // while the true serif-'1' scores UNDER the filter — the survivors
+        // [icon,'/', '2'] then satisfied exactly-3 and "3/2" outvoted a correct
+        // OCR "1/2" in arbitration. Adjacency is structural: the numerator is
+        // the box immediately left of the '/', and the icon sits a full icon-
+        // width further out, so it can never be picked — however it classifies.
+        var slashI = -1;
+        for (var gi = 0; gi < tgR.length; gi++) if (tgR[gi].ch === "/" && tgR[gi].score >= 0.7) slashI = gi;
+        if (slashI > 0 && slashI < tgR.length - 1) {
+          var nb = tgR[slashI - 1], db2 = tgR[slashI + 1];
+          var gapL = tgR[slashI].box.x - (nb.box.x + nb.box.w);
+          var gapR = db2.box.x - (tgR[slashI].box.x + tgR[slashI].box.w);
+          var hRef = Math.max(nb.box.h, db2.box.h, tgR[slashI].box.h);
+          if (gapL <= hRef * 1.2 && gapR <= hRef * 1.2) {
+            // aspect rule FIRST and score-free: '1' is the only narrow digit and
+            // its serif flag both misclassifies and UNDER-SCORES at dim tiers
+            var rn = nb.box.w / Math.max(1, nb.box.h) < 0.45 ? 1
+              : (/^\d$/.test(nb.ch || "") && nb.score >= 0.7 ? parseInt(nb.ch, 10) : null);
+            var rd = db2.box.w / Math.max(1, db2.box.h) < 0.45 ? 1
+              : (/^\d$/.test(db2.ch || "") && db2.score >= 0.7 ? parseInt(db2.ch, 10) : null);
+            if (rn != null && rd != null && rn <= 9 && (rd === 1 || rd === 2)) tPair = { n: rn, d: rd };   // stacked counters (3/2…) legal
+          }
         }
       }
     }
