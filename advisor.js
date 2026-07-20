@@ -50,7 +50,7 @@
   // version, asks the server (a no-store fetch of the tiny index.html) what is
   // current, and puts up a loud banner when it is outdated. Checked at tab init
   // and at every parse start, throttled to one probe per 10 minutes.
-  var CLIENT_V = 68;   // MUST match this file's ?v= in index.html on every deploy
+  var CLIENT_V = 69;   // MUST match this file's ?v= in index.html on every deploy
   var _staleAt = 0;
   function checkStale() {
     var now = Date.now();
@@ -126,15 +126,9 @@
 '  #tab-advisor .av-warn{font-size:12px;color:#e8b84a;margin-top:6px}' +
 '  #tab-advisor .linklike{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;padding:0 2px;text-decoration:underline}' +
 '  #tab-advisor .av-share{display:flex;gap:10px;align-items:center;margin-top:8px}' +
-// Sticky recapture bar (only while actively sharing — the one-time "pick a
-// window" button doesn't need this): without it, re-reading each turn means
-// scrolling all the way down past the results/window to find the button,
-// then back up to see the newly-updated advice. Floats above the fold at
-// the bottom of the viewport instead.
-'  #tab-advisor .av-share.av-share-sticky{position:sticky;bottom:10px;z-index:30;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:8px 10px;box-shadow:0 4px 16px rgba(0,0,0,.35)}' +
 // Minimize toggle for the captured screenshot: the preview can eat a large
-// share of the column's height every turn, pushing the share bar (and thus
-// the next recapture) further down than it needs to be.
+// share of the column's height every turn, pushing everything below it
+// further down than it needs to be.
 '  #tab-advisor .av-drop.av-min .av-preview{max-height:56px;object-fit:cover;object-position:top;cursor:pointer}' +
 '  #tab-advisor .av-drop .av-min-btn{display:none;font-size:11px;color:var(--dim);background:none;border:0;cursor:pointer;text-decoration:underline;padding:0;margin-top:4px}' +
 '  #tab-advisor .av-drop.has-img .av-min-btn{display:inline-block}' +
@@ -610,34 +604,46 @@
 
   // ---------------- live screen share (one click per turn, no screenshotting) ----------------
   // getDisplayMedia needs a user gesture and a secure context (https / localhost).
-  // First click opens the browser's share picker (pick the Lost Ark window/monitor);
-  // after that each "Read screen" click grabs ONE frame and parses it locally; the
-  // frame + parse + your corrections are also sent to the collection endpoint to
-  // improve the parser (see the note under the drop zone).
+  // First click ("Share game screen" in av-share) opens the browser's picker (pick
+  // the Lost Ark window/monitor). After that, av-go (up in the top row, see
+  // updateGoButton) BECOMES the per-turn action: it grabs one frame, parses it
+  // locally, and auto-advises — one press instead of "read" then "get advice" as
+  // two separate clicks. The frame + parse + your corrections are also sent to the
+  // collection endpoint to improve the parser (see the note under the drop zone).
   var shareStream = null, shareVideo = null;
   function shareSupported() {
     return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+  }
+  // While actively sharing, the "Read screen now" action rides the SAME button as
+  // "Get advice" (av-go, up in the top row) instead of a second button down here —
+  // grabAndParse() already ends in an auto-triggered runAdvice(), so one press does
+  // both. Keeps this bar to just the one-time picker (not sharing yet) or a "stop
+  // sharing" exit (sharing), and means av-go never needs a scroll to reach.
+  function updateGoButton() {
+    var go = $("av-go");
+    if (!go) return;
+    if (shareStream) {
+      go.textContent = "📷 Read screen now";
+      go.title = "Grabs the current frame, reads it, and shows advice";
+    } else {
+      go.textContent = "Get advice";
+      go.title = "";
+    }
   }
   function renderShareBar() {
     var bar = $("av-share");
     if (!bar) return;
     bar.innerHTML = "";
-    // Sticky only while actively sharing: that's the state where the button gets
-    // clicked once per turn and is worth always having in reach without scrolling.
-    // The one-time "pick a window" button doesn't need to float.
-    bar.classList.toggle("av-share-sticky", !!shareStream);
+    updateGoButton();
     if (!shareSupported()) return;
     if (!shareStream) {
       var b = el("button", { class: "mbtn", type: "button",
-        title: "Pick the Lost Ark window once; then one click reads each turn" }, "🖥 Share game screen &amp; read");
+        title: "Pick the Lost Ark window once; then Get advice reads + advises each turn" }, "🖥 Share game screen");
       b.addEventListener("click", startShare);
       bar.appendChild(b);
     } else {
-      var read = el("button", { class: "mbtn active", type: "button" }, "📷 Read screen now");
-      read.addEventListener("click", grabAndParse);
       var stop = el("button", { class: "linklike", type: "button" }, "stop sharing");
       stop.addEventListener("click", stopShare);
-      bar.appendChild(read);
       bar.appendChild(stop);
     }
   }
@@ -972,7 +978,11 @@
       }
     });
 
-    $("av-go").addEventListener("click", runAdvice);
+    // While sharing, av-go IS the "read + advise" button (grabAndParse ends in an
+    // auto runAdvice()); otherwise it runs advice on whatever's in the window now.
+    $("av-go").addEventListener("click", function () {
+      if (shareStream) grabAndParse(); else runAdvice();
+    });
 
     window.addEventListener("beforeunload", function () {
       var t = window.ocrGetEngine && window.ocrGetEngine("structural");
