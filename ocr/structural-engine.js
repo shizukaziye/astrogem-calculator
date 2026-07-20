@@ -749,6 +749,42 @@
     }
 
     tmark("pill");
+    // ---- reset pill ("Reset (x/1)": x ∈ {0,1}) ----
+    // Plain grey text on a dim button, not the reroll pill's colored-diamond icon,
+    // so it needs none of that pill's Charge/dim-state machinery: one masked read
+    // plus a dilated rescue for low-contrast captures is enough. x is the ONLY
+    // free variable (denominator is always 1), so false reads are cheap to reject
+    // with a tight regex. Feeds dp.js's Reset gating (model/dp.js topLevelAdvice):
+    // resetsRemaining===0 means the reset was already spent and must not be
+    // recommended; unparsed (undefined) keeps the historical "assume unused"
+    // default so callers that don't read this field are unaffected.
+    // Measured 2026-07-20 on both real "already used" samples: the button's grey
+    // text tops out at v≈0.5-0.6, under dimBtnWhite's v>0.6 floor, so the plain
+    // read misses it on both — same shape as the reroll pill's dim states. Try the
+    // tight/bright predicate first anyway (cheap, and may catch a brighter
+    // available "(1/1)" state no sample has shown yet), then fall back to a wider
+    // dim predicate through the dilated rescue. The ROI itself was tightened to
+    // exclude the ornate border glow directly above the button — at the original
+    // (taller) crop that glow's highlight streaks passed the dim predicate as
+    // false-positive glyphs and broke PSM-7's single-line read entirely.
+    var resetRect = geo && geo.resetPill
+      ? rectAround(geo.resetPill, gap * 0.85, gap * 0.11)
+      : L.roiRect(panel, "resetPill");
+    var resetRead = await maskedOcr(resetRect, dimBtnWhite, { whitelist: "Reset()01/ ", psm: 7 });
+    var resetM = normText(resetRead.text).match(/reset\D{0,4}([01])\s*[:\/l|.]\s*1\b/i);
+    if (!resetM) {
+      var resetDimPred = function (r, g, b) { var c = L.hsv(r, g, b); return c.s < 0.4 && c.v > 0.30; };
+      var resetSub = L.crop(raster, resetRect);
+      var resetR2 = await dilatedOcr(resetSub, resetDimPred, { scale: 3, whitelist: "Reset()01/ ", psm: 7 });
+      resetM = normText(resetR2.text).match(/reset\D{0,4}([01])\s*[:\/l|.]\s*1\b/i);
+    }
+    if (resetM) {
+      out.state.resetsRemaining = parseInt(resetM[1], 10);
+      confidence.state.resetsRemaining = 0.85;
+    } else {
+      confidence.state.resetsRemaining = 0.2;
+    }
+    tmark("resetPill");
     // ---- gem name → gemType + baseCost (suffix table) ----
     // Fixed band primary (best measured); if it produces neither the type keyword nor
     // a suffix, retry on a LOCATED line — the name is the only long SATURATED text

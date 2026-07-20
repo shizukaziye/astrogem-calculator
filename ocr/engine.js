@@ -326,10 +326,18 @@
     mult = mult <= -50 ? -100 : (mult >= 50 ? 100 : 0);
     var processCost = Math.max(0, Math.round(COSTS.processBase * (1 + mult / 100)));
 
+    // ---- resets remaining (the "Reset (x/1)" counter, x ∈ {0,1}) ----
+    // Unparsed stays undefined: dp.js treats that as "assume unused" (the
+    // historical default, so callers that never read this field are unaffected).
+    // Only a confident 0 (the button read as spent) disables the Reset action.
+    var resetsRemaining = (sIn.resetsRemaining === 0 || sIn.resetsRemaining === 1)
+      ? sIn.resetsRemaining : undefined;
+
     var state = {
       currentTurn: currentTurn,
       maxTurns: maxTurns,
       rerollsRemaining: rerollsRemaining,
+      resetsRemaining: resetsRemaining,
       processCost: processCost,
       processCostMultiplier: mult,
       totalGoldSpent: Math.max(0, parseInt(sIn.totalGoldSpent, 10) || 0),
@@ -374,6 +382,7 @@
             sIn.rerollsChargeSeen || sIn.rerollsChargeSpent || currentTurn === 1, false);
           return rerollAmbiguous ? Math.min(base, 0.4) : base;
         })(),
+        resetsRemaining: fieldConf(sconf.resetsRemaining, sIn.resetsRemaining != null, false),
         processCostMultiplier: fieldConf(sconf.processCostMultiplier,
           sIn.processCostMultiplier != null || sIn.processCost != null, false)
       },

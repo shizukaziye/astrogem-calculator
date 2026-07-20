@@ -275,7 +275,15 @@
       nodeE: { x: cx + 0.70 * gap, y: cy },
       outIconY: iconY,
       outIconXs: [cx - 1.39 * gap, cx - 0.47 * gap, cx + 0.46 * gap, cx + 1.39 * gap],
-      rerollPill: { x: cx + 2.30 * gap, y: anchors.gold.y + 0.956 * gap }
+      rerollPill: { x: cx + 2.30 * gap, y: anchors.gold.y + 0.956 * gap },
+      // "Reset (x/1)" button, centered above the N (Willpower/red) node. Measured
+      // 2026-07-20 on 2 real samples, then trimmed tighter (2026-07-20 follow-up):
+      // the original 0.30·gap-tall box included the ornate border glow directly
+      // above the button, whose highlight streaks pass the dim-text mask as
+      // false-positive glyphs and wreck PSM-7's single-line read. Tightened to
+      // just the button band: center y = red.y - 0.756·gap, half-extents
+      // 0.85·gap wide / 0.11·gap tall.
+      resetPill: { x: cx, y: anchors.red.y - 0.756 * gap }
     };
   }
 
@@ -327,6 +335,11 @@
       { x: 0.640, y: 0.700, w: 0.215, h: 0.075 }
     ],
     rerollPill:{ x: 0.845, y: 0.705, w: 0.135, h: 0.040 },
+    // "Reset (x/1)" button between the gem-name/points block and the wheel.
+    // Measured 2026-07-20, then trimmed to exclude the border-glow band directly
+    // above the button (see wheelGeometry's resetPill for why): x0=0.342,
+    // y0=0.264, w=0.307, h=0.035.
+    resetPill: { x: 0.342, y: 0.264, w: 0.307, h: 0.035 },
     costRow:   { x: 0.10, y: 0.800, w: 0.80, h: 0.042 },
     balanceRow:{ x: 0.10, y: 0.842, w: 0.80, h: 0.042 },
     processBtn:{ x: 0.50, y: 0.925, w: 0.46, h: 0.055 }
