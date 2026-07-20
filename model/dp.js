@@ -695,13 +695,18 @@
     // complete, not just the last turn" — if stopping is the right call, paying
     // COSTS.reset to start the cut over is ALWAYS the live alternative, whatever
     // the turn. Reset (1/1) returns the gem to a fresh unprocessed state (all
-    // levels 1, full turns + rerolls, cost multiplier cleared). NOTE: the parser
-    // does not yet read the Reset (x/1) counter, so this assumes the gem's reset
-    // is unused — the UI disclaimer covers it.
+    // levels 1, full turns + rerolls, cost multiplier cleared).
+    // resetsRemaining now comes from the parsed Reset (x/1) counter (structural
+    // engine, ocr/structural-engine.js resetPill read) or manual entry; when it
+    // reads 0 the reset has already been spent and MUST NOT be recommended, even
+    // though the button's greyed-out state alone can't be read from the DP side.
+    // undefined/null (unparsed) still defaults to "assume unused" for backward
+    // compatibility with callers that don't pass this field at all.
     var completeWouldWin = !excludeComplete &&
       completeNet >= processNet && completeNet >= rerollNet;
+    var resetUsed = state.resetsRemaining === 0;
     var resetNet = -Infinity, resetScore = NaN, resetAbove = 0, resetCost_ = 0;
-    if ((t === 1 || completeWouldWin) && A.COSTS && A.COSTS.reset != null) {
+    if ((t === 1 || completeWouldWin) && A.COSTS && A.COSTS.reset != null && !resetUsed) {
       var freshCfg = {
         baseCost: config.baseCost, gemType: config.gemType,
         willpowerLevel: 1, orderLevel: 1,
@@ -732,7 +737,7 @@
     // side-effect pair the reset could land on, so the user can compare before
     // pressing the in-game button. The class-keyed memo makes same-class pairs free.
     var resetCombos = null;
-    if (A.COSTS && A.COSTS.reset != null &&
+    if (A.COSTS && A.COSTS.reset != null && !resetUsed &&
         (t === 1 || completeWouldWin || (actions[0] && actions[0].name === "Complete"))) {
       var poolR = A.EFFECT_POOLS[config.baseCost] || [];
       var freshRr = freshRerollsFor(solver.maxTurns);
