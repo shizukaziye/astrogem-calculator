@@ -126,6 +126,18 @@
 '  #tab-advisor .av-warn{font-size:12px;color:#e8b84a;margin-top:6px}' +
 '  #tab-advisor .linklike{background:none;border:0;color:var(--accent);cursor:pointer;font-size:12px;padding:0 2px;text-decoration:underline}' +
 '  #tab-advisor .av-share{display:flex;gap:10px;align-items:center;margin-top:8px}' +
+// Sticky recapture bar (only while actively sharing — the one-time "pick a
+// window" button doesn't need this): without it, re-reading each turn means
+// scrolling all the way down past the results/window to find the button,
+// then back up to see the newly-updated advice. Floats above the fold at
+// the bottom of the viewport instead.
+'  #tab-advisor .av-share.av-share-sticky{position:sticky;bottom:10px;z-index:30;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:8px 10px;box-shadow:0 4px 16px rgba(0,0,0,.35)}' +
+// Minimize toggle for the captured screenshot: the preview can eat a large
+// share of the column's height every turn, pushing the share bar (and thus
+// the next recapture) further down than it needs to be.
+'  #tab-advisor .av-drop.av-min .av-preview{max-height:56px;object-fit:cover;object-position:top;cursor:pointer}' +
+'  #tab-advisor .av-drop .av-min-btn{display:none;font-size:11px;color:var(--dim);background:none;border:0;cursor:pointer;text-decoration:underline;padding:0;margin-top:4px}' +
+'  #tab-advisor .av-drop.has-img .av-min-btn{display:inline-block}' +
 '</style>' +
 // two balanced columns: LEFT = the cut (the lookalike window),
 // RIGHT = your economy (character/market), the verdict, then the screenshot intake.
@@ -155,6 +167,7 @@
 '      <span class="hint"><b>Drop, paste, or click</b> — a Processing screenshot prefills the window. Or just tap the fields.</span>' +
 '      <img id="av-preview" class="av-preview" alt="screenshot preview">' +
 '      <span class="cap">click, drop, or paste a new screenshot to replace</span>' +
+'      <button type="button" class="av-min-btn" id="av-min-btn">minimize preview</button>' +
 '      <input type="file" id="av-file" accept="image/*" style="display:none">' +
 '    </div>' +
 '    <div class="av-share" id="av-share"></div>' +
@@ -609,6 +622,10 @@
     var bar = $("av-share");
     if (!bar) return;
     bar.innerHTML = "";
+    // Sticky only while actively sharing: that's the state where the button gets
+    // clicked once per turn and is worth always having in reach without scrolling.
+    // The one-time "pick a window" button doesn't need to float.
+    bar.classList.toggle("av-share-sticky", !!shareStream);
     if (!shareSupported()) return;
     if (!shareStream) {
       var b = el("button", { class: "mbtn", type: "button",
@@ -915,6 +932,14 @@
     // drop zone + file + paste (the lookalike frame accepts drops too)
     var dz = $("av-drop");
     dz.addEventListener("click", function () { $("av-file").click(); });
+    // Minimize the captured preview so it doesn't push the recapture button (and
+    // everything below it) further down the column every turn. stopPropagation
+    // keeps this click from also bubbling into dz's own "click = open file picker".
+    $("av-min-btn").addEventListener("click", function (e) {
+      e.stopPropagation();
+      var min = dz.classList.toggle("av-min");
+      $("av-min-btn").textContent = min ? "show preview" : "minimize preview";
+    });
     dz.addEventListener("dragover", function (e) { e.preventDefault(); dz.classList.add("drag"); });
     dz.addEventListener("dragleave", function () { dz.classList.remove("drag"); });
     dz.addEventListener("drop", function (e) {
