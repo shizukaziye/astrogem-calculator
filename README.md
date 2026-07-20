@@ -4,8 +4,8 @@ A clean, from-scratch rebuild of the Lost Ark **astrogem-cutting** tool: a
 dependency-free, verified model core (JS with a Python mirror kept in lockstep)
 plus the full app — **Grader / Pipeline / Advisor / Leaderboard** tabs on a static
 site (GitHub Pages), backed by a small Cloudflare worker for character lookups.
-**Shipping is two independent steps**: pushing `main` deploys the site; the worker
-must be deployed separately (`worker/README-bible.md`).
+**Shipping is two separate steps**: pushing `main` deploys the site; you deploy the
+worker separately (`worker/README-bible.md`).
 
 ## What's here
 

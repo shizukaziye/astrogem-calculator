@@ -29,7 +29,7 @@ The **side-effect pool depends on base cost** (`EFFECT_POOLS`):
 
 For a **DPS** gem only three of these lines are damage: **Attack Power, Additional
 Damage, Boss Damage**. Brand Power / Ally Damage Enh. / Ally Attack Enh. are
-*support* lines and contribute **zero** to a DPS grade (and vice-versa for support).
+*support* lines and contribute **zero** to a DPS grade (and the other way round for support).
 
 The sum `willpower + order + effect1 + effect2` (each 1–5, so 4–20) also sets the
 finished-gem **tier**, which only matters for fusion fodder:
