@@ -1,0 +1,43 @@
+{
+  "_note": "Same frame as level4.webp (see its note) at the 2000x937 full-frame tier \u2014 Shizu's replicated 'green diamond Lv.4' bug (2026-07-21).",
+  "config": {
+    "baseCost": 8,
+    "gemType": "order",
+    "willpowerLevel": 1,
+    "orderLevel": 1,
+    "effect1": "Attack Power",
+    "effect1Level": 4,
+    "effect2": "Brand Power",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 4,
+    "maxTurns": 9,
+    "rerollsRemaining": 4,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    {
+      "type": "change_gold_cost",
+      "change": 100
+    },
+    {
+      "type": "raise_effect",
+      "target": "order",
+      "amount": 1
+    },
+    {
+      "type": "raise_effect",
+      "target": "effect2",
+      "amount": 4
+    },
+    {
+      "type": "raise_effect",
+      "target": "effect2",
+      "amount": 2
+    }
+  ]
+}

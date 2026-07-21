@@ -41,10 +41,11 @@ var tesseractMod = require(path.join(ROOT, "ocr", "tesseract-engine.js"));
 
 // ---- args ----
 function parseArgs(argv) {
-  var out = { engines: null, workerUrl: process.env.WORKER_URL || null, json: false, dump: false, gates: [] };
+  var out = { engines: null, workerUrl: process.env.WORKER_URL || null, json: false, dump: false, gates: [], only: null };
   argv.forEach(function (a) {
     var m;
     if ((m = a.match(/^--engines=(.+)$/))) out.engines = m[1].split(",").map(function (s) { return s.trim(); });
+    else if ((m = a.match(/^--only=(.+)$/))) out.only = m[1].split(",").map(function (s) { return s.trim().toLowerCase(); });
     else if ((m = a.match(/^--worker-url=(.+)$/))) out.workerUrl = m[1];
     else if (a === "--json") out.json = true;
     else if (a === "--dump") out.dump = true;
@@ -65,6 +66,11 @@ function findSamples() {
   if (!fs.existsSync(SAMPLES_DIR)) return [];
   var files = fs.readdirSync(SAMPLES_DIR);
   var imgs = files.filter(function (f) { return /\.(png|jpg|jpeg|webp)$/i.test(f); });
+  // --only=<substr,substr>: fast iteration on specific samples (name substring match)
+  if (ARGS.only) imgs = imgs.filter(function (f) {
+    var lf = f.toLowerCase();
+    return ARGS.only.some(function (s) { return lf.indexOf(s) !== -1; });
+  });
   var pairs = [];
   imgs.forEach(function (img) {
     var base = img.replace(/\.(png|jpg|jpeg|webp)$/i, "");

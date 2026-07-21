@@ -134,6 +134,24 @@ regressions; a flat 0.01 margin let a clean capture's gold agree-wrong at
 exactly 0.010). **The tribunal is the method**: every knob passes the full eval
 with the 55 clean captures untouched and zero silents, or it reverts.
 
+### 2.7 Outcome AMOUNT digits — the evidence-tiered ladder (2026-07-21)
+
+The chartreuse "Lv. N ▲"/"+N ▲" amounts got the same synthesis rescue after
+Shizu's replicated collect-tier failure (level4.webp: "+1" read +4 off the ▲,
+both "Lv. N" cells defaulted). Three traps, each with its own guard:
+the **▲ template-matches '4'** (solidity veto in `lastGoldDigit`: a wide box
+filled >0.45 is a solid blob, not a stroke glyph); the **▲ OCRs as a digit
+behind a legitimate '+' anchor** ("+ 4" — so a full-agreement synth at 5×
+margin may override OCR/cap reads, never template reads); and the **'L' of a
+garbled "Lv." OCRs as a bare '1'** (bare digits count only when they agree
+with the synth gradient-top). The synth pools W+E node refs — cross-domain, so
+the raw channel votes background, not glyph; the gradient channel transfers,
+and commits alone only at a 3× margin. Rung order is by evidence quality
+(template → anchored OCR → caption → bare+synth-agree → synth-alone), because
+the first ordering — synth before OCR — let a gm-0.031 grad-only '2' beat a
+clean OCR "lv.3" and go SILENT at 0.84: **synth-sourced amounts are conf-capped
+at 0.78, always flagged, never authoritative.**
+
 ## 3. The decision layer
 
 `model/dp.js` ranks four actions from the parsed state (advisor.js calls

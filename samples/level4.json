@@ -1,0 +1,43 @@
+{
+  "_note": "Shizu's replicated 'green diamond Lv.4' bug (2026-07-21). Order Astrogem: Stability (cost 8), W=Atk. Power Lv.4, E=Brand Power Lv.1, 7 points, turn 4/9 (Process 6/9), reroll pill 3/2 (stacked past denom), Reset 1/1, cost 900. This file = the site's own collect-tier panel crop (webp). Same frame as mJLklhw.jpeg (2000-wide full frame).",
+  "config": {
+    "baseCost": 8,
+    "gemType": "order",
+    "willpowerLevel": 1,
+    "orderLevel": 1,
+    "effect1": "Attack Power",
+    "effect1Level": 4,
+    "effect2": "Brand Power",
+    "effect2Level": 1
+  },
+  "state": {
+    "currentTurn": 4,
+    "maxTurns": 9,
+    "rerollsRemaining": 4,
+    "processCost": 900,
+    "processCostMultiplier": 0,
+    "totalGoldSpent": 0,
+    "rosterBound": false
+  },
+  "outcomes": [
+    {
+      "type": "change_gold_cost",
+      "change": 100
+    },
+    {
+      "type": "raise_effect",
+      "target": "order",
+      "amount": 1
+    },
+    {
+      "type": "raise_effect",
+      "target": "effect2",
+      "amount": 4
+    },
+    {
+      "type": "raise_effect",
+      "target": "effect2",
+      "amount": 2
+    }
+  ]
+}

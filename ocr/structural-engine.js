@@ -308,6 +308,15 @@
     // Best confidently-matched GOLD digit (g1..g5) in a line. BEST-of, not last-of:
     // a gold frame sliver trailing the line segments as its own box and matches "4"
     // (diagonals do) — the true digit outscores it.
+    // Fraction of mask ON-pixels inside a glyph box (chromaMask: 0 = text pixel).
+    function maskFill(mask, box) {
+      if (!mask || !box || !box.w || !box.h) return 0;
+      var on = 0;
+      for (var yy = box.y; yy < box.y + box.h; yy++)
+        for (var xx = box.x; xx < box.x + box.w; xx++)
+          if (mask.data[(yy * mask.width + xx) * 4] === 0) on++;
+      return on / (box.w * box.h);
+    }
     function lastGoldDigit(rect, pred, maxVal) {
       var tl = templateGlyphs(rect, pred);
       if (!tl) return null;
@@ -317,6 +326,13 @@
         if (t.ch && /^[1-5]$/.test(t.ch) && t.score >= 0.78 && t.margin >= 0.03) {
           var v = parseInt(t.ch, 10);
           if (maxVal && v > maxVal) continue;
+          // SOLIDITY VETO (2026-07-21, level4.webp): at collect-crop blur the
+          // ▲/▼ bleeds into the amount mask (arrow hue 75-145 overlaps
+          // chartreuse 55-95) and a solid triangle template-matches '4'.
+          // Digits are STROKES (fill ≲0.40 of their own wide box); a solid
+          // wide blob is an arrow, whatever glyph it matched. Narrow '1'
+          // boxes are exempt — a bar legitimately fills its shrink-wrapped box.
+          if (t.box.w >= t.box.h * 0.55 && maskFill(tl.mask, t.box) > 0.45) continue;
           if (!best || t.score >= best.score) best = { score: t.score, margin: t.margin, v: v };
         }
       }
@@ -1026,6 +1042,88 @@
       if (ra[0].v !== rg[0].v) return null;
       if (gm < (kind === "S" ? 0.015 : 0.01)) return null;
       return { value: ra[0].v, conf: 0.55, gm: gm };
+    }
+
+    // ANALYSIS-BY-SYNTHESIS for outcome AMOUNT digits (2026-07-21, Shizu's
+    // replicated "green diamond Lv.4" report): the collect-tier crop blurs the
+    // chartreuse "Lv. N ▲"/"+N ▲" line past the template+OCR ladder — the same
+    // degradation class the wheel levels hit (v75), same cure. The amount lines
+    // use the SAME glyph art as the W/E "Lv. N" node lines, so their ref patches
+    // transfer: pool W+E exemplars per class (1-4 — the legal amount range),
+    // scan the line's right half (the digit sits just left of the arrow), and
+    // commit ONLY on raw+gradient ranking agreement with margin. Greyscale
+    // patches make it color-blind — chartreuse raises and red lowers both read.
+    function synthAmountDigit(amtLine) {
+      var tv = _synthVariants();
+      if (!tv) return null;
+      var pool = {}, kk, cls;
+      for (kk = 0; kk < 2; kk++) {
+        var t = tv[kk === 0 ? "W" : "E"] || {};
+        for (cls in t) {
+          var v = parseInt(cls, 10);
+          if (!(v >= 1 && v <= 4)) continue;
+          (pool[cls] = pool[cls] || []).push.apply(pool[cls], t[cls]);
+        }
+      }
+      if (!Object.keys(pool).length) return null;
+      var cy = amtLine.y + amtLine.h / 2;
+      // Stop the scan LEFT of a visible ▲/▼ — arrow patches poison the class
+      // argmax (mJLklhw: a clean '4' ranked '2' when the scan covered the arrow).
+      // The located line INCLUDES the arrow on some tiers and EXCLUDES it on
+      // others (level4 vs mJLklhw — assumed geometry burned once already), so
+      // the clip anchors on the arrow's MEASURED centroid, not the line end.
+      var endBox = { x: amtLine.x + amtLine.w - gap * 0.18, y: amtLine.y - amtLine.h * 0.5, w: gap * 0.30, h: amtLine.h * 2 };
+      var endCrop = L.crop(raster, endBox);
+      var eUp = L.colorClusterStats(endCrop, function (r2, g2, b2) { var c2 = L.hsv(r2, g2, b2); return c2.h >= 75 && c2.h < 145 && c2.s > 0.35 && c2.v > 0.45; });
+      var eDn = L.colorClusterStats(endCrop, function (r2, g2, b2) { var c2 = L.hsv(r2, g2, b2); return (c2.h < 20 || c2.h >= 345) && c2.s > 0.45 && c2.v > 0.4; });
+      var arrow = (eUp.count >= 8 && eUp.density > 0.25) ? eUp : (eDn.count >= 8 && eDn.density > 0.25) ? eDn : null;
+      var x1 = amtLine.x + amtLine.w - gap * 0.05;
+      if (arrow) x1 = Math.min(x1, endBox.x + arrow.cx - gap * 0.09);
+      var x0 = Math.max(amtLine.x, x1 - gap * 0.24);
+      var perRaw = {}, perGrad = {}, i;
+      for (var cxs = x0; cxs <= x1; cxs += gap * 0.0075) {
+        for (var dy = -0.03; dy <= 0.0301; dy += 0.0075) {
+          var op = _synthPatch(cxs, cy + dy * gap);
+          var oraw = _synthZnorm(op), ograd = _synthGrad(op);
+          for (cls in pool) {
+            var arr = pool[cls];
+            for (i = 0; i < arr.length; i++) {
+              var sr = _synthCos(oraw, arr[i].raw);
+              if (!(cls in perRaw) || sr > perRaw[cls]) perRaw[cls] = sr;
+              var sg = _synthCos(ograd, arr[i].grad);
+              if (!(cls in perGrad) || sg > perGrad[cls]) perGrad[cls] = sg;
+            }
+          }
+        }
+      }
+      function rankAm(per) {
+        return Object.keys(per).map(function (v2) { return { v: parseInt(v2, 10), s: per[v2] }; })
+          .sort(function (a, b) { return b.s - a.s; });
+      }
+      var ra = rankAm(perRaw), rg = rankAm(perGrad);
+      if (!ra.length || !rg.length) return null;
+      var gm = rg.length > 1 ? rg[0].s - rg[1].s : 1;
+      if (out._debug) (out._debug.amtSynthDet = out._debug.amtSynthDet || []).push({
+        line: { x: Math.round(amtLine.x), y: Math.round(amtLine.y), w: Math.round(amtLine.w), h: Math.round(amtLine.h) },
+        arrowCx: arrow ? Math.round(endBox.x + arrow.cx) : null,
+        span: [Math.round(x0), Math.round(x1)],
+        raw: ra.slice(0, 2).map(function (r3) { return r3.v + "@" + r3.s.toFixed(3); }).join(" "),
+        grad: rg.slice(0, 2).map(function (r3) { return r3.v + "@" + r3.s.toFixed(3); }).join(" "),
+        gm: Math.round(gm * 1000) / 1000
+      });
+      // Always report the gradient-top (the transferable channel) even on refusal —
+      // the bare-digit rung accepts a weak OCR digit only when it AGREES with it.
+      var res = { value: null, gm: gm, gradOnly: false, gradTop: rg[0].v, agree: ra[0].v === rg[0].v };
+      if (ra[0].v !== rg[0].v) {
+        // The refs are node-harvested; over an OUTCOME CELL's background the raw
+        // channel votes low-frequency background, not glyph (level4: raw said '1'
+        // while grad said the true '2' at gm 0.12). Gradient is the transferable
+        // channel — commit on grad ALONE only at a 3× margin (asymmetric trust).
+        if (gm >= 0.03) { res.value = rg[0].v; res.gradOnly = true; }
+        return res;
+      }
+      if (gm >= 0.01) res.value = ra[0].v;
+      return res;
     }
 
     // ---- name-band synthesis (same method, 6-class, wide patches) ----
@@ -2016,7 +2114,17 @@
         // amount ("Lv. 2" / "+1") is the chartreuse line at the caption's bottom —
         // the name above it is white, so a chroma line-locate isolates it even over
         // the nebula art and the icon face behind the text.
+        // Amount evidence ladder (2026-07-21, the level4/mJLklhw pair): rungs are
+        // TIERED BY EVIDENCE QUALITY, and every weak rung has a second channel —
+        //   tm   (template, solidity-vetoed)         → trusted outright
+        //   ocr/cap (prefix-anchored regex)          → synth can override ONLY on
+        //        full-agreement at 5× margin (the ▲ OCRs as a digit BEHIND a real
+        //        '+' anchor: level4's "+1 ▲" read "+ 4")
+        //   bare digit                               → accepted only when it agrees
+        //        with the synth gradient-top (two weak channels)
+        //   synth alone (agreement-gated)            → fills, conf-capped ≤0.78
         var amt = null, dirUp = false, dirDown = false;
+        var amtSrc = null, bareCand = null, amtFromSynth = false;
         var capCx = iconXs[oi];
         var amtLine = L.findMaskedTextLine(raster, capRect, L.isAmountText, {
           maxRowFill: 0.7, minH: Math.max(4, Math.round(gap * 0.05)), maxH: Math.round(gap * 0.2), minRowPx: 3,
@@ -2031,13 +2139,20 @@
           var amtRectX = { x: amtLine.x, y: amtLine.y - agrow, w: amtLine.w, h: amtLine.h + agrow * 2 };
           // template match first (amounts use the same glyph art as the wheel digits)
           var amTm = lastGoldDigit(amtRectX, L.isAmountText, 4);
-          if (amTm) amt = amTm.value;
+          if (amTm) { amt = amTm.value; amtSrc = "tm"; }
           if (amt == null) {
             var amtRead = await maskedOcr(amtRectX, L.isAmountText, { whitelist: "Lv.+12345 ", psm: 7 });
-            // prefix-anchored FIRST — the ▲ hue can bleed into the chartreuse window
-            // and OCR the triangle as a trailing digit ("Lv. 2 ▲" → "Lv. 24")
-            var am = amtRead.text.match(/(?:lv\.?|\+)\s*([1-4])/i) || amtRead.text.match(/([1-4])/);
-            if (am) amt = parseInt(am[1], 10);
+            // prefix-anchored — a bare digit here is a trap ('L' of a garbled
+            // "Lv." OCRs as '1' at collect-crop blur); it becomes only a weak
+            // CANDIDATE that must match the synth gradient-top to count
+            var am = amtRead.text.match(/(?:lv\.?|\+)\s*([1-4])/i);
+            if (am) { amt = parseInt(am[1], 10); amtSrc = "ocr"; }
+            else {
+              var bm = amtRead.text.match(/([1-4])(?![\s\S]*[1-4])/);   // last bare digit
+              if (bm) bareCand = parseInt(bm[1], 10);
+            }
+            if (out._debug) (out._debug.amtOcr = out._debug.amtOcr || [])[oi] =
+              "'" + amtRead.text.replace(/\n/g, "|").slice(0, 24) + "' -> " + (am ? am[1] : "null") + (bareCand != null ? " bare=" + bareCand : "");
           }
           // ▲/▼ sits at the line's right end; classify green-vs-red in that box only.
           // (Whole-cell clustering is hopeless: the outcome ICON — red willpower, green
@@ -2088,19 +2203,47 @@
             // template first: the red lower digits are the same glyph art as the gold
             // ones (the chroma mask makes them identical binary shapes)
             var redTm = lastGoldDigit(redRectX, L.isRedAmountText, 4);
-            if (redTm) amt = redTm.value;
+            if (redTm) { amt = redTm.value; amtSrc = "tm"; }
             if (amt == null) {
               var redRead = await maskedOcr(redRectX, L.isRedAmountText, { whitelist: "Lv.-12345 ", psm: 7 });
-              var rm2 = redRead.text.match(/(?:lv\.?|-|−)\s*([1-4])/i) || redRead.text.match(/([1-4])/);
-              if (rm2) amt = parseInt(rm2[1], 10);
+              // prefix-anchored; bare digits are weak candidates (see raise path)
+              var rm2 = redRead.text.match(/(?:lv\.?|-|−)\s*([1-4])/i);
+              if (rm2) { amt = parseInt(rm2[1], 10); amtSrc = "ocr"; }
+              else {
+                var rbm = redRead.text.match(/([1-4])(?![\s\S]*[1-4])/);
+                if (rbm) bareCand = parseInt(rbm[1], 10);
+              }
             }
             dirDown = true; dirUp = false;
           }
         }
         if (amt == null) {
-          var amtM = cap.match(/(?:lv\.?\s*|\+\s*)([1-4])/) || cap.match(/([1-4])\s*$/);
-          if (amtM) amt = parseInt(amtM[1], 10);
+          // prefix-anchored only — the caption's trailing garbage ends in stray
+          // digits at collect-crop blur ("…1 7 4" from "+1 ▲" + sparkle)
+          var amtM = cap.match(/(?:lv\.?\s*|\+\s*)([1-4])/);
+          if (amtM) { amt = parseInt(amtM[1], 10); amtSrc = "cap"; }
         }
+        // ---- synth consult (skipped only after a trusted template commit) ----
+        var lnForSynth = amtLine || redLine;
+        var amSy = (amtSrc !== "tm" && lnForSynth) ? synthAmountDigit(lnForSynth) : null;
+        if (amSy && amt != null && amSy.value != null && !amSy.gradOnly && amSy.gm >= 0.05 && amSy.value !== amt) {
+          // an anchored-regex read can still be the ▲ wearing a legitimate anchor
+          // (level4's "+1 ▲" OCR'd "+ 4") — a FULL-AGREE synth at 5× margin
+          // outranks OCR/cap rungs. gradOnly synth never overrides anything.
+          amt = amSy.value; amtFromSynth = true; amtSrc = "synth-override";
+        }
+        if (amt == null && bareCand != null && amSy && amSy.gradTop === bareCand) {
+          // two weak channels agreeing: a bare OCR digit + the synth gradient-top
+          // (even below its commit gate) — either alone is a trap, together usable
+          amt = bareCand; amtFromSynth = true; amtSrc = "bare+synth";
+        }
+        if (amt == null && amSy && amSy.value != null) {
+          // synth alone (agreement-gated or grad-only at 3× margin) fills the null
+          amt = amSy.value; amtFromSynth = true; amtSrc = "synth";
+        }
+        if (out._debug) (out._debug.amtSynth = out._debug.amtSynth || [])[oi] =
+          (amSy ? (amSy.value != null ? "synth " + amSy.value : "refuse(top " + amSy.gradTop + ")") + "@gm" + amSy.gm.toFixed(3) + (amSy.gradOnly ? " gradOnly" : "") : "n/a") +
+          " src=" + (amtSrc || "none");
         var hadAmt = amt != null;
         if (amt == null) amt = 1;
         // direction earns full confidence only with a STRONG signal: a located red
@@ -2122,6 +2265,9 @@
         var type = dirDown && !dirUp ? "lower_effect" : "raise_effect";
         o = { type: type, target: target, amount: amt };
         oconf += (hadAmt ? 0.55 : 0.25) + (strongDir ? 0.3 : (dirUp || dirDown) ? 0.15 : 0.05);
+        // a synth-sourced amount NEVER reaches the unflagged zone — the rescue is
+        // user/verifier-checkable, not silently authoritative (silent-error class)
+        if (amtFromSynth) oconf = Math.min(oconf, 0.78);
         // SAFETY: on order/points/willpower the direction arrow renders in the icon's
         // OWN hue family (a red raise ▲ on the gold order icon), so the color test is
         // unreliable there — a wrong direction must never be CONFIDENT. Require a clear
