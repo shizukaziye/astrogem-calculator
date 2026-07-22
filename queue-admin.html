@@ -27,8 +27,6 @@
   th,td{text-align:left;padding:7px 16px;border-bottom:1px solid var(--line);font-size:13px}
   th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase}
   tr:last-child td{border-bottom:0}
-  .tier-premium{color:var(--warn);font-weight:700}
-  .tier-free{color:var(--dim)}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);margin-right:6px;vertical-align:middle}
   .dot.stale{background:var(--warn)} .dot.off{background:var(--bad)}
   .muted{color:var(--dim)} .good{color:var(--good)} .warn{color:var(--warn)} .bad{color:var(--bad)}
@@ -130,9 +128,7 @@
     var modeDetail = mode === "run" ? (d.perMin + "/min") : (mode === "probe" ? "probing · auto-resumes" : "frozen");
     curMode = mode; curRate = d.perMin;                       // feed the always-on status line
     $("cards").innerHTML =
-      card("Free backlog", num(q.free)) +
-      card("Premium", num(q.premium)) +
-      card("Total queued", num(q.total) + (q.total ? ' <small>&#8776;'+clearMin+' min to clear</small>' : '')) +
+      card("Queued", num(q.total) + (q.total ? ' <small>&#8776;'+clearMin+' min to clear</small>' : '')) +
       card("Drain", '<span class="'+modeCls+'">'+mode.toUpperCase()+'</span> <small>'+modeDetail+'</small>') +
       card("Last bible pull", '<span class="'+drainCls+'">'+fmtAgo(j.lastWriteMs)+'</span>') +
       card("Cached this month", num(u.count) + ' <small>/ '+num(u.budget)+'</small>');
@@ -145,10 +141,9 @@
       $("qbody").innerHTML = '<p class="muted" style="padding:16px;margin:0">Queue is empty — all caught up. &#127881;</p>';
     } else {
       var rows = list.map(function(x,i){
-        var tier = x.tier === "premium" ? "premium" : "free";
-        return '<tr><td class="muted">'+(i+1)+'</td><td class="tier-'+tier+'">'+(tier==="premium"?"&#9733; priority":"free")+'</td><td>'+esc(x.region)+'</td><td>'+esc(x.name)+'</td><td class="muted">'+fmtWait(x.waitedS)+'</td></tr>';
+        return '<tr><td class="muted">'+(i+1)+'</td><td>'+esc(x.region)+'</td><td>'+esc(x.name)+'</td><td class="muted">'+fmtWait(x.waitedS)+'</td></tr>';
       }).join("");
-      $("qbody").innerHTML = '<table><thead><tr><th>#</th><th>Tier</th><th>Region</th><th>Character</th><th>Waited</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      $("qbody").innerHTML = '<table><thead><tr><th>#</th><th>Region</th><th>Character</th><th>Waited</th></tr></thead><tbody>'+rows+'</tbody></table>';
     }
     renderErrors(j.drainLog);
     renderDrainHistory(j.drainLog);
