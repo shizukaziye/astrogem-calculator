@@ -134,7 +134,7 @@
       card("Premium", num(q.premium)) +
       card("Total queued", num(q.total) + (q.total ? ' <small>&#8776;'+clearMin+' min to clear</small>' : '')) +
       card("Drain", '<span class="'+modeCls+'">'+mode.toUpperCase()+'</span> <small>'+modeDetail+'</small>') +
-      card("Last drain", '<span class="'+drainCls+'">'+fmtAgo(j.lastWriteMs)+'</span>') +
+      card("Last bible pull", '<span class="'+drainCls+'">'+fmtAgo(j.lastWriteMs)+'</span>') +
       card("Cached this month", num(u.count) + ' <small>/ '+num(u.budget)+'</small>');
     $("note").textContent = q.total
       ? "Clear estimate assumes no new lookups — the drain ("+d.perMin+"/min) is intentionally gentle, so a backlog only shrinks when traffic dips below it."

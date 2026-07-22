@@ -230,7 +230,7 @@ const SNAPSHOT_GZ2_KEY = "lb:snapshot:gz2";  // the SAME list in compact format 
                                              // v1 stays alongside for stale-cached clients; both rebuilt together.
 const DIRTY_PREFIX = "lb:dirty:";            // #3: per-character "changed since last snapshot" marker — the cron merges only these instead of re-reading every character.
 const SNAPSHOT_DIRTY_TTL_S = 7 * 24 * 3600;  // a dirty marker self-expires after 7 days (safety net; the rebuild normally clears it).
-const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent character write (plain overwrite, race-free).
+const LASTWRITE_KEY = "lb:lastwrite";        // ms timestamp of the most recent REAL lostark.bible pull (drain, probe, kick, or direct lookup). Bookmarklet imports do NOT bump it — the admin reads this as "last successful bible pull", so a user-supplied import must not masquerade as one.
 const BUILTAT_KEY = "lb:builtat";            // ms timestamp the snapshot was last rebuilt by the cron.
 const QP = "q:p:";                           // premium lookup-queue key prefix (region+name ride in KV metadata).
 const QF = "q:f:";                           // free lookup-queue key prefix.
@@ -1179,7 +1179,9 @@ async function handleSubmit(env, request, ip) {
   try {
     await env.CHARS.put(key, JSON.stringify(record));
     await markDirty(env, key);                                   // enter the leaderboard snapshot on the next rebuild
-    await env.CHARS.put(LASTWRITE_KEY, String(Date.now()));
+    // NOTE: do NOT bump LASTWRITE_KEY here. That stamp is the admin's "last real lostark.bible
+    // pull" signal — an import is user-supplied, not a Worker fetch from lostark.bible, so counting
+    // it there would make a fake/non-scraped character look like a successful drain.
     await env.CHARS.delete(NOTFOUND_PREFIX + key).catch(function () {}); // a previously-"not found" name is now known
     await env.CHARS.delete(QF + key).catch(function () {});             // clear any pending scrape for it
     await env.CHARS.delete(QP + key).catch(function () {});
