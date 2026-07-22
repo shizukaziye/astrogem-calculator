@@ -280,7 +280,7 @@
   // Worker response's cached / pulledAt fields.
   function cacheNoteHtml(data) {
     if (!data || data.cached == null) return "";
-    var txt = data.source === "import" ? "Imported"
+    var txt = data.source === "import" ? ("Imported" + (ageLabel(data.pulledAt) ? " " + esc(ageLabel(data.pulledAt)) : ""))
       : data.cached ? ("Cached &middot; pulled " + esc(ageLabel(data.pulledAt)))
       : "Freshly pulled";
     return ' <span class="gr-cache' + (data.cached ? "" : " fresh") + '">' + txt + '</span>';
