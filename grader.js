@@ -351,8 +351,13 @@
 '  #tab-grader .gr-rb-dim{color:var(--dim)}' +
 '  #tab-grader .gr-rb-spin{display:inline-block;animation:gr-rb-spin 1.1s linear infinite}' +
 '  @keyframes gr-rb-spin{to{transform:rotate(360deg)}}' +
-'  #tab-grader .gr-freenote .gr-unlock{color:var(--axis,var(--accent));cursor:pointer;white-space:nowrap}' +
-'  #tab-grader .gr-freenote .gr-unlock:hover{text-decoration:underline}' +
+'  #tab-grader .gr-bm-steps{margin:12px 0 16px;padding-left:20px;color:var(--dim);font-size:13px;line-height:1.7}' +
+'  #tab-grader .gr-bm-steps b{color:var(--text)}' +
+'  #tab-grader .gr-bm-slots{display:flex;gap:12px;flex-wrap:wrap;margin:6px 0 4px}' +
+'  #tab-grader .gr-bm-item{flex:1 1 240px;min-width:0}' +
+'  #tab-grader .gr-bm-btn{display:block;text-align:center;padding:12px 14px;border-radius:10px;background:var(--axis,var(--accent));color:#0b0b12;font-weight:800;font-size:14px;text-decoration:none;cursor:grab;border:1px solid rgba(255,255,255,.14)}' +
+'  #tab-grader .gr-bm-btn:active{cursor:grabbing}' +
+'  #tab-grader .gr-bm-sub{margin-top:6px;font-size:11px;color:var(--dim);text-align:center;line-height:1.4}' +
 '  @media(max-width:520px){#tab-grader .gr-pullctl .fld-name{flex:1 1 160px;width:auto}}' +
 // DPS / Support grading toggle (two pills) — sits above the loadout, near the header.
 '  #tab-grader .gr-axis{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}' +
@@ -533,6 +538,7 @@
 '    <div class="gr-modes">' +
 '      <button class="mbtn active" id="gr-mode-pull" type="button">Pull from lostark.bible</button>' +
 '      <button class="mbtn" id="gr-mode-custom" type="button">Custom input</button>' +
+'      <button class="mbtn" id="gr-mode-bookmarklet" type="button">Bookmarklet</button>' +
 '    </div>' +
 
 // --- custom mode ---
@@ -568,6 +574,18 @@
 '        </div>' +
 '        <div class="gr-pullright"><div class="gr-favs" id="gr-favs"></div></div>' +
 '      </div>' +
+'    </div>' +
+
+// --- bookmarklet mode: grab a loadout off lostark.bible in the user's OWN browser (no server scrape) ---
+'    <div class="gr-modebody" id="gr-body-bookmarklet" style="display:none">' +
+'      <p class="note" style="margin-top:0">lostark.bible blocks our server from reading character pages &mdash; but <b>your own browser</b> can. This bookmarklet grabs the loadout straight off a lostark.bible page you have open (no server scraping) and grades it here. It can also add the character to the shared Leaderboard.</p>' +
+'      <ol class="gr-bm-steps">' +
+'        <li><b>Drag</b> one of the buttons below up to your bookmarks bar (don&rsquo;t click it here).</li>' +
+'        <li>Open any character page on <b>lostark.bible</b> &mdash; the page showing their Ark Grid gems.</li>' +
+'        <li><b>Click the bookmark.</b> It reads the loadout and jumps back here with the grade.</li>' +
+'      </ol>' +
+'      <div class="gr-bm-slots" id="gr-bm-slots"></div>' +
+'      <p class="note">&ldquo;Grade + add to leaderboard&rdquo; also uploads the loadout to our cache, so the character shows on the Leaderboard and others can grade it without a fresh pull. Only the gems, item level, class, region and name are sent.</p>' +
 '    </div>' +
 '  </div>' +
 '</div>' +
@@ -1543,8 +1561,8 @@ presetToggleHtml(data) +
   }
 
   // The note under the pull buttons. Cached lookups are free & unlimited; NEW characters are paced to
-  // ~1 lookup / 5s per IP for everyone (no hourly cap). The password only adds queue priority + access
-  // while the site is degraded. Call setFreeStatus(true) for the "site busy" state; setFreeStatus() re-renders.
+  // ~1 lookup / 5s per IP — the same for everyone. No password, no priority tier: access is open to all.
+  // Call setFreeStatus(true) for the "site busy" state; setFreeStatus() re-renders.
   function setFreeStatus(degraded) {
     var el = $("gr-free-note");
     if (!el) return;
@@ -1552,31 +1570,63 @@ presetToggleHtml(data) +
       el.innerHTML = '<span class="gr-cap">The site is very busy — new-character lookups are paused. Cached characters still work.</span>';
       return;
     }
-    if (window.astrogemGate && window.astrogemGate.isUnlocked()) {
-      el.innerHTML = '<span class="gr-prem">&#10003; Password access · priority queue + access while the site is busy</span>';
-      return;
-    }
-    el.innerHTML = 'Cached characters are free &amp; instant · new characters: <b>~1 lookup / 5s</b> · <a class="gr-unlock" onclick="window.__grUnlock()">Have the password? Unlock for priority &rarr;</a>';
+    el.innerHTML = 'Cached characters are free &amp; instant · new characters: <b>~1 lookup / 5s</b>';
   }
-  window.__grUnlock = function () {
-    if (window.astrogemGate) window.astrogemGate.ensureUnlocked().then(function () { setFreeStatus(); });
-  };
 
   // ---------------- mode switching ----------------
   function selectMode(mode) {
-    var custom = mode === "custom";
-    $("gr-mode-custom").classList.toggle("active", custom);
-    $("gr-mode-pull").classList.toggle("active", !custom);
-    $("gr-body-custom").style.display = custom ? "" : "none";
-    $("gr-body-pull").style.display = custom ? "none" : "";
-    if (!custom) { renderFavRow(); setFreeStatus(); } // saved-chars quick-pick + free-tier note
-    if (custom) {
+    if (mode !== "custom" && mode !== "bookmarklet") mode = "pull";
+    $("gr-mode-pull").classList.toggle("active", mode === "pull");
+    $("gr-mode-custom").classList.toggle("active", mode === "custom");
+    $("gr-mode-bookmarklet").classList.toggle("active", mode === "bookmarklet");
+    $("gr-body-pull").style.display = mode === "pull" ? "" : "none";
+    $("gr-body-custom").style.display = mode === "custom" ? "" : "none";
+    $("gr-body-bookmarklet").style.display = mode === "bookmarklet" ? "" : "none";
+    if (mode === "custom") {
       renderCustom();
-    } else if (lastLoadout) {
-      renderLoadout(lastLoadout);
-    } else {
-      $("gr-result").innerHTML = '<div class="placeholder"><b>Grade a whole loadout</b>Pick a region, enter a character name, and grade every equipped gem at once.</div>';
+    } else if (mode === "bookmarklet") {
+      renderBookmarklets();
+    } else { // pull
+      renderFavRow(); setFreeStatus();                 // saved-chars quick-pick + free-tier note
+      if (lastLoadout) renderLoadout(lastLoadout);
+      else $("gr-result").innerHTML = '<div class="placeholder"><b>Grade a whole loadout</b>Pick a region, enter a character name, and grade every equipped gem at once.</div>';
     }
+  }
+
+  // Build the two draggable bookmarklets (once). Each is a self-contained javascript: URL that reads the
+  // arkGridCores blob + item level + class off the lostark.bible page the user has open, then either
+  // grades it here (#import=) or POSTs it to the Worker's /?submit=1 cache first ("+ add to leaderboard").
+  function renderBookmarklets() {
+    var host = $("gr-bm-slots");
+    if (!host || host.getAttribute("data-built") === "1") return;
+    var CALC = location.origin + location.pathname;               // this page (index.html)
+    var W = (WORKER_URL || "").replace(/\/+$/, "");
+    var EXTRACT =
+      "var h=document.documentElement.innerHTML,ci=h.indexOf('classification:\"most_recent_raid\"'),i=h.indexOf('arkGridCores:[',ci<0?0:ci);" +
+      "if(i<0)i=h.indexOf('arkGridCores:[');if(i<0){alert('Open a lostark.bible character page first, then click this bookmark.');return}" +
+      "var s=i+13,d=0,e=-1,k,c;for(k=s;k<h.length;k++){c=h[k];if(c==='[')d++;else if(c===']'){d--;if(d===0){e=k+1;break}}}" +
+      "if(e<0){alert('Could not read the gem data on this page.');return}" +
+      "var im=h.match(/ilvl:\\d+/),cm=h.match(/bg-neutral-900 px-2 py-1 text-sm\">[^<]+<\\/p>/g)," +
+      "meta=(im?im[0]+' ':'')+(cm?cm.join(' '):''),p=location.pathname.split('/')," +
+      "o={src:meta+' arkGridCores:'+h.slice(s,e),region:(p[2]||''),name:decodeURIComponent(p[3]||'')};";
+    var GO = "location.href='" + CALC + "#import='+encodeURIComponent(JSON.stringify(o))";
+    var gradeBm = "javascript:(function(){" + EXTRACT + GO + "})()";
+    var uploadBm = "javascript:(function(){" + EXTRACT +
+      "var go=function(){" + GO + "};" +
+      "fetch('" + W + "/?submit=1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)})" +
+      ".then(function(r){return r.json()}).then(function(j){if(!(j&&j.imported))alert('Could not add to the leaderboard: '+((j&&j.error)||'unknown error'));go()})" +
+      ".catch(function(){alert('Upload failed (network) - grading locally.');go()})})()";
+    function mk(href, label, sub) {
+      var wrap = document.createElement("div"); wrap.className = "gr-bm-item";
+      var a = document.createElement("a"); a.className = "gr-bm-btn"; a.textContent = label;
+      a.setAttribute("href", href);
+      a.addEventListener("click", function (ev) { ev.preventDefault(); alert("Drag this button up to your bookmarks bar — don’t click it here. Then click it while on a lostark.bible character page."); });
+      var s = document.createElement("div"); s.className = "gr-bm-sub"; s.textContent = sub;
+      wrap.appendChild(a); wrap.appendChild(s); return wrap;
+    }
+    host.appendChild(mk(gradeBm, "⚡ Grade on Astrogem", "Grades the open character here. Nothing is uploaded."));
+    host.appendChild(mk(uploadBm, "📤 Grade + add to leaderboard", "Grades it AND adds it to the shared Leaderboard cache."));
+    host.setAttribute("data-built", "1");
   }
 
   // ---------------- init ----------------
@@ -1708,6 +1758,7 @@ presetToggleHtml(data) +
     // mode buttons
     $("gr-mode-custom").addEventListener("click", function () { selectMode("custom"); });
     $("gr-mode-pull").addEventListener("click", function () { selectMode("pull"); });
+    $("gr-mode-bookmarklet").addEventListener("click", function () { selectMode("bookmarklet"); });
 
     // Keep the quick-pick row and the loadout star in sync when favorites change
     // anywhere (here OR on the Leaderboard tab).

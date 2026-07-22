@@ -96,7 +96,7 @@ function typeFromGemId(idStr) {
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": ALLOW_ORIGIN,
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400"
   };
@@ -1113,36 +1113,106 @@ async function enqueueChar(env, region, name, premium, wantPos, ctx) {
   return json({ queued: true, justQueued: true, tier: premium ? "premium" : "free", region: region, name: normalizeName(name) }, 200);
 }
 
+// POST /?submit=1 — accept a loadout the bookmarklet scraped from the user's OWN browser on a
+// lostark.bible character page and write it straight to the cache (source:"import"), so it shows in
+// the Grader (cached) and the Leaderboard with ZERO Worker->lostark.bible traffic. We re-parse the
+// submitted arkGridCores blob with the SAME parser the drain uses and reject anything without real
+// gems. Per-IP throttled (on top of HARD_CAP). Writes are live — validated but not moderated.
+async function handleSubmit(env, request, ip) {
+  if (!env || !env.CHARS) return json({ error: "Cache not configured." }, 503);
+  // One upload per ~5s per IP (shares the lookup throttle namespace but a distinct key).
+  if (env.LOOKUP_THROTTLE) {
+    const t = await env.LOOKUP_THROTTLE.limit({ key: "submit:" + ip });
+    if (!t.success) return json({ error: "One upload every few seconds — please wait a moment.", rateLimited: true, retryAfterMs: 5000, throttled: true }, 429);
+  }
+
+  let body;
+  try { body = await request.json(); } catch (e) { return json({ error: "Body must be JSON: { region, name, src }." }, 400); }
+  const region = String((body && body.region) || "").trim();
+  const name = String((body && body.name) || "").trim();
+  const src = String((body && body.src) || "");
+  if (!region || !name) return json({ error: "region and name are required." }, 400);
+  if (region.length > 8 || name.length > 40) return json({ error: "region or name too long." }, 400);
+  if (src.length > 300000) return json({ error: "Upload too large." }, 413);
+  if (src.indexOf("arkGridCores:[") === -1) {
+    return json({ error: "No Ark Grid data in the upload — click the bookmarklet while on a lostark.bible character page." }, 422);
+  }
+
+  // Same non-KR parse path as fetchCharacterData: arkGridCores -> gems, plus item level + class.
+  const presets = extractArkGridCores(src);
+  if (!presets.raid) return json({ error: "Could not read Ark Grid gems from the upload (none set, or an unexpected page)." }, 422);
+  const raidRes = coresToGems(presets.raid);
+  const gems = raidRes.gems;
+  if (!gems || !gems.length) return json({ error: "No astrogems found in the upload." }, 422);
+  const chaosGems = presets.chaos ? coresToGems(presets.chaos).gems : null;
+  const meta = parseMeta(src, false);
+
+  const key = charKey(region, name);
+  const record = {
+    region: region,
+    name: normalizeName(name),
+    source: "import",
+    itemLevel: meta.itemLevel,
+    class: meta.klass,
+    coreCount: presets.raid.length,
+    gemCount: gems.length,
+    gems: gems,
+    chaosGems: chaosGems,
+    warnings: raidRes.warnings,
+    pulledAt: Date.now()
+  };
+  try {
+    await env.CHARS.put(key, JSON.stringify(record));
+    await markDirty(env, key);                                   // enter the leaderboard snapshot on the next rebuild
+    await env.CHARS.put(LASTWRITE_KEY, String(Date.now()));
+    await env.CHARS.delete(NOTFOUND_PREFIX + key).catch(function () {}); // a previously-"not found" name is now known
+    await env.CHARS.delete(QF + key).catch(function () {});             // clear any pending scrape for it
+    await env.CHARS.delete(QP + key).catch(function () {});
+  } catch (e) {
+    return json({ error: "Failed to save the upload." }, 500);
+  }
+  return json(Object.assign({}, record, { cached: false, imported: true }), 200);
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders() });
-    }
-    if (request.method !== "GET") {
-      return json({ error: "Method not allowed (use GET ?region=&name=)." }, 405);
     }
 
     const u = new URL(request.url);
     const ip = request.headers.get("CF-Connecting-IP") || "0.0.0.0";
 
     // Hard backstop on EVERY request (per IP) to stop scripted abuse before any work — an edge
-    // rate-limit binding, no KV touched on a blocked hit. The token is public so it can't exempt.
+    // rate-limit binding, no KV touched on a blocked hit.
     if (env.HARD_CAP) {
       const h = await env.HARD_CAP.limit({ key: ip });
       if (!h.success) return json({ error: "Too many requests — please slow down.", rateLimited: true, retryAfterMs: 60000, hardCap: true }, 429);
     }
 
-    // GLOBAL overload gate: one shared counter across ALL requests (fixed key, not the IP). When
-    // the site-wide rate trips ~1000/min we enter "degraded" mode — free clients are
-    // cut off and password clients drop to the free rate. period max 60s, so it's a rolling
-    // per-minute proxy for "10k/hour" that auto-recovers when traffic falls.
-    const premium = gated(u);
+    // Public POST /?submit=1 — the bookmarklet uploads a loadout the USER scraped in their own
+    // browser on a lostark.bible character page (no Worker->lostark.bible request at all). This is
+    // the crowdsourced, scrape-free path into the cache + leaderboard.
+    if (request.method === "POST" && u.searchParams.get("submit") === "1") {
+      return handleSubmit(env, request, ip);
+    }
+    if (request.method !== "GET") {
+      return json({ error: "Method not allowed (use GET ?region=&name=, or POST ?submit=1)." }, 405);
+    }
+
+    // Owner token — gates ONLY the admin endpoints (?control / ?metrics). It never controls user
+    // access or queue priority: Grader pulls + the Leaderboard are open to everyone, one queue lane.
+    const isOwner = gated(u);
+
+    // GLOBAL overload gate: one shared counter across ALL requests (fixed key, not the IP). When the
+    // site-wide rate trips ~1000/min we enter "degraded" mode and pause NEW work for everyone equally
+    // (no bypass). period max 60s, so it's a rolling per-minute proxy that auto-recovers.
     let degraded = false;
     if (env.GLOBAL_GATE) {
       const g = await env.GLOBAL_GATE.limit({ key: "global" });
       degraded = !g.success;
     }
-    const busyMsg = "The site is very busy right now — free access is paused. Enter the password for limited access, or try again shortly.";
+    const busyMsg = "The site is very busy right now — please try again shortly.";
 
     // Public status (no token): is the lookup queue PAUSED (lostark.bible unreachable)? Drives the
     // grader's "lookups temporarily unavailable" notice.
@@ -1156,7 +1226,7 @@ export default {
     // Owner-only drain CONTROL: set the mode (run/off/probe) and/or the per-minute rate. Drives the
     // queue-admin Controls panel. e.g. ?control=1&k=<token>&mode=off  or  &rate=10
     if (u.searchParams.get("control") === "1") {
-      if (!premium) return json({ error: "Forbidden — owner token required." }, 403);
+      if (!isOwner) return json({ error: "Forbidden — owner token required." }, 403);
       const cur = await getDrainConfig(env);
       const next = { mode: cur.mode, drainPerMin: cur.drainPerMin };
       const mode = u.searchParams.get("mode");
@@ -1173,9 +1243,9 @@ export default {
       return json({ ok: true, config: next }, 200);
     }
 
-    // Leaderboard — open to everyone, throttled vs spam-refresh; free clients cut while degraded.
+    // Leaderboard — open to everyone, throttled vs spam-refresh; paused for all while degraded.
     if (u.searchParams.get("list") === "1") {
-      if (degraded && !premium) return json({ error: busyMsg, rateLimited: true, degraded: true }, 429);
+      if (degraded) return json({ error: busyMsg, rateLimited: true, degraded: true }, 429);
       if (env.LB_THROTTLE) {
         const l = await env.LB_THROTTLE.limit({ key: ip });
         if (!l.success) return json({ error: "The leaderboard refreshes about every 10 minutes — please wait a moment.", rateLimited: true, retryAfterMs: 20000, lbThrottle: true }, 429);
@@ -1187,7 +1257,7 @@ export default {
     // (PREMIUM first, then FREE, each alphabetical), drain config + monthly usage. Light — two queue
     // list()s + two small get()s, NO big snapshot read — so the private dashboard can poll it often.
     if (u.searchParams.get("metrics") === "1") {
-      if (!premium) return json({ error: "Forbidden — owner token required." }, 403);
+      if (!isOwner) return json({ error: "Forbidden — owner token required." }, 403);
       // #1: read the q:order snapshot (1 cheap read; lists only if stale) + the small state keys,
       // all independent -> one parallel round-trip.
       const [items, usage0, lw, dlog, cfg] = await Promise.all([
@@ -1280,26 +1350,21 @@ export default {
       const qf = !qp && (await env.CHARS.get(QF + key)) !== null;
       if (qp || qf) {
         if (ctx && ctx.waitUntil) ctx.waitUntil(kickFetch(env, region, name)); // still waiting -> fetch it now (covers a kick that lost the KV-list race, and retries a transiently-failed one)
-        if (qp) return queuedResponse(env, region, name, "premium", { alreadyQueued: true }, wantPos);
-        if (premium) { // a password lookup of a free-queued character bumps it to the premium queue
-          try { await env.CHARS.put(QP + key, "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); await env.CHARS.delete(QF + key); } catch (e) {}
-          return queuedResponse(env, region, name, "premium", { alreadyQueued: true, upgraded: true }, wantPos);
-        }
+        if (qp) return queuedResponse(env, region, name, "premium", { alreadyQueued: true }, wantPos); // legacy premium entries still drain first; nothing new is added here
         return queuedResponse(env, region, name, "free", { alreadyQueued: true }, wantPos);
       }
     }
 
-    // Rate-limit the fetch/enqueue. EVERYONE (password or not) gets one lookup per ~5s per IP. The
-    // password no longer buys a faster rate — it only (a) keeps working while the site is degraded
-    // and (b) enqueues into the PRIORITY queue (drained first). Cached lookups already returned above
-    // with no limit; the ENQUEUE_GATE + monthly budget guard bound total fill site-wide.
-    if (degraded && !premium) return json({ error: busyMsg, rateLimited: true, degraded: true }, 429);
+    // Rate-limit the fetch/enqueue: one new-character lookup per ~5s per IP, the same for everyone.
+    // Cached lookups already returned above with no limit; the ENQUEUE_GATE + monthly budget guard
+    // bound total fill site-wide. During overload (degraded) new work pauses for everyone equally.
+    if (degraded) return json({ error: busyMsg, rateLimited: true, degraded: true }, 429);
     if (env.LOOKUP_THROTTLE) {
       const t = await env.LOOKUP_THROTTLE.limit({ key: ip });
       if (!t.success) return json({ error: "One new-character lookup every 5 seconds — please wait a moment (cached characters are unlimited).", rateLimited: true, retryAfterMs: 5000, throttled: true }, 429);
     }
-    if (wantQueue) return enqueueChar(env, region, name, premium, wantPos, ctx);
-    return handleCharacter(env, region, name, refresh, { premium: premium, nextMs: 5000 });
+    if (wantQueue) return enqueueChar(env, region, name, false, wantPos, ctx);
+    return handleCharacter(env, region, name, refresh, { nextMs: 5000 });
   },
 
   async scheduled(controller, env, ctx) {
