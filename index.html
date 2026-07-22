@@ -1,18 +1,141 @@
-<!doctype html>
-<html lang="en">
-<head>
+﻿<!DOCTYPE html>
+<html lang="en"><head>
 <meta charset="utf-8">
-<title>Moved to Loseii</title>
-<link rel="canonical" href="https://www.loseii.com/loa-astrogem-calc/">
-<meta http-equiv="refresh" content="0; url=https://www.loseii.com/loa-astrogem-calc/">
-<meta name="robots" content="noindex">
-<style>body{background:#0c0e12;color:#e7e9ee;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;text-align:center;padding:20px}a{color:#e8b75c}</style>
-</head>
-<body>
-<div>
-<p>This tool now lives at <a href="https://www.loseii.com/loa-astrogem-calc/">www.loseii.com/loa-astrogem-calc/</a></p>
-<p>Redirecting&hellip;</p>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astrogem Calculator</title>
+<!-- Link previews (Discord/Reddit/Twitter cards) + icons. og:image must be an absolute URL. -->
+<meta name="description" content="Lost Ark astrogem tools: grade any character's astrogem loadout in % damage, cut/fuse/throw EV tables, a processing advisor, and a cross-region leaderboard.">
+<meta name="theme-color" content="#0d1017">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Astrogem Calculator">
+<meta property="og:title" content="Astrogem Calculator — Lost Ark">
+<meta property="og:description" content="Grade any character's astrogems in % damage, get cut/fuse EV verdicts, and see the cross-region leaderboard.">
+<meta property="og:url" content="https://shizukaziye.github.io/astrogem-calculator/">
+<meta property="og:image" content="https://shizukaziye.github.io/astrogem-calculator/assets/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Astrogem Calculator — Lost Ark">
+<meta name="twitter:description" content="Grade any character's astrogems in % damage, get cut/fuse EV verdicts, and see the cross-region leaderboard.">
+<meta name="twitter:image" content="https://shizukaziye.github.io/astrogem-calculator/assets/og-image.png">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<!--
+  App shell for the Lost Ark astrogem-cutting tool.
+
+  Four tabs: "Grader" (#tab-grader, first/default), "Pipeline" (#tab-pipeline),
+  "Advisor" (#tab-advisor), and "Leaderboard" (#tab-leaderboard). The tab bar
+  toggles the .active class on the panes and fires a 'tabselected' event so a pane
+  can lazy-load on activation (the Leaderboard fetches ?list=1 the first time).
+  The model core is loaded first so the tab scripts can call its globals
+  (window.Astrogem.grade, window.score, window.tierExpectedValue,
+  window.evaluateActions, ...).
+
+  Load order matters:
+    1. model/astrogem.js  -> attaches deterministic core to window
+    2. model/nested.js    -> attaches evaluateActions etc. (needs astrogem.js)
+    3. model/dp.js        -> attaches the exact Bellman DP (evaluateActionsDP,
+                             topLevelAdvice; needs astrogem.js + nested.js). The
+                             advisor uses this by default and falls back to the MC.
+    4. grader.js          -> renders #tab-grader (grades finished gems; calls
+                             Astrogem.grade / gemRank / damagePercent)
+    5. pipeline.js        -> renders #tab-pipeline
+    6. advisor.js         -> renders #tab-advisor
+
+  Styling lives in styles.css (shared dark theme + tab styling). The two UI
+  agents will flesh out pipeline.js / advisor.js using the sticky-input,
+  toggle-button, results-table, and methodology-<details> conventions already
+  styled in styles.css.
+-->
+<link rel="stylesheet" href="styles.css?v=2">
+</head><body>
+<div class="wrap">
+  <div class="appbar">
+    <div>
+      <h1>Astrogem Calculator</h1>
+      <div class="tag">Lost Ark astrogem cutting — expected value, fusion fodder, and per-turn advice.</div>
+    </div>
+  </div>
+
+  <!-- Tab bar -->
+  <div class="tabbar" id="tabbar">
+    <button class="tab active" data-tab="grader" onclick="selectTab('grader')">Grader</button>
+    <button class="tab" data-tab="pipeline" onclick="selectTab('pipeline')">Pipeline</button>
+    <button class="tab" data-tab="advisor" onclick="selectTab('advisor')">Advisor</button>
+    <button class="tab" data-tab="leaderboard" onclick="selectTab('leaderboard')">Leaderboard</button>
+  </div>
+
+  <!-- Tab panes -->
+  <section id="tab-grader" class="tabpane active"></section>
+  <section id="tab-pipeline" class="tabpane"></section>
+  <section id="tab-advisor" class="tabpane"></section>
+  <section id="tab-leaderboard" class="tabpane"></section>
 </div>
-<script>location.replace("https://www.loseii.com/loa-astrogem-calc/");</script>
-</body>
-</html>
+
+<!-- Tab switching: toggle .active on the matching button + pane. -->
+<script>
+"use strict";
+// Heavy, rarely-used modules load on FIRST activation of their tab instead of on every visit:
+// the Advisor stack (Tesseract CDN + OCR engines + the MC/DP models) and the Leaderboard.
+// Each module self-initializes on parse (their DOMContentLoaded guards fall through after load),
+// and the leaderboard's init self-fetches when its tab is already active.
+// Deploy note: bump a file's ?v= here whenever you edit it — browsers cache-bust on it.
+// (The eager list at the bottom of <body> is a DISJOINT set of files; nothing is shared.)
+var LAZY_TABS = {
+  advisor: [
+    // NOTE: the Tesseract CDN bundle is NOT loaded on the main page anymore —
+    // the background parse worker imports its own copy, and the inline fallback
+    // lazy-injects it only if the offload is unavailable (structural-engine.js)
+    "model/nested.js?v=51", "model/dp.js?v=55",
+    "ocr/engine.js?v=52", "ocr/layout.js?v=54", "ocr/glyphs.js?v=54", "ocr/level-refs.js?v=2", "ocr/tesseract-engine.js?v=43",
+    "ocr/structural-engine.js?v=87",
+    "advisor-setup.js?v=43", "advisor-window.js?v=54",
+    "advisor.js?v=70"
+  ],
+  leaderboard: ["leaderboard.js?v=42"]
+};
+var lazyLoaded = {};
+function loadScriptsSeq(list, done){
+  if (!list.length) { done(); return; }
+  var s = document.createElement('script');
+  s.src = list[0];
+  s.onload = function(){ loadScriptsSeq(list.slice(1), done); };
+  s.onerror = function(){ loadScriptsSeq(list.slice(1), done); }; // skip a failed script (e.g. CDN blocked); modules degrade gracefully
+  document.body.appendChild(s);
+}
+function ensureTabLoaded(name){
+  if (!LAZY_TABS[name] || lazyLoaded[name]) return;
+  lazyLoaded[name] = true;
+  var pane = document.getElementById('tab-'+name);
+  if (pane && !pane.childNodes.length) pane.innerHTML = '<div style="padding:24px;opacity:.65">Loading…</div>'; // replaced by the module's init
+  loadScriptsSeq(LAZY_TABS[name], function(){
+    // re-announce the activation for anything keyed on the event (the modules just initialized)
+    try { document.dispatchEvent(new CustomEvent('tabselected', { detail: { tab: name } })); } catch (e) {}
+  });
+}
+function selectTab(name){
+  var tabs = document.querySelectorAll('.tab');
+  for (var i=0;i<tabs.length;i++){ tabs[i].classList.toggle('active', tabs[i].dataset.tab===name); }
+  var panes = document.querySelectorAll('.tabpane');
+  for (var j=0;j<panes.length;j++){
+    panes[j].classList.toggle('active', panes[j].id === ('tab-'+name));
+  }
+  ensureTabLoaded(name);
+  // Notify tab modules that lazy-load on activation (e.g. the Leaderboard fetch).
+  try { document.dispatchEvent(new CustomEvent('tabselected', { detail: { tab: name } })); } catch (e) {}
+}
+</script>
+
+<!-- EAGER: the model core + the default Grader tab and its dependencies (pipeline feeds the
+     grader's plan section via pipelineReady). The Advisor stack and Leaderboard are in
+     LAZY_TABS above and load on first tab activation. -->
+<!-- ?v= cache-buster: bump on each deploy so browsers load fresh JS without a hard-refresh -->
+<script src="model/astrogem.js?v=51"></script>
+<script src="gate.js?v=38"></script>
+<script src="favorites.js?v=38"></script>
+<script src="loadout-econ.js?v=1"></script>
+<script src="bible-import.js?v=2"></script>
+<script src="grader.js?v=53"></script>
+<script src="pipeline.js?v=40"></script>
+<script src="https://shizukaziye.github.io/loastuff/social-bar.js" defer></script>
+</body></html>
