@@ -1599,7 +1599,7 @@ presetToggleHtml(data) +
   function renderBookmarklets() {
     var host = $("gr-bm-slots");
     if (!host || host.getAttribute("data-built") === "1") return;
-    var CALC = location.origin + location.pathname;               // this page (index.html)
+    var CALC = "https://www.loseii.com/loa-astrogem-calc/";       // always grade on loseii (the canonical site), wherever the bookmarklet was dragged from
     var W = (WORKER_URL || "").replace(/\/+$/, "");
     var EXTRACT =
       "var h=document.documentElement.innerHTML,ci=h.indexOf('classification:\"most_recent_raid\"'),i=h.indexOf('arkGridCores:[',ci<0?0:ci);" +
