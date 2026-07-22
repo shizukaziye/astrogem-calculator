@@ -1314,8 +1314,6 @@ presetToggleHtml(data) +
       refreshBtn.textContent = "Re-pull from " + site;
       refreshBtn.title = "Force a fresh pull from " + site;
     }
-    var note = $("gr-pull-note");
-    if (note) note.textContent = "Fetched live from " + site + " via your Worker.";
   }
 
   // ---------------- saved-characters quick-pick ----------------
