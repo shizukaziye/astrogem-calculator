@@ -1191,10 +1191,10 @@ async function handleSubmit(env, request, ip, ctx) {
   } catch (e) {
     return json({ error: "Failed to save the upload." }, 500);
   }
-  // Show the contributed character on the leaderboard promptly: trigger an incremental snapshot
-  // rebuild, bypassing the cron's 30-min throttle but coalesced to ~10s so a burst of imports doesn't
-  // re-gzip the whole snapshot on every one. Fire-and-forget — adds no latency to the response.
-  if (ctx && ctx.waitUntil) ctx.waitUntil(rebuildSnapshotIfChanged(env, 10000));
+  // Get the contributed character onto the leaderboard sooner than the cron's 30-min rebuild, but
+  // don't re-gzip the whole snapshot on every import: coalesce to at most one rebuild per 10 min.
+  // Fire-and-forget — adds no latency to the response. (Cron's 30-min pass is the backstop.)
+  if (ctx && ctx.waitUntil) ctx.waitUntil(rebuildSnapshotIfChanged(env, 10 * 60 * 1000));
   return json(Object.assign({}, record, { cached: false, imported: true }), 200);
 }
 
