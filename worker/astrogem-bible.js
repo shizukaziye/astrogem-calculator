@@ -796,12 +796,15 @@ async function handleList(env, acceptEncoding, fmt) {
 // records, and upsert them into the existing snapshot, instead of re-reading all ~4000 characters.
 // The FIRST build (no snapshot yet) still does a full read. Throttled to ~every 30 min. Markers added
 // mid-build keep their marker (only the ones we listed are cleared), so nothing is lost.
-async function rebuildSnapshotIfChanged(env) {
+async function rebuildSnapshotIfChanged(env, minIntervalMs) {
   if (!env || !env.CHARS) return;
-  // Throttle FIRST (one cheap read): inside the 30-min window the outcome is "return" whether or
-  // not anything is dirty, so don't pay the dirty-prefix list() every minute (~43k lists/mo saved).
+  // Throttle FIRST (one cheap read): inside the window the outcome is "return" whether or not
+  // anything is dirty, so don't pay the dirty-prefix list() every minute (~43k lists/mo saved).
+  // The cron uses the default ~30-min window; an import passes a short one so a contributed
+  // character shows on the leaderboard within seconds instead of waiting up to half an hour.
+  const interval = (typeof minIntervalMs === "number") ? minIntervalMs : SNAPSHOT_MIN_INTERVAL_MS;
   const builtAt = parseInt((await env.CHARS.get(BUILTAT_KEY)) || "0", 10);
-  if (builtAt > 0 && (Date.now() - builtAt) < SNAPSHOT_MIN_INTERVAL_MS) return; // throttle: rebuild at most ~every 30 min
+  if (builtAt > 0 && (Date.now() - builtAt) < interval) return;
   let dirty;
   try { dirty = await env.CHARS.list({ prefix: DIRTY_PREFIX }); } catch (e) { return; }
   if (builtAt > 0 && !dirty.keys.length) return;                                // nothing changed since the last build
@@ -1133,7 +1136,7 @@ async function enqueueChar(env, region, name, premium, wantPos, ctx) {
 // the Grader (cached) and the Leaderboard with ZERO Worker->lostark.bible traffic. We re-parse the
 // submitted arkGridCores blob with the SAME parser the drain uses and reject anything without real
 // gems. Per-IP throttled (on top of HARD_CAP). Writes are live — validated but not moderated.
-async function handleSubmit(env, request, ip) {
+async function handleSubmit(env, request, ip, ctx) {
   if (!env || !env.CHARS) return json({ error: "Cache not configured." }, 503);
   // One upload per ~5s per IP (shares the lookup throttle namespace but a distinct key).
   if (env.LOOKUP_THROTTLE) {
@@ -1188,6 +1191,10 @@ async function handleSubmit(env, request, ip) {
   } catch (e) {
     return json({ error: "Failed to save the upload." }, 500);
   }
+  // Show the contributed character on the leaderboard promptly: trigger an incremental snapshot
+  // rebuild, bypassing the cron's 30-min throttle but coalesced to ~10s so a burst of imports doesn't
+  // re-gzip the whole snapshot on every one. Fire-and-forget — adds no latency to the response.
+  if (ctx && ctx.waitUntil) ctx.waitUntil(rebuildSnapshotIfChanged(env, 10000));
   return json(Object.assign({}, record, { cached: false, imported: true }), 200);
 }
 
@@ -1211,7 +1218,7 @@ export default {
     // browser on a lostark.bible character page (no Worker->lostark.bible request at all). This is
     // the crowdsourced, scrape-free path into the cache + leaderboard.
     if (request.method === "POST" && u.searchParams.get("submit") === "1") {
-      return handleSubmit(env, request, ip);
+      return handleSubmit(env, request, ip, ctx);
     }
     if (request.method !== "GET") {
       return json({ error: "Method not allowed (use GET ?region=&name=, or POST ?submit=1)." }, 405);
