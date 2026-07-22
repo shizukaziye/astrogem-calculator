@@ -648,15 +648,30 @@ async function handleCharacter(env, region, name, refresh, extra) {
   const key = charKey(region, name);
   extra = extra || {};
 
-  if (env && env.CHARS && !refresh) {
+  let stale = null;
+  if (env && env.CHARS) {
     const cached = await kvGetJson(env, key);
-    if (cached && typeof cached.pulledAt === "number" && (Date.now() - cached.pulledAt) < CACHE_TTL_MS) {
-      return json(Object.assign({}, cached, { cached: true }, extra), 200);
+    if (cached && typeof cached.pulledAt === "number") {
+      if (!refresh && (Date.now() - cached.pulledAt) < CACHE_TTL_MS) {
+        return json(Object.assign({}, cached, { cached: true }, extra), 200);
+      }
+      stale = cached;   // >7d old (or refresh=1): try fresh, keep this as the fallback
     }
   }
 
   const res = await fetchCharacterData(region, name);
-  if (!res.ok) return json(Object.assign({}, res.body, extra), res.status);
+  if (!res.ok) {
+    // SERVE-STALE-ON-ERROR (2026-07-21): lostark.bible rate-limits Cloudflare
+    // egress IPs (429 to the worker while the same request gets 200 from a
+    // residential IP) — an old record beats an error page every time. Clients
+    // can caveat the display via stale/staleDays.
+    if (stale) return json(Object.assign({}, stale, {
+      cached: true, stale: true,
+      staleDays: Math.round((Date.now() - stale.pulledAt) / 86400000),
+      staleReason: (res.body && res.body.error) || ("HTTP " + res.status)
+    }, extra), 200);
+    return json(Object.assign({}, res.body, extra), res.status);
+  }
 
   const record = Object.assign({}, res.data, { pulledAt: Date.now() });
   if (env && env.CHARS) {
