@@ -686,11 +686,11 @@ async function fetchCharacterData(env, region, name, userToken) {
   // Prefer the SIGNED-IN USER's OAuth token (so the request is attributable to the human who
   // asked for it); fall back to a service token if one is configured — that's all the background
   // drain has, since no user is driving it.
+  // Use the token the caller passed — the requester's own for a user pull, the requester's stored
+  // token for a drained queue item, or the Paroxysmal service token for the recovery probe. There is
+  // NO shared fallback for user pulls: an unauthenticated fetch just fails (401), by design.
   if (!isKR) {
-    // Drain/probe pass the stored token explicitly; a user "kick" passes none, so fall back to the
-    // stored owner token here too, so an on-demand lookup uses the same credential as the drain.
-    let bibleToken = userToken || (env && env.BIBLE_TOKEN) || "";
-    if (!bibleToken) bibleToken = await getServiceToken(env);
+    const bibleToken = userToken || (env && env.BIBLE_TOKEN) || "";
     if (bibleToken) headers["Authorization"] = "Bearer " + bibleToken;
   }
 
@@ -831,7 +831,14 @@ async function buildCharacterList(env) {
   let cursor;
   do {
     const res = await env.CHARS.list({ cursor: cursor, limit: 1000 });
-    for (const k of res.keys) { if (k.name !== INDEX_KEY && k.name !== SNAPSHOT_KEY) keys.push(k.name); }
+    for (const k of res.keys) {
+      // Only actual character records ("region:name"). Skip control/queue/marker keys — especially
+      // q:* queue items, whose VALUE now holds the requester's token (must never be read into the list).
+      const n = k.name;
+      if (n === INDEX_KEY || n.indexOf("q:") === 0 || n.indexOf("drain:") === 0 ||
+          n.indexOf("usage:") === 0 || n.indexOf("nf:") === 0 || n.indexOf("lb:") === 0) continue;
+      keys.push(n);
+    }
     cursor = res.list_complete ? null : res.cursor;
   } while (cursor);
   // Read every character record CONCURRENTLY (one KV read each); Promise.all collapses latency.
@@ -996,7 +1003,11 @@ async function requeueFront(env, items) {
     if (!it || !it.region || !it.name) continue;
     const k = QF + charKey(it.region, it.name);
     if (seen[k]) continue; seen[k] = 1;
-    try { await env.CHARS.put(k, "", { metadata: { region: it.region, name: it.name, ts: 1 }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
+    // Preserve the requester's stored token across the requeue (read the existing value) — otherwise
+    // the item would come back tokenless and get dropped on the next drain as a 401.
+    let tok = "";
+    try { const v = await env.CHARS.get(k, "json"); tok = (v && v.t) || ""; } catch (e) {}
+    try { await env.CHARS.put(k, JSON.stringify({ t: tok }), { metadata: { region: it.region, name: it.name, ts: 1 }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
   }
 }
 
@@ -1094,13 +1105,15 @@ async function drainQueue(env) {
   // #1: list BOTH queues ONCE, up front, in drain order — then write the q:order snapshot at the end
   // so position / metrics / probe reads can skip listing entirely (they read q:order instead).
   const items = await listQueueOrder(env);     // [{k,r,n,t,a,p}] premium-first, oldest-ts first
-  const svc = await getServiceToken(env);       // stored owner token (read once for the whole run)
   const removed = new Set();                    // queue keys cached or dropped this run (gone from the snapshot)
   for (const it of items) {
     if (processed >= perRun || Date.now() - t0 > DRAIN_BUDGET_MS) { run.stop = processed >= perRun ? "full" : "time"; stop = true; break; }
     if (!it.r || !it.n) { try { await env.CHARS.delete(it.k); } catch (e) {} removed.add(it.k); continue; } // malformed -> drop
+    // Fetch with the token the requester stored when they enqueued (read from the item's value).
+    let itemTok = "";
+    try { const qv = await env.CHARS.get(it.k, "json"); itemTok = (qv && qv.t) || ""; } catch (e) {}
     let res = null;
-    try { res = await fetchCharacterData(env, it.r, it.n, svc); } catch (e) { res = null; } // ONE fetch — no blind retry (gentler on lostark.bible; a real outage trips the breaker below)
+    try { res = await fetchCharacterData(env, it.r, it.n, itemTok); } catch (e) { res = null; } // ONE fetch — no blind retry (gentler on lostark.bible; a real outage trips the breaker below)
     const upstream = (res && res.body && res.body.upstreamStatus) || null; // the real lostark.bible status behind our 502
     if (res && res.ok) {
       consecFail = 0;
@@ -1114,10 +1127,15 @@ async function drainQueue(env) {
       try { await env.CHARS.delete(it.k); } catch (e) {} removed.add(it.k);
       try { await env.CHARS.put(NOTFOUND_PREFIX + charKey(it.r, it.n), String((res.body && res.body.error) || ("HTTP " + res.status)).slice(0, 300), { expirationTtl: NOTFOUND_TTL_S }); } catch (e) {}
       run.dropped.push({ region: it.r, name: it.n, status: res.status, msg: (res.body && res.body.error) || "dropped" });
+    } else if (upstream === 401 || upstream === 403) {
+      // AUTH failure for THIS item only: the token the requester stored has expired or been revoked.
+      // That's not a site-wide block — DROP this item and keep draining (do NOT trip the breaker).
+      consecFail = 0;
+      try { await env.CHARS.delete(it.k); } catch (e) {} removed.add(it.k);
+      run.dropped.push({ region: it.r, name: it.n, status: res ? res.status : 0, upstream: upstream, msg: "auth — sign-in token expired/revoked" });
     } else if (upstream >= 400 && upstream < 500) {
-      // a BLOCK: any 4xx refusal from lostark.bible (401/403/418/429/451 — their anti-bot rotates the
-      // code; 404 is already handled above as "not found"). It won't fix itself on a retry, so PAUSE
-      // immediately instead of burning the full fail streak to discover it. Re-queue this run at the front.
+      // a site BLOCK: a 4xx refusal that hits everyone (429 rate-limit, 418/451 anti-bot). It won't fix
+      // itself on retry, so PAUSE to probe immediately instead of burning the fail streak. Re-queue at front.
       run.failed.push({ region: it.r, name: it.n, status: res ? res.status : 0, upstream: upstream, msg: (res.body && res.body.error) || "blocked", att: 1 });
       await requeueFront(env, run.failed);
       await setDrainConfig(env, { mode: "probe", drainPerMin: cfg.drainPerMin, lastProbe: Date.now(), interval: PAUSE_PROBE_FIRST_MS }); // breaker -> PROBE: auto-recovers when lostark.bible is back (admin can force Run/Off)
@@ -1257,7 +1275,10 @@ async function enqueueChar(env, region, name, premium, wantPos, ctx, userToken) 
     if (usage && usage.month === new Date().toISOString().slice(0, 7) && (usage.count | 0) >= MONTHLY_CHAR_BUDGET) {
       return json({ error: "We've reached this month's character-caching budget — new lookups resume next month. Cached characters and the leaderboard still work normally.", monthlyBudget: true }, 503);
     }
-    try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
+    // Store the requester's token in the queue item's VALUE (not metadata — metadata is read during
+    // list()/snapshot ops and must stay token-free). The drain fetches this item with this token, and
+    // deletes the item once cached, so the token is held only while the request is pending.
+    try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), JSON.stringify({ t: userToken || "" }), { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
     try { await env.CHARS.delete(Q_ORDER_KEY); } catch (e) {} // invalidate the queue snapshot: defeats the cron's empty-queue short-circuit AND stops position reads trusting a stale (pre-this-enqueue) order
     if (ctx && ctx.waitUntil) ctx.waitUntil(kickFetch(env, region, name, userToken)); // KICK: fetch+cache THIS char now, directly (no list() -> immune to KV list lag). The cron drainQueue does the full paced drain.
     return queuedResponse(env, region, name, premium ? "premium" : "free", { justQueued: true }, wantPos);
@@ -1623,10 +1644,13 @@ export default {
     // MISS (uncached). New clients (&queue=1) get QUEUED (cached later by the drain); old clients
     // keep the legacy synchronous fetch so nothing breaks mid-migration.
 
-    // The signed-in user's lostark.bible token (from ?s=<session>), so every upstream fetch below
-    // is made on behalf of a consenting human. Empty for anonymous callers — they fall back to
-    // BIBLE_TOKEN. Resolved here because the queue-poll path below also kicks a fetch.
-    const userTok = await sessionToken(env, u);
+    // The requesting user's OWN lostark.bible token, from their login session — sent as an
+    // Authorization: Bearer header (loseii) or resolved from a ?s= Worker session. A new pull is
+    // fetched on behalf of THIS user, using THIS token; there is no shared fallback for user pulls
+    // (the Paroxysmal service token is only for the recovery probe). Empty = not signed in.
+    const _authz = request.headers.get("Authorization") || "";
+    const _headerTok = _authz.indexOf("Bearer ") === 0 ? _authz.slice(7).trim() : "";
+    const userTok = (await sessionToken(env, u)) || _headerTok;
 
     // Already in the queue? Don't re-add — confirm it's still queued (cheap get) and, only when the
     // client asked (&pos=1), its live position/total/ETA. This is also the poll path the client hits
@@ -1635,7 +1659,8 @@ export default {
       const qp = (await env.CHARS.get(QP + key)) !== null;
       const qf = !qp && (await env.CHARS.get(QF + key)) !== null;
       if (qp || qf) {
-        if (ctx && ctx.waitUntil) ctx.waitUntil(kickFetch(env, region, name, userTok)); // still waiting -> fetch it now (covers a kick that lost the KV-list race, and retries a transiently-failed one)
+        // Already queued (possibly by someone else). Don't kick with the poller's token — the drain
+        // fetches this item with the token stored when it was enqueued. Just report queue status.
         if (qp) return queuedResponse(env, region, name, "premium", { alreadyQueued: true }, wantPos); // legacy premium entries still drain first; nothing new is added here
         return queuedResponse(env, region, name, "free", { alreadyQueued: true }, wantPos);
       }
@@ -1649,6 +1674,9 @@ export default {
       const t = await env.LOOKUP_THROTTLE.limit({ key: ip });
       if (!t.success) return json({ error: "One new-character lookup every 5 seconds — please wait a moment (cached characters are unlimited).", rateLimited: true, retryAfterMs: 5000, throttled: true }, 429);
     }
+    // A NEW pull scrapes lostark.bible on the caller's behalf, so it needs THEIR token. Signed-out
+    // visitors can read cache + the leaderboard (handled above) but can't pull — send them to sign in.
+    if (!userTok) return json({ needSignIn: true, error: "Sign in with lostark.bible to look up a character." }, 401);
     if (wantQueue) return enqueueChar(env, region, name, false, wantPos, ctx, userTok);
     return handleCharacter(env, region, name, refresh, { nextMs: 5000 }, userTok);
   },
