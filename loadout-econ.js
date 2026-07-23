@@ -298,11 +298,14 @@
   function fetchCharacter(region, name, opts) {
     if (typeof fetch === "undefined") return Promise.reject(new Error("fetchCharacter is browser-only"));
     var k = gateToken();
+    // &s= is the signed-in user's lostark.bible session: the Worker swaps it for their OAuth token
+    // so the upstream page fetch is made on their behalf. Empty when signed out.
+    var s = (typeof window !== "undefined" && window.bibleAuth) ? window.bibleAuth.param() : "";
     var url = WORKER_URL.replace(/\/+$/, "") +
       "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) +
       "&queue=1&pos=1" +
       (opts && opts.refresh ? "&refresh=1" : "") +
-      (k ? "&k=" + encodeURIComponent(k) : "");
+      (k ? "&k=" + encodeURIComponent(k) : "") + s;
     return fetch(url).then(function (resp) {
       return resp.json().then(function (data) { return { ok: resp.ok, status: resp.status, data: data }; });
     });

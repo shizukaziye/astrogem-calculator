@@ -316,6 +316,10 @@
 '  #tab-grader .gr-status{font-size:12px;color:var(--dim);margin-top:8px;min-height:16px}' +
 '  #tab-grader .gr-status.working{color:var(--accent)}' +
 '  #tab-grader .gr-status.err{color:var(--bad)}' +
+'  #tab-grader .gr-status.ok{color:var(--good)}' +
+'  #tab-grader .gr-bibleauth{margin-top:6px}' +
+'  #tab-grader .gr-bibleauth .barrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}' +
+'  #tab-grader .gr-bibleauth .gr-status{margin-top:0}' +
 // DPS = GOLD, Support = GREEN — a mode-scoped --axis var applied ONLY to the key figures
 // (avg grade, totals, per-gem dmg, order/chaos + grading text, the toggle). Everything
 // else keeps the generic blue --accent; rank badges use fixed rankColor (untouched).
@@ -568,6 +572,8 @@
 '            <button class="primary" id="gr-pull-go" type="button">Grade loadout</button>' +
 '            <button class="mbtn" id="gr-pull-refresh" type="button" style="display:none">Re-pull</button>' +
 '          </div>' +
+// lostark.bible requires a signed-in identity for character pages; we pull on the user's behalf.
+'          <div class="gr-bibleauth" id="gr-bibleauth"></div>' +
 '          <div class="barrow" style="margin-top:8px"><span class="gr-status" id="gr-pull-status"></span></div>' +
 '          <div class="gr-freenote" id="gr-free-note"></div>' +
 '          <div class="note" id="gr-pull-note"></div>' +
@@ -1545,7 +1551,8 @@ presetToggleHtml(data) +
     function waitLoop() {
       if (!grWatching) return;
       var k = (window.astrogemGate && window.astrogemGate.token && window.astrogemGate.token()) || "";
-      var url = WORKER_URL.replace(/\/+$/, "") + "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) + "&queue=1&wait=1&since=" + since + (k ? "&k=" + encodeURIComponent(k) : "");
+      var s = (window.bibleAuth ? window.bibleAuth.param() : "");   // signed-in user's lostark.bible session
+      var url = WORKER_URL.replace(/\/+$/, "") + "/?region=" + encodeURIComponent(region) + "&name=" + encodeURIComponent(name) + "&queue=1&wait=1&since=" + since + (k ? "&k=" + encodeURIComponent(k) : "") + s;
       fetch(url).then(function (resp) { return resp.json(); }).then(function (d) {
         if (!grWatching) return;
         if (d && d.done && Array.isArray(d.gems)) finishWatch(d);   // drain completed -> refresh now
@@ -1644,6 +1651,40 @@ presetToggleHtml(data) +
       el.style.display = "";
     } else { el.style.display = "none"; }
   }
+  // lostark.bible sign-in row. Their site requires a bearer identity on character pages, so a pull
+  // is made on behalf of the signed-in user. Signed out, pulls still work off the cache and the
+  // bookmarklet path — only a FRESH scrape needs the sign-in, so we word it as a nudge, not a wall.
+  function renderBibleAuth() {
+    var host = $("gr-bibleauth");
+    if (!host || !window.bibleAuth) return;
+
+    function paint(signedIn) {
+      var err = window.bibleAuth.lastError();
+      var errHtml = err
+        ? '<div class="gr-status err" style="margin-top:6px">Sign-in failed (' + esc(err) + '). Please try again.</div>'
+        : "";
+      host.innerHTML = signedIn
+        ? '<div class="barrow"><span class="gr-status ok">Signed in with lostark.bible</span>' +
+          '<button class="mbtn" id="gr-bible-out" type="button">Sign out</button></div>' + errHtml
+        : '<div class="barrow"><span class="gr-status">lostark.bible now requires a sign-in to look up a character.</span>' +
+          '<button class="mbtn" id="gr-bible-in" type="button">Sign in with lostark.bible</button></div>' + errHtml;
+
+      var inBtn = $("gr-bible-in"), outBtn = $("gr-bible-out");
+      if (inBtn) inBtn.addEventListener("click", function () { window.bibleAuth.login(); });
+      if (outBtn) outBtn.addEventListener("click", function () {
+        outBtn.disabled = true;
+        window.bibleAuth.logout().then(function () { paint(false); });
+      });
+    }
+
+    paint(window.bibleAuth.isSignedIn());
+    // Confirm with the Worker — the token lasts 90 days with no refresh, and the user can revoke
+    // it from lostark.bible at any time, so a stored session isn't proof of a live one.
+    if (window.bibleAuth.isSignedIn()) {
+      window.bibleAuth.verify().then(function (ok) { if (!ok) paint(false); });
+    }
+  }
+
   function checkLookupStatus() {
     if (!WORKER_URL) return;
     fetch(WORKER_URL.replace(/\/+$/, "") + "/?status=1").then(function (r) { return r.json(); }).then(function (j) {
@@ -1772,6 +1813,8 @@ presetToggleHtml(data) +
     $("gr-pull-go").addEventListener("click", function () { runPull(false); });
     $("gr-pull-refresh").addEventListener("click", function () { runPull(true); });
     $("gr-name").addEventListener("keydown", function (e) { if (e.key === "Enter" && WORKER_URL) runPull(false); });
+
+    renderBibleAuth();                              // lostark.bible sign-in row (pull mode)
 
     checkLookupStatus();                            // show the "lookups unavailable" notice if the queue is paused
     // Re-check only when the user opens or returns to the tab — NOT on a 60s interval. Idle/background
