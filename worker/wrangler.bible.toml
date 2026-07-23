@@ -16,6 +16,14 @@ name = "astrogem-bible"
 main = "astrogem-bible.js"
 compatibility_date = "2026-06-01"
 
+# SECRET (not set here — this file is public):
+#   BIBLE_TOKEN — the Bearer token lostark.bible's owners issued for this Worker. Every
+#   character-page request must send `Authorization: Bearer <token>` or they return 401.
+#   Set it once, never commit it:
+#       wrangler secret put BIBLE_TOKEN --config wrangler.bible.toml
+#   Without it the Worker still runs, but every lostark.bible fetch 401s (the error body
+#   says so) and the fail-streak breaker drops the drain into probe mode.
+
 # KV namespace: caches each pulled character (key = "region:name" lowercased) +
 # a "__index__" key listing every cached key, so the Leaderboard tab can list all
 # stored characters via ?list=1. The Worker degrades gracefully if this binding is

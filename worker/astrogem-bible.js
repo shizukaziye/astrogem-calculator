@@ -544,7 +544,7 @@ function parseClassicGemLevels(html) {
 
 // Fetch a character page (lostark.bible, or lopec.kr when region is KR) and parse it
 // into the stored gem shape. Returns { ok:true, data } or { ok:false, status, body }.
-async function fetchCharacterData(region, name) {
+async function fetchCharacterData(env, region, name) {
   const isKR = String(region).toUpperCase() === "KR";
   // lostark.bible uses "CE" for EU Central; map our single "EU" option to it.
   const bibleRegion = String(region).toUpperCase() === "EU" ? "CE" : region;
@@ -553,24 +553,35 @@ async function fetchCharacterData(region, name) {
     : "https://lostark.bible/character/" + encodeURIComponent(bibleRegion) + "/" + encodeURIComponent(name);
   const site = isKR ? "lopec.kr" : "lostark.bible";
 
+  const headers = {
+    "User-Agent": BROWSER_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": isKR ? "ko-KR,ko;q=0.9" : "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": isKR ? "https://lopec.kr/" : "https://lostark.bible/",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "sec-ch-ua": "\"Google Chrome\";v=\"124\", \"Chromium\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"macOS\""
+  };
+
+  // lostark.bible granted this Worker access on the condition that every character-page
+  // request carries `Authorization: Bearer <token>` (their owners, 2026-07-22). The token
+  // lives ONLY as a Worker secret (BIBLE_TOKEN) — never in source, since this repo is public.
+  // Sent to lostark.bible ONLY: lopec.kr is an unrelated site and must never receive it.
+  if (!isKR) {
+    const bibleToken = (env && env.BIBLE_TOKEN) || "";
+    if (bibleToken) headers["Authorization"] = "Bearer " + bibleToken;
+  }
+
   let resp;
   try {
     resp = await fetch(url, {
-      headers: {
-        "User-Agent": BROWSER_UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": isKR ? "ko-KR,ko;q=0.9" : "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Referer": isKR ? "https://lopec.kr/" : "https://lostark.bible/",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "sec-ch-ua": "\"Google Chrome\";v=\"124\", \"Chromium\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
-      },
+      headers: headers,
       // Follow SvelteKit redirects (region casing etc.).
       redirect: "follow"
     });
@@ -582,7 +593,14 @@ async function fetchCharacterData(region, name) {
     return { ok: false, status: 404, body: { error: "Character not found on " + site + ".", region: region, name: name, url: url, upstreamStatus: 404 } };
   }
   if (!resp.ok) {
-    return { ok: false, status: 502, body: { error: site + " returned HTTP " + resp.status + ".", region: region, name: name, url: url, upstreamStatus: resp.status } };
+    // 401/403 from lostark.bible almost always means the Bearer token is missing or stale —
+    // say so, otherwise the fail-streak just trips the breaker into probe and reads as a block.
+    const authIssue = !isKR && (resp.status === 401 || resp.status === 403);
+    const hint = authIssue
+      ? " Check the BIBLE_TOKEN Worker secret (wrangler secret put BIBLE_TOKEN)." +
+        ((env && env.BIBLE_TOKEN) ? "" : " No BIBLE_TOKEN is currently set.")
+      : "";
+    return { ok: false, status: 502, body: { error: site + " returned HTTP " + resp.status + "." + hint, region: region, name: name, url: url, upstreamStatus: resp.status, authIssue: authIssue || undefined } };
   }
 
   const html = await resp.text();
@@ -659,7 +677,7 @@ async function handleCharacter(env, region, name, refresh, extra) {
     }
   }
 
-  const res = await fetchCharacterData(region, name);
+  const res = await fetchCharacterData(env, region, name);
   if (!res.ok) {
     // SERVE-STALE-ON-ERROR (2026-07-21): lostark.bible rate-limits Cloudflare
     // egress IPs (429 to the worker while the same request gets 200 from a
@@ -893,7 +911,7 @@ async function probeOldest(env) {
   const qkey = first ? first.k : null;                      // queue key to clear if the probe succeeds
   if (first && (!md.region || !md.name)) { try { await env.CHARS.delete(qkey); } catch (e) {} return { up: false, result: "skip" }; }
   let res = null;
-  try { res = await fetchCharacterData(md.region, md.name); } catch (e) { res = null; }
+  try { res = await fetchCharacterData(env, md.region, md.name); } catch (e) { res = null; }
   if (res && res.ok) {
     if (qkey) { try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(Object.assign({}, res.data, { pulledAt: Date.now() }))); await markDirty(env, charKey(md.region, md.name)); await env.CHARS.delete(qkey); } catch (e) {} }
     return { up: true, cached: !!qkey, name: md.region + ":" + md.name };
@@ -966,7 +984,7 @@ async function drainQueue(env) {
     if (processed >= perRun || Date.now() - t0 > DRAIN_BUDGET_MS) { run.stop = processed >= perRun ? "full" : "time"; stop = true; break; }
     if (!it.r || !it.n) { try { await env.CHARS.delete(it.k); } catch (e) {} removed.add(it.k); continue; } // malformed -> drop
     let res = null;
-    try { res = await fetchCharacterData(it.r, it.n); } catch (e) { res = null; } // ONE fetch — no blind retry (gentler on lostark.bible; a real outage trips the breaker below)
+    try { res = await fetchCharacterData(env, it.r, it.n); } catch (e) { res = null; } // ONE fetch — no blind retry (gentler on lostark.bible; a real outage trips the breaker below)
     const upstream = (res && res.body && res.body.upstreamStatus) || null; // the real lostark.bible status behind our 502
     if (res && res.ok) {
       consecFail = 0;
@@ -1080,7 +1098,7 @@ async function kickFetch(env, region, name) {
   const key = charKey(region, name);
   const t0 = Date.now();
   let res = null;
-  try { res = await fetchCharacterData(region, name); } catch (e) { res = null; }
+  try { res = await fetchCharacterData(env, region, name); } catch (e) { res = null; }
   if (res && res.ok) {
     try {
       await env.CHARS.put(key, JSON.stringify(Object.assign({}, res.data, { pulledAt: Date.now() })));
