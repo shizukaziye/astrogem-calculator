@@ -16,13 +16,26 @@ name = "astrogem-bible"
 main = "astrogem-bible.js"
 compatibility_date = "2026-06-01"
 
-# SECRET (not set here — this file is public):
-#   BIBLE_TOKEN — the Bearer token lostark.bible's owners issued for this Worker. Every
-#   character-page request must send `Authorization: Bearer <token>` or they return 401.
-#   Set it once, never commit it:
-#       wrangler secret put BIBLE_TOKEN --config wrangler.bible.toml
-#   Without it the Worker still runs, but every lostark.bible fetch 401s (the error body
-#   says so) and the fail-streak breaker drops the drain into probe mode.
+# SECRETS (not set here — this file is public). Set each once, never commit them:
+#     wrangler secret put <NAME> --config wrangler.bible.toml
+#
+#   BIBLE_CLIENT_ID / BIBLE_CLIENT_SECRET — the OAuth app registered on lostark.bible
+#     (Apps page; needs developer access enabled by one of their admins). Register a
+#     CONFIDENTIAL client, and set its redirect URI EXACTLY to:
+#         https://astrogem-bible.shizukaziye.workers.dev/oauth/callback
+#     These drive /oauth/start -> /oauth/callback, which mints a per-user session whose
+#     lostark.bible access token is used to fetch that user's character-page requests.
+#
+#   BIBLE_TOKEN — OPTIONAL service token fallback, used only when no signed-in user drives
+#     the request (i.e. the background cron drain). Leave unset to make the drain tokenless;
+#     without any token lostark.bible returns 401 and the breaker drops the drain to probe.
+
+# Per-user OAuth sessions (state -> PKCE verifier; session id -> access token). Deliberately a
+# SEPARATE namespace from CHARS: buildCharacterList() does a prefix-less list() over CHARS and
+# would otherwise treat a session key as a character record.
+[[kv_namespaces]]
+binding = "OAUTH"
+id = "288924b3208245e3920d1fb9cf3034cc"
 
 # KV namespace: caches each pulled character (key = "region:name" lowercased) +
 # a "__index__" key listing every cached key, so the Leaderboard tab can list all

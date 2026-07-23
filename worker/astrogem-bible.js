@@ -261,6 +261,61 @@ const SNAPSHOT_MIN_INTERVAL_MS = 30 * 60 * 1000; // rebuild the leaderboard snap
 const GATE_TOKEN = "6104928cd0cc5374f5330e63e6a834f99aef7579db15c77d9d154932bf7a8ced";
 function gated(u) { return (u.searchParams.get("k") || "") === GATE_TOKEN; }
 
+// ---- lostark.bible OAuth (Authorization Code + PKCE) ---------------------------------------
+// lostark.bible gates character pages behind `Authorization: Bearer <token>`. Tokens come from
+// THEIR OAuth: a user signs in with lostark.bible, grants this app the `identify` scope, and we
+// use that user's access token to fetch pages on their behalf — so every upstream request is
+// attributable to a consenting human instead of an anonymous scraper.
+//
+// We never hand the raw uwo_ token to the browser. The callback mints an opaque SESSION id; the
+// page holds only that, and the Worker swaps it for the real token server-side per request.
+// Sessions live in their OWN KV namespace (OAUTH) — never CHARS, because buildCharacterList()
+// does a bare prefix-less list() there and would treat a session key as a character record.
+const OAUTH_AUTHORIZE   = "https://lostark.bible/oauth/authorize";
+const OAUTH_TOKEN_URL   = "https://lostark.bible/oauth/token";
+const OAUTH_REVOKE_URL  = "https://lostark.bible/oauth/revoke";
+const OAUTH_SCOPE       = "identify";                  // minimum that yields a valid bearer token
+const OAUTH_REDIRECT    = "https://astrogem-bible.shizukaziye.workers.dev/oauth/callback";
+const OAUTH_STATE_TTL_S = 600;                         // their auth code expires in 10 minutes
+const OAUTH_SESSION_TTL_S = 90 * 24 * 60 * 60;         // access token: 90 days, no refresh token
+const OAUTH_ST   = "st:";                              // OAUTH KV: state -> { v: verifier, ret }
+const OAUTH_SESS = "s:";                               // OAUTH KV: session id -> { t: access token }
+// Allowed post-login return targets. Exact prefix match, no wildcards — an open redirect here
+// would leak the session id in the fragment to any site an attacker names.
+const OAUTH_RETURN_ALLOW = [
+  "https://shizukaziye.github.io/astrogem-calculator/",
+  "https://www.loseii.com/loa-astrogem-calc/"
+];
+
+function b64url(bytes) {
+  let s = "";
+  const arr = new Uint8Array(bytes);
+  for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function randomId(n) { return b64url(crypto.getRandomValues(new Uint8Array(n))); }
+async function pkceChallenge(verifier) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return b64url(digest);
+}
+// Only allow returning to a known frontend; anything else falls back to the first allowed page.
+function safeReturn(ret) {
+  const r = String(ret || "");
+  for (const ok of OAUTH_RETURN_ALLOW) { if (r.indexOf(ok) === 0) return r; }
+  return OAUTH_RETURN_ALLOW[0];
+}
+function redirectTo(url) { return new Response(null, { status: 302, headers: { Location: url } }); }
+
+// Resolve the caller's lostark.bible access token from their ?s= session id. Returns "" when the
+// caller isn't signed in (the drain and anonymous requests) — callers fall back to BIBLE_TOKEN.
+async function sessionToken(env, u) {
+  const sid = u.searchParams.get("s") || "";
+  if (!sid || !env.OAUTH) return "";
+  let rec = null;
+  try { rec = await env.OAUTH.get(OAUTH_SESS + sid, "json"); } catch (e) { rec = null; }
+  return (rec && rec.t) || "";
+}
+
 // key = "region:name" lowercased (e.g. "na:paroxysmal").
 function charKey(region, name) {
   return (region + ":" + name).toLowerCase();
@@ -544,7 +599,7 @@ function parseClassicGemLevels(html) {
 
 // Fetch a character page (lostark.bible, or lopec.kr when region is KR) and parse it
 // into the stored gem shape. Returns { ok:true, data } or { ok:false, status, body }.
-async function fetchCharacterData(env, region, name) {
+async function fetchCharacterData(env, region, name, userToken) {
   const isKR = String(region).toUpperCase() === "KR";
   // lostark.bible uses "CE" for EU Central; map our single "EU" option to it.
   const bibleRegion = String(region).toUpperCase() === "EU" ? "CE" : region;
@@ -573,8 +628,11 @@ async function fetchCharacterData(env, region, name) {
   // request carries `Authorization: Bearer <token>` (their owners, 2026-07-22). The token
   // lives ONLY as a Worker secret (BIBLE_TOKEN) — never in source, since this repo is public.
   // Sent to lostark.bible ONLY: lopec.kr is an unrelated site and must never receive it.
+  // Prefer the SIGNED-IN USER's OAuth token (so the request is attributable to the human who
+  // asked for it); fall back to a service token if one is configured — that's all the background
+  // drain has, since no user is driving it.
   if (!isKR) {
-    const bibleToken = (env && env.BIBLE_TOKEN) || "";
+    const bibleToken = userToken || (env && env.BIBLE_TOKEN) || "";
     if (bibleToken) headers["Authorization"] = "Bearer " + bibleToken;
   }
 
@@ -662,7 +720,7 @@ async function fetchCharacterData(env, region, name) {
 //   - else fetch fresh, store { region, name, gems, pulledAt, ... }, index the key, cached:false.
 //   - &refresh=1 bypasses the cache read (force fresh + re-store).
 //   - no env.CHARS -> fetch fresh every time, no caching (cached:false, no pulledAt write).
-async function handleCharacter(env, region, name, refresh, extra) {
+async function handleCharacter(env, region, name, refresh, extra, userToken) {
   const key = charKey(region, name);
   extra = extra || {};
 
@@ -677,7 +735,7 @@ async function handleCharacter(env, region, name, refresh, extra) {
     }
   }
 
-  const res = await fetchCharacterData(env, region, name);
+  const res = await fetchCharacterData(env, region, name, userToken);
   if (!res.ok) {
     // SERVE-STALE-ON-ERROR (2026-07-21): lostark.bible rate-limits Cloudflare
     // egress IPs (429 to the worker while the same request gets 200 from a
@@ -1092,13 +1150,13 @@ async function queuedResponse(env, region, name, tier, extra, wantPos) {
 // made the old drainQueue-kick silently process a stale list and miss the new char). The cron drainQueue
 // still does the full, paced, breaker-aware drain. Mirrors the drain's per-char ok/4xx branches; leaves
 // block/transient queued for the cron (which owns the circuit-breaker).
-async function kickFetch(env, region, name) {
+async function kickFetch(env, region, name, userToken) {
   if (!env || !env.CHARS) return;
   try { const cfg = await getDrainConfig(env); if (cfg.mode !== "run") return; } catch (e) { return; } // off/probe -> don't touch lostark.bible
   const key = charKey(region, name);
   const t0 = Date.now();
   let res = null;
-  try { res = await fetchCharacterData(env, region, name); } catch (e) { res = null; }
+  try { res = await fetchCharacterData(env, region, name, userToken); } catch (e) { res = null; }
   if (res && res.ok) {
     try {
       await env.CHARS.put(key, JSON.stringify(Object.assign({}, res.data, { pulledAt: Date.now() })));
@@ -1123,7 +1181,7 @@ async function kickFetch(env, region, name) {
 // Add a not-yet-cached character to the premium/free queue, gated by a GLOBAL enqueue rate so the
 // queue can't be filled faster than the drain empties it (keeps monthly writes bounded). region+name
 // stored as KV metadata (the drain reads them from list() without an extra get).
-async function enqueueChar(env, region, name, premium, wantPos, ctx) {
+async function enqueueChar(env, region, name, premium, wantPos, ctx, userToken) {
   if (env.CHARS) {                                   // one round-trip: drain mode + known-missing (recent 404)?
     const [cfg, miss] = await Promise.all([
       getDrainConfig(env),
@@ -1143,7 +1201,7 @@ async function enqueueChar(env, region, name, premium, wantPos, ctx) {
     }
     try { await env.CHARS.put((premium ? QP : QF) + charKey(region, name), "", { metadata: { region: region, name: name, ts: Date.now() }, expirationTtl: QUEUE_TTL_S }); } catch (e) {}
     try { await env.CHARS.delete(Q_ORDER_KEY); } catch (e) {} // invalidate the queue snapshot: defeats the cron's empty-queue short-circuit AND stops position reads trusting a stale (pre-this-enqueue) order
-    if (ctx && ctx.waitUntil) ctx.waitUntil(kickFetch(env, region, name)); // KICK: fetch+cache THIS char now, directly (no list() -> immune to KV list lag). The cron drainQueue does the full paced drain.
+    if (ctx && ctx.waitUntil) ctx.waitUntil(kickFetch(env, region, name, userToken)); // KICK: fetch+cache THIS char now, directly (no list() -> immune to KV list lag). The cron drainQueue does the full paced drain.
     return queuedResponse(env, region, name, premium ? "premium" : "free", { justQueued: true }, wantPos);
   }
   return json({ queued: true, justQueued: true, tier: premium ? "premium" : "free", region: region, name: normalizeName(name) }, 200);
@@ -1216,6 +1274,117 @@ async function handleSubmit(env, request, ip, ctx) {
   return json(Object.assign({}, record, { cached: false, imported: true }), 200);
 }
 
+// GET /oauth/start?ret=<frontend url> — kick off Authorization Code + PKCE at lostark.bible.
+async function oauthStart(env, u) {
+  if (!env.BIBLE_CLIENT_ID || !env.OAUTH) {
+    return json({ error: "Sign-in isn't configured on this Worker yet (missing BIBLE_CLIENT_ID or the OAUTH binding)." }, 503);
+  }
+  const ret = safeReturn(u.searchParams.get("ret"));
+  const state = randomId(24);
+  const verifier = randomId(48);
+  let challenge;
+  try { challenge = await pkceChallenge(verifier); } catch (e) { return json({ error: "Could not start sign-in." }, 500); }
+  try {
+    await env.OAUTH.put(OAUTH_ST + state, JSON.stringify({ v: verifier, ret: ret }), { expirationTtl: OAUTH_STATE_TTL_S });
+  } catch (e) { return json({ error: "Could not start sign-in (storage)." }, 503); }
+
+  const a = new URL(OAUTH_AUTHORIZE);
+  a.searchParams.set("client_id", env.BIBLE_CLIENT_ID);
+  a.searchParams.set("redirect_uri", OAUTH_REDIRECT);
+  a.searchParams.set("response_type", "code");
+  a.searchParams.set("scope", OAUTH_SCOPE);
+  a.searchParams.set("state", state);
+  a.searchParams.set("code_challenge", challenge);
+  a.searchParams.set("code_challenge_method", "S256");
+  return redirectTo(a.toString());
+}
+
+// GET /oauth/callback?code=&state= — exchange the code, mint a session, bounce back to the app.
+// Every failure path still redirects home with #ags_error=... so the user never lands on raw JSON.
+async function oauthCallback(env, u) {
+  const state = u.searchParams.get("state") || "";
+  const code = u.searchParams.get("code") || "";
+  const oerr = u.searchParams.get("error") || "";
+
+  let pend = null;
+  if (state && env.OAUTH) { try { pend = await env.OAUTH.get(OAUTH_ST + state, "json"); } catch (e) { pend = null; } }
+  const ret = safeReturn(pend && pend.ret);
+  // State is single-use — burn it regardless of what happens next (replay protection).
+  if (state && env.OAUTH) { try { await env.OAUTH.delete(OAUTH_ST + state); } catch (e) {} }
+
+  if (oerr) return redirectTo(ret + "#ags_error=" + encodeURIComponent(oerr));
+  if (!pend) return redirectTo(ret + "#ags_error=expired");          // unknown/replayed/timed-out state
+  if (!code) return redirectTo(ret + "#ags_error=no_code");
+  if (!env.BIBLE_CLIENT_ID || !env.BIBLE_CLIENT_SECRET) return redirectTo(ret + "#ags_error=not_configured");
+
+  const form = new URLSearchParams();
+  form.set("grant_type", "authorization_code");
+  form.set("code", code);
+  form.set("redirect_uri", OAUTH_REDIRECT);
+  form.set("client_id", env.BIBLE_CLIENT_ID);
+  form.set("code_verifier", pend.v);
+
+  let tok = null, status = 0;
+  try {
+    const r = await fetch(OAUTH_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        // Confidential client: Basic takes precedence over a body secret, so the secret never
+        // rides in the form body.
+        "Authorization": "Basic " + btoa(env.BIBLE_CLIENT_ID + ":" + env.BIBLE_CLIENT_SECRET),
+        "Accept": "application/json"
+      },
+      body: form.toString()
+    });
+    status = r.status;
+    tok = await r.json();
+  } catch (e) { return redirectTo(ret + "#ags_error=token_exchange_failed"); }
+  if (!tok || !tok.access_token) {
+    return redirectTo(ret + "#ags_error=" + encodeURIComponent((tok && tok.error) || ("http_" + status)));
+  }
+
+  const sid = randomId(24);
+  const ttl = Math.min(OAUTH_SESSION_TTL_S, Math.max(60, parseInt(tok.expires_in, 10) || OAUTH_SESSION_TTL_S));
+  try {
+    await env.OAUTH.put(OAUTH_SESS + sid, JSON.stringify({ t: tok.access_token, at: Date.now() }), { expirationTtl: ttl });
+  } catch (e) { return redirectTo(ret + "#ags_error=session_store_failed"); }
+
+  // The session id rides in the URL FRAGMENT: fragments aren't sent to servers, so it stays out
+  // of access logs and Referer headers. The page reads it, stores it, and strips it from the URL.
+  return redirectTo(ret + "#ags_session=" + encodeURIComponent(sid));
+}
+
+// GET /oauth/me?s=<session> — is this session still signed in?
+async function oauthMe(env, u) {
+  const t = await sessionToken(env, u);
+  return json({ loggedIn: !!t, scope: OAUTH_SCOPE }, 200);
+}
+
+// GET|POST /oauth/logout?s=<session> — drop our session and best-effort revoke upstream.
+async function oauthLogout(env, u) {
+  const sid = u.searchParams.get("s") || "";
+  if (!sid || !env.OAUTH) return json({ ok: true }, 200);
+  let rec = null;
+  try { rec = await env.OAUTH.get(OAUTH_SESS + sid, "json"); } catch (e) {}
+  try { await env.OAUTH.delete(OAUTH_SESS + sid); } catch (e) {}
+  if (rec && rec.t && env.BIBLE_CLIENT_ID && env.BIBLE_CLIENT_SECRET) {
+    const form = new URLSearchParams();
+    form.set("token", rec.t);
+    try {
+      await fetch(OAUTH_REVOKE_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Authorization": "Basic " + btoa(env.BIBLE_CLIENT_ID + ":" + env.BIBLE_CLIENT_SECRET)
+        },
+        body: form.toString()
+      });
+    } catch (e) {}   // RFC 7009 always 200s; a failure here just leaves the token to expire
+  }
+  return json({ ok: true }, 200);
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") {
@@ -1238,6 +1407,13 @@ export default {
     if (request.method === "POST" && u.searchParams.get("submit") === "1") {
       return handleSubmit(env, request, ip, ctx);
     }
+    // lostark.bible sign-in (Authorization Code + PKCE). Before the GET-only guard so logout can
+    // be POSTed. /start and /callback are browser navigations; /me and /logout are page fetches.
+    if (u.pathname === "/oauth/start")    return oauthStart(env, u);
+    if (u.pathname === "/oauth/callback") return oauthCallback(env, u);
+    if (u.pathname === "/oauth/me")       return oauthMe(env, u);
+    if (u.pathname === "/oauth/logout")   return oauthLogout(env, u);
+
     if (request.method !== "GET") {
       return json({ error: "Method not allowed (use GET ?region=&name=, or POST ?submit=1)." }, 405);
     }
@@ -1384,6 +1560,11 @@ export default {
     // MISS (uncached). New clients (&queue=1) get QUEUED (cached later by the drain); old clients
     // keep the legacy synchronous fetch so nothing breaks mid-migration.
 
+    // The signed-in user's lostark.bible token (from ?s=<session>), so every upstream fetch below
+    // is made on behalf of a consenting human. Empty for anonymous callers — they fall back to
+    // BIBLE_TOKEN. Resolved here because the queue-poll path below also kicks a fetch.
+    const userTok = await sessionToken(env, u);
+
     // Already in the queue? Don't re-add — confirm it's still queued (cheap get) and, only when the
     // client asked (&pos=1), its live position/total/ETA. This is also the poll path the client hits
     // while it waits for the drain, kept list()-free so a waiting tab is nearly free to serve.
@@ -1391,7 +1572,7 @@ export default {
       const qp = (await env.CHARS.get(QP + key)) !== null;
       const qf = !qp && (await env.CHARS.get(QF + key)) !== null;
       if (qp || qf) {
-        if (ctx && ctx.waitUntil) ctx.waitUntil(kickFetch(env, region, name)); // still waiting -> fetch it now (covers a kick that lost the KV-list race, and retries a transiently-failed one)
+        if (ctx && ctx.waitUntil) ctx.waitUntil(kickFetch(env, region, name, userTok)); // still waiting -> fetch it now (covers a kick that lost the KV-list race, and retries a transiently-failed one)
         if (qp) return queuedResponse(env, region, name, "premium", { alreadyQueued: true }, wantPos); // legacy premium entries still drain first; nothing new is added here
         return queuedResponse(env, region, name, "free", { alreadyQueued: true }, wantPos);
       }
@@ -1405,8 +1586,8 @@ export default {
       const t = await env.LOOKUP_THROTTLE.limit({ key: ip });
       if (!t.success) return json({ error: "One new-character lookup every 5 seconds — please wait a moment (cached characters are unlimited).", rateLimited: true, retryAfterMs: 5000, throttled: true }, 429);
     }
-    if (wantQueue) return enqueueChar(env, region, name, false, wantPos, ctx);
-    return handleCharacter(env, region, name, refresh, { nextMs: 5000 });
+    if (wantQueue) return enqueueChar(env, region, name, false, wantPos, ctx, userTok);
+    return handleCharacter(env, region, name, refresh, { nextMs: 5000 }, userTok);
   },
 
   async scheduled(controller, env, ctx) {
