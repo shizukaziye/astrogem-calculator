@@ -63,7 +63,7 @@
           <span class="muted">/min</span>
           <button id="rateapply">Set</button>
         </div>
-        <p class="muted" id="ctlnote" style="margin:9px 0 0;font-size:12px">Run = draining · Off = frozen (no lostark.bible requests) · Probe = paused but auto-resumes when lostark.bible recovers.</p>
+        <p class="muted" id="ctlnote" style="margin:9px 0 0;font-size:12px">Run = draining · Off = frozen (no lostark.bible requests) · Probe = paused; auto-resumes once the probe (Paroxysmal + the sign-in token) reaches lostark.bible.</p>
       </div>
     </div>
     <div class="cards" id="cards"></div>
@@ -127,9 +127,16 @@
     var modeCls = mode === "run" ? "good" : (mode === "off" ? "bad" : "warn");
     var modeDetail = mode === "run" ? (d.perMin + "/min") : (mode === "probe" ? "probing · auto-resumes" : "frozen");
     curMode = mode; curRate = d.perMin;                       // feed the always-on status line
+    // The drain/probe fetch lostark.bible on behalf of the account that owns the Paroxysmal canary,
+    // using its stored OAuth token. Without one, a paused drain can never probe its way back to Run —
+    // so surface it plainly. Sign in on the calculator (as Paroxysmal's owner) to arm it.
+    var tokArmed = j.hasProbeToken === true;
+    var tokCls = tokArmed ? "good" : (mode === "run" ? "warn" : "bad");
+    var tokTxt = tokArmed ? "Armed" : "Missing";
     $("cards").innerHTML =
       card("Queued", num(q.total) + (q.total ? ' <small>&#8776;'+clearMin+' min to clear</small>' : '')) +
       card("Drain", '<span class="'+modeCls+'">'+mode.toUpperCase()+'</span> <small>'+modeDetail+'</small>') +
+      card("Sign-in token", '<span class="'+tokCls+'">'+tokTxt+'</span>' + (tokArmed ? '' : ' <small>sign in as Paroxysmal’s owner</small>')) +
       card("Last bible pull", '<span class="'+drainCls+'">'+fmtAgo(j.lastWriteMs)+'</span>') +
       card("Cached this month", num(u.count) + ' <small>/ '+num(u.budget)+'</small>');
     $("note").textContent = q.total

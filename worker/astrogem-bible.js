@@ -97,7 +97,7 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": ALLOW_ORIGIN,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "86400"
   };
 }
@@ -314,6 +314,61 @@ async function sessionToken(env, u) {
   let rec = null;
   try { rec = await env.OAUTH.get(OAUTH_SESS + sid, "json"); } catch (e) { rec = null; }
   return (rec && rec.t) || "";
+}
+
+// ---- Service (probe/drain) token -----------------------------------------------------------
+// The background drain and the recovery probe have no user driving them, so they carry no user
+// token. Instead we keep ONE stored token: the token of the account that owns the canary character
+// (Paroxysmal, see CANARY). Because that account owns Paroxysmal, its token can always fetch that
+// page — making the probe a reliable "is lostark.bible reachable with a valid token again?" check.
+// Stored in the OAUTH namespace (never CHARS — a bare list() there feeds the PUBLIC leaderboard,
+// so a token in a character record would leak). It is never returned in any response.
+const PROBE_TOKEN_KEY = "probe:token";   // OAUTH KV: { token, at, verified }
+
+async function getServiceToken(env) {
+  if (!env || !env.OAUTH) return "";
+  try { const r = await env.OAUTH.get(PROBE_TOKEN_KEY, "json"); return (r && r.token) || ""; } catch (e) { return ""; }
+}
+
+// POST /oauth/probe-token  (Authorization: Bearer <uwo_...>) — a signed-in user offers their token
+// as the drain/probe credential. We only STORE it if its roster includes the canary character, so
+// the stored token can always fetch the canary. The token itself never leaves the Worker after this.
+async function storeProbeToken(env, request) {
+  if (!env.OAUTH) return json({ error: "not configured (no OAUTH binding)" }, 503);
+  const authz = request.headers.get("Authorization") || "";
+  const tok = authz.indexOf("Bearer ") === 0 ? authz.slice(7).trim() : "";
+  if (!tok) return json({ error: "Authorization: Bearer <token> required" }, 400);
+
+  // Verify server-side that this token owns the canary. The OAuth API is CORS-enabled and separate
+  // from the (possibly blocked) character page, so this can succeed even while scraping is blocked.
+  let owns = null, apiStatus = 0;
+  try {
+    const r = await fetch("https://lostark.bible/api/oauth/rosters", { headers: { "Authorization": "Bearer " + tok, "Accept": "application/json" } });
+    apiStatus = r.status;
+    if (r.ok) {
+      const j = await r.json();
+      owns = false;
+      const wantName = CANARY.name.toLowerCase(), wantRegion = CANARY.region.toUpperCase();
+      for (const ro of (j && j.rosters) || []) {
+        const roRegion = String((ro && ro.region) || "").toUpperCase();
+        for (const c of (ro && ro.characters) || []) {
+          const cRegion = String((c && c.region) || roRegion).toUpperCase();
+          if (cRegion === wantRegion && String(c && c.name).toLowerCase() === wantName) owns = true;
+        }
+      }
+    }
+  } catch (e) { apiStatus = 0; }
+
+  if (owns === false) {
+    return json({ stored: false, owns: false, reason: "this account's roster doesn't include " + CANARY.name }, 200);
+  }
+  if (owns !== true) {
+    // API unreachable/failed — don't overwrite a good token with an unverified one.
+    return json({ stored: false, owns: null, apiStatus: apiStatus, reason: "couldn't verify roster (API " + apiStatus + ")" }, 200);
+  }
+  try { await env.OAUTH.put(PROBE_TOKEN_KEY, JSON.stringify({ token: tok, at: Date.now(), verified: true })); }
+  catch (e) { return json({ error: "store failed" }, 503); }
+  return json({ stored: true, owns: true }, 200);
 }
 
 // key = "region:name" lowercased (e.g. "na:paroxysmal").
@@ -632,7 +687,10 @@ async function fetchCharacterData(env, region, name, userToken) {
   // asked for it); fall back to a service token if one is configured — that's all the background
   // drain has, since no user is driving it.
   if (!isKR) {
-    const bibleToken = userToken || (env && env.BIBLE_TOKEN) || "";
+    // Drain/probe pass the stored token explicitly; a user "kick" passes none, so fall back to the
+    // stored owner token here too, so an on-demand lookup uses the same credential as the drain.
+    let bibleToken = userToken || (env && env.BIBLE_TOKEN) || "";
+    if (!bibleToken) bibleToken = await getServiceToken(env);
     if (bibleToken) headers["Authorization"] = "Bearer " + bibleToken;
   }
 
@@ -960,22 +1018,21 @@ async function getDrainConfig(env) {
 }
 function setDrainConfig(env, cfg) { return env.CHARS.put(DRAIN_CONFIG_KEY, JSON.stringify(cfg)).catch(function () {}); }
 async function probeOldest(env) {
-  // Use the q:order snapshot (one read) — STALE is fine, the probe only tests connectivity. Fall
-  // back to a fresh list only if the snapshot is empty; a canary if the queue itself is empty.
-  let first = null;
-  try { const s = await kvGetJson(env, Q_ORDER_KEY); if (s && Array.isArray(s.items) && s.items.length) first = s.items[0]; } catch (e) {}
-  if (!first) { const items = await listQueueOrder(env); if (items.length) first = items[0]; }
-  const md = first ? { region: first.r, name: first.n } : CANARY;
-  const qkey = first ? first.k : null;                      // queue key to clear if the probe succeeds
-  if (first && (!md.region || !md.name)) { try { await env.CHARS.delete(qkey); } catch (e) {} return { up: false, result: "skip" }; }
+  // Probe the CANARY (Paroxysmal, NA) using the stored owner token. Paroxysmal is on that account's
+  // roster, so a valid token can ALWAYS fetch its page — a reliable "is lostark.bible reachable with
+  // our credentials again?" check, independent of what's queued (and of whatever roster scoping the
+  // page fetch turns out to have). With no stored token yet, this fetch just 401/429s and we stay down.
+  const md = CANARY;
+  const svc = await getServiceToken(env);
   let res = null;
-  try { res = await fetchCharacterData(env, md.region, md.name); } catch (e) { res = null; }
+  try { res = await fetchCharacterData(env, md.region, md.name, svc); } catch (e) { res = null; }
   if (res && res.ok) {
-    if (qkey) { try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(Object.assign({}, res.data, { pulledAt: Date.now() }))); await markDirty(env, charKey(md.region, md.name)); await env.CHARS.delete(qkey); } catch (e) {} }
-    return { up: true, cached: !!qkey, name: md.region + ":" + md.name };
+    // Keep the canary's record fresh while we're here.
+    try { await env.CHARS.put(charKey(md.region, md.name), JSON.stringify(Object.assign({}, res.data, { pulledAt: Date.now() }))); await markDirty(env, charKey(md.region, md.name)); } catch (e) {}
+    return { up: true, cached: true, name: md.region + ":" + md.name };
   }
-  if (res && res.status === 404) { if (qkey) { try { await env.CHARS.delete(qkey); } catch (e) {} } return { up: true, cached: false, name: md.region + ":" + md.name }; }
-  return { up: false, result: "down", entry: { region: md.region, name: md.name, status: res ? res.status : 0, upstream: (res && res.body && res.body.upstreamStatus) || null, msg: (res && res.body && res.body.error) || "network/timeout" } };
+  if (res && res.status === 404) return { up: true, cached: false, name: md.region + ":" + md.name };
+  return { up: false, result: "down", entry: { region: md.region, name: md.name, status: res ? res.status : 0, upstream: (res && res.body && res.body.upstreamStatus) || null, msg: (res && res.body && res.body.error) || "network/timeout", hasToken: !!svc } };
 }
 
 // Cron drain: cache up to DRAIN_PER_RUN queued characters per run, PREMIUM queue first then FREE,
@@ -1037,12 +1094,13 @@ async function drainQueue(env) {
   // #1: list BOTH queues ONCE, up front, in drain order — then write the q:order snapshot at the end
   // so position / metrics / probe reads can skip listing entirely (they read q:order instead).
   const items = await listQueueOrder(env);     // [{k,r,n,t,a,p}] premium-first, oldest-ts first
+  const svc = await getServiceToken(env);       // stored owner token (read once for the whole run)
   const removed = new Set();                    // queue keys cached or dropped this run (gone from the snapshot)
   for (const it of items) {
     if (processed >= perRun || Date.now() - t0 > DRAIN_BUDGET_MS) { run.stop = processed >= perRun ? "full" : "time"; stop = true; break; }
     if (!it.r || !it.n) { try { await env.CHARS.delete(it.k); } catch (e) {} removed.add(it.k); continue; } // malformed -> drop
     let res = null;
-    try { res = await fetchCharacterData(env, it.r, it.n); } catch (e) { res = null; } // ONE fetch — no blind retry (gentler on lostark.bible; a real outage trips the breaker below)
+    try { res = await fetchCharacterData(env, it.r, it.n, svc); } catch (e) { res = null; } // ONE fetch — no blind retry (gentler on lostark.bible; a real outage trips the breaker below)
     const upstream = (res && res.body && res.body.upstreamStatus) || null; // the real lostark.bible status behind our 502
     if (res && res.ok) {
       consecFail = 0;
@@ -1413,6 +1471,10 @@ export default {
     if (u.pathname === "/oauth/callback") return oauthCallback(env, u);
     if (u.pathname === "/oauth/me")       return oauthMe(env, u);
     if (u.pathname === "/oauth/logout")   return oauthLogout(env, u);
+    if (u.pathname === "/oauth/probe-token") {
+      if (request.method !== "POST") return json({ error: "POST only" }, 405);
+      return storeProbeToken(env, request);
+    }
 
     if (request.method !== "GET") {
       return json({ error: "Method not allowed (use GET ?region=&name=, or POST ?submit=1)." }, 405);
@@ -1499,6 +1561,7 @@ export default {
         usage: { month: usage.month || "", count: (usage.count | 0), budget: MONTHLY_CHAR_BUDGET },
         lastWriteMs: lastWrite,
         drainLog: drainLog,
+        hasProbeToken: !!(await getServiceToken(env)),   // is the drain/probe armed with an owner token?
         paused: cfg.mode !== "run"
       }, 200);
     }
